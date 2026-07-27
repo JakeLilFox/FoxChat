@@ -9,6 +9,7 @@ import { PendingUpload } from '../message'
 import { ProfileUpdateStatus } from '../message'
 import { PinnedBar } from './PinnedBar'
 import { PollComposerModal } from '../composer'
+import { TimestampComposerModal } from '../composer'
 import { RoomAvatar } from '../rooms'
 import { RoomInfoModals } from '../rooms'
 import { ThreadHost } from './ThreadHost'
@@ -47,6 +48,8 @@ import { logHistoryDiagnostics } from '../../lib/timelineHelpers'
 import {
   addedVisibleEventCount,
   initialTimelinePosition,
+  nextFollowLatest,
+  shouldHandleTimelineGrowth,
   shouldFollowAddedEvents,
   visibleReadBoundary,
 } from '../../lib/timelineWindow'
@@ -103,6 +106,7 @@ import {
   AudioOutlined,
   BarChartOutlined,
   CheckOutlined,
+  ClockCircleOutlined,
   CloseOutlined,
   DownOutlined,
   EnvironmentOutlined,
@@ -160,7 +164,11 @@ const cachedEventWindow = (room: Room) => {
   return source.slice(Math.max(0, firstIndex))
 }
 
-const initialRoomPosition = (room: Room, events: MatrixEvent[], boundaryEventId?: string) => {
+const initialRoomPosition = (
+  room: Room,
+  events: MatrixEvent[],
+  boundaryEventId?: string | null,
+) => {
   const selectedAccountId = matrixService.selectedRoomAccountId(room.roomId)
   const selectedAccount = matrixService
     .roomAccounts(room.roomId)
@@ -207,11 +215,15 @@ function TimelineView({
   onInfo: () => void
 }) {
   const roomIdentity = room ? timelineRoomIdentity(room) : undefined
+  const visibleAccountId = room ? matrixService.selectedRoomAccountId(room.roomId) : undefined
   const { message } = AntApp.useApp()
   const [draft, setDraft] = useState('')
   const [roomModal, setRoomModal] = useState<RoomModalView | undefined>(roomModalFromUrl)
   const [pollOpen, setPollOpen] = useState(false)
+  const [timestampOpen, setTimestampOpen] = useState(false)
   const [threadView, setThreadView] = useState<string | undefined>(threadViewFromUrl)
+  const roomRef = useRef(room)
+  roomRef.current = room
   const draftRef = useRef('')
   const editingRef = useRef<MatrixEvent | undefined>(undefined)
   const pendingImagesRef = useRef<File[]>([])
@@ -296,7 +308,7 @@ function TimelineView({
   const positionStabilizerUserCancelled = useRef(false)
   const positionStabilizerSuperseded = useRef(false)
   const mountPositionRetryCleanup = useRef<() => void>(() => {})
-  const positioningBoundaryEventId = useRef<string | undefined>(undefined)
+  const positioningBoundaryEventId = useRef<string | null | undefined>(undefined)
   const positioningStartedAt = useRef(0)
   const historyPagingReady = useRef(false)
   const historyPagingRoom = useRef<string | undefined>(undefined)
@@ -568,8 +580,8 @@ function TimelineView({
     const atLiveEdge =
       box.scrollHeight - box.scrollTop - box.clientHeight <= FOLLOW_LATEST_THRESHOLD
     const event = visibleReadBoundary(timelineEventsRef.current, id, atLiveEdge)
-    if (event) void matrixService.markRead(event)
-  }, [room])
+    if (event) void matrixService.markRead(event, visibleAccountId)
+  }, [room, visibleAccountId])
   useEffect(() => {
     const applyPreference = () => {
       if (matrixService.autoReadAllAccountsEnabled()) markVisibleRead()
@@ -638,7 +650,7 @@ function TimelineView({
     positionStabilizerCleanup.current = stop
     schedule()
   }, [])
-  useEffect(() => () => positionStabilizerCleanup.current(), [room])
+  useEffect(() => () => positionStabilizerCleanup.current(), [roomIdentity])
   const loadOlder = useCallback(async () => {
     if (
       !room ||
@@ -893,6 +905,7 @@ function TimelineView({
     [],
   )
   useLayoutEffect(() => {
+    const activeRoom = roomRef.current
     historyPagingReady.current = false
     historyPagingRoom.current = undefined
     timelineUserInteracted.current = false
@@ -911,24 +924,29 @@ function TimelineView({
     setShowJumpToLatest(false)
     setVoiceNotices([])
     render((x) => x + 1)
-    if (!room) {
+    if (!activeRoom) {
       setUnreadStart(undefined)
       setPositioningTimeline(true)
       return
     }
     const wasCached = roomTimelineCache.has(roomIdentity ?? '')
-    cacheRoomTimeline(room, true)
-    const mountEvents = matrixService.combinedRoomEvents(room, room.getLiveTimeline().getEvents())
-    positioningBoundaryEventId.current = mountEvents.at(-1)?.getId()
-    const position = initialRoomPosition(room, mountEvents)
+    cacheRoomTimeline(activeRoom, true)
+    const mountEvents = matrixService.combinedRoomEvents(
+      activeRoom,
+      activeRoom.getLiveTimeline().getEvents(),
+    )
+    positioningBoundaryEventId.current = mountEvents.at(-1)?.getId() ?? null
+    const position = initialRoomPosition(activeRoom, mountEvents)
     followLatest.current = !position.unreadStart
     atBottom.current = !position.unreadStart
     setUnreadStart(position.unreadStart)
     setWindowEndOffset(position.windowEndOffset)
     positioningStartedAt.current = Date.now()
     setPositioningTimeline(!wasCached)
-    void matrixService.retryRoomDecryption(room).then(() => render((x) => x + 1))
-  }, [room, roomIdentity])
+    void matrixService.retryRoomDecryption(activeRoom).then(() => render((x) => x + 1))
+    // The preferred readable room copy can change as combined-account events decrypt. Keep the
+    // same positioning lifecycle unless the logical room or selected sending account changes.
+  }, [roomIdentity])
   useEffect(() => {
     if (!room || !positioningTimeline) return
     const liveEvents = timeline?.getEvents() ?? []
@@ -960,11 +978,14 @@ function TimelineView({
       lastVisibleEventCount.current = allEvents.length
       return
     }
-    if (newestId && newestId !== lastEventId.current) {
+    const newestChanged = !!newestId && newestId !== lastEventId.current
+    const addedEvents = addedVisibleEventCount(lastVisibleEventCount.current, allEvents.length)
+    // Encrypted events can decrypt out of order. Older messages may become visible after the
+    // newest message without changing newestId, so visible growth must also update the anchor.
+    if (shouldHandleTimelineGrowth(newestChanged, addedEvents)) {
       positionStabilizerCleanup.current()
       mountPositionRetryCleanup.current()
       positionStabilizerSuperseded.current = true
-      const addedEvents = addedVisibleEventCount(lastVisibleEventCount.current, allEvents.length)
       const bottomDistance = box.scrollHeight - box.scrollTop - box.clientHeight
       if (
         shouldFollowAddedEvents(
@@ -994,7 +1015,7 @@ function TimelineView({
         setWindowEndOffset((offset) => offset + addedEvents)
         setShowJumpToLatest(true)
       }
-      lastEventId.current = newestId
+      if (newestChanged) lastEventId.current = newestId
     }
     lastVisibleEventCount.current = allEvents.length
   }, [
@@ -1387,13 +1408,16 @@ function TimelineView({
     if (!historyPagingReady.current || historyPagingRoom.current !== roomIdentity) return
     const bottomDistance = box.scrollHeight - box.scrollTop - box.clientHeight
     atBottom.current = windowEndOffset === 0 && bottomDistance <= FOLLOW_LATEST_THRESHOLD
-    if (atBottom.current || Date.now() <= userScrollIntentUntil.current)
-      followLatest.current = atBottom.current
-    if (!atBottom.current) {
-      followLatest.current = false
+    const hasUserScrollIntent = Date.now() <= userScrollIntentUntil.current
+    followLatest.current = nextFollowLatest(
+      followLatest.current,
+      atBottom.current,
+      hasUserScrollIntent,
+    )
+    if (!atBottom.current && !followLatest.current) {
       if (scrollAnchor.current?.type === 'bottom') scrollAnchor.current = undefined
     }
-    setShowJumpToLatest(!atBottom.current)
+    setShowJumpToLatest(!atBottom.current && !followLatest.current)
     const userMovedTimeline = timelineUserInteracted.current
     if (userMovedTimeline && box.scrollTop < 80) void loadOlder()
     else if (userMovedTimeline && bottomDistance < 80 && windowEndOffset > 0) {
@@ -1716,6 +1740,16 @@ function TimelineView({
         typingActive.current = false
         void matrixService.setTyping(room.roomId, false)
       }, 4000)
+  }
+  const insertTimestamp = (syntax: string) => {
+    const current = draftRef.current
+    const prefix = current && !/\s$/.test(current) ? ' ' : ''
+    change(`${current}${prefix}${syntax} `)
+    requestAnimationFrame(() =>
+      messagesRef.current?.parentElement
+        ?.querySelector<HTMLElement>('[contenteditable="true"]')
+        ?.focus(),
+    )
   }
   const mentionMatch = draft.match(/(^|\s)([@#])([^\s@#]*)$/)
   const mentionQuery = (mentionMatch?.[3] ?? '').toLocaleLowerCase()
@@ -2293,6 +2327,12 @@ function TimelineView({
                       icon: <BarChartOutlined />,
                       onClick: () => setPollOpen(true),
                     },
+                    {
+                      key: 'timestamp',
+                      label: 'Create timestamp',
+                      icon: <ClockCircleOutlined />,
+                      onClick: () => setTimestampOpen(true),
+                    },
                   ],
                 }}
               >
@@ -2386,6 +2426,11 @@ function TimelineView({
         roomId={room.roomId}
         accountId={matrixService.selectedRoomAccountId(room.roomId)}
         onClose={() => setPollOpen(false)}
+      />
+      <TimestampComposerModal
+        open={timestampOpen}
+        onClose={() => setTimestampOpen(false)}
+        onInsert={insertTimestamp}
       />
       <ThreadHost
         room={room}

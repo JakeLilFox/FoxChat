@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import {
   addedVisibleEventCount,
   initialTimelinePosition,
+  nextFollowLatest,
+  shouldHandleTimelineGrowth,
   shouldFollowAddedEvents,
   visibleReadBoundary,
 } from '../../src/lib/timelineWindow'
@@ -21,6 +23,30 @@ describe('addedVisibleEventCount', () => {
 
   it('does not move the window when events are removed', () => {
     expect(addedVisibleEventCount(4, 3)).toBe(0)
+  })
+})
+
+describe('shouldHandleTimelineGrowth', () => {
+  it('handles older encrypted messages becoming visible after the newest one', () => {
+    expect(shouldHandleTimelineGrowth(false, 39)).toBe(true)
+  })
+
+  it('does nothing when neither the newest event nor visible count changed', () => {
+    expect(shouldHandleTimelineGrowth(false, 0)).toBe(false)
+  })
+})
+
+describe('nextFollowLatest', () => {
+  it('keeps following through layout-driven scroll events while encrypted messages appear', () => {
+    expect(nextFollowLatest(true, false, false)).toBe(true)
+  })
+
+  it('stops following when the user intentionally scrolls away', () => {
+    expect(nextFollowLatest(true, false, true)).toBe(false)
+  })
+
+  it('resumes following when the viewport reaches the bottom', () => {
+    expect(nextFollowLatest(false, true, true)).toBe(true)
   })
 })
 
@@ -111,5 +137,21 @@ describe('initialTimelinePosition', () => {
         new Set(['@selected:example.org', '@other-account:example.org']),
       ).unreadStart,
     ).toBe('$2')
+  })
+
+  it('keeps following when an initially empty room receives messages during positioning', () => {
+    const events = Array.from({ length: 41 }, (_, index) =>
+      fakeEvent({
+        id: `$${index + 1}`,
+        sender: '@remote:example.org',
+      }),
+    )
+
+    expect(
+      initialTimelinePosition(events, undefined, 41, new Set(['@selected:example.org']), null),
+    ).toEqual({
+      unreadStart: undefined,
+      windowEndOffset: 0,
+    })
   })
 })

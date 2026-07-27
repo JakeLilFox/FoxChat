@@ -3,6 +3,8 @@ import { formattedTags, matrixUserIdFromHref } from '../../lib/messageText'
 import { showUserProfile } from '../../lib/userProfile'
 import { createElement, Fragment, useMemo, useState, type JSX, type ReactNode } from 'react'
 import { MarkdownText } from './MarkdownText'
+import { MessageTimestamp } from './MessageTimestamp'
+import { parseTimestampTag, splitTimestamps } from '../../lib/timestamps'
 
 function SpoilerSpan({ children }: { children: ReactNode }) {
   const [revealed, setRevealed] = useState(false)
@@ -37,11 +39,33 @@ export function MatrixMessageText({
       return null
     const parsed = new DOMParser().parseFromString(content.formatted_body, 'text/html')
     let key = 0
-    const read = (node: Node): ReactNode => {
-      if (node.nodeType === Node.TEXT_NODE) return node.textContent
+    const read = (node: Node, parseTimestamps = true): ReactNode => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent ?? ''
+        if (!parseTimestamps) return text
+        return splitTimestamps(text).map((part, index) =>
+          typeof part === 'string' ? (
+            <Fragment key={`text-${key++}-${index}`}>{part}</Fragment>
+          ) : (
+            <MessageTimestamp key={key++} seconds={part.seconds} style={part.style} />
+          ),
+        )
+      }
       if (!(node instanceof HTMLElement)) return null
       if (node.tagName === 'MX-REPLY') return null
-      const children = [...node.childNodes].map(read)
+      const timestampTag = parseTimestampTag(`<${node.tagName.toLowerCase()}>`)
+      if (timestampTag) {
+        const trailingChildren = [...node.childNodes].map((child) => read(child, parseTimestamps))
+        return (
+          <Fragment key={key++}>
+            <MessageTimestamp seconds={timestampTag.seconds} style={timestampTag.style} />
+            {trailingChildren}
+          </Fragment>
+        )
+      }
+      const children = [...node.childNodes].map((child) =>
+        read(child, parseTimestamps && node.tagName !== 'CODE' && node.tagName !== 'PRE'),
+      )
       if (node.tagName === 'IMG' && node.hasAttribute('data-mx-emoticon')) {
         const src = node.getAttribute('src') || ''
         const alt = node.getAttribute('alt') || node.getAttribute('title') || body
@@ -100,7 +124,7 @@ export function MatrixMessageText({
       }
       return createElement(tag, { key: key++ }, children)
     }
-    return [...parsed.body.childNodes].map(read)
+    return [...parsed.body.childNodes].map((node) => read(node))
   }, [content.format, content.formatted_body, body])
   return body.includes('```') ? (
     <MarkdownText text={body} />

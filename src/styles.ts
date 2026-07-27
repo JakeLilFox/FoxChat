@@ -1,7 +1,7 @@
 import { Button } from 'antd'
 import { createGlobalStyle, styled } from 'styled-components'
 
-export const GlobalStyle = createGlobalStyle`*{box-sizing:border-box}:root{--foxchat-code-bg:${(p) => p.theme.panel};--foxchat-code-toolbar-bg:${(p) => p.theme.panel};--foxchat-code-text:${(p) => p.theme.text};--foxchat-code-muted:${(p) => p.theme.muted};--foxchat-code-border:${(p) => p.theme.border}}html,body,#root{margin:0;width:100%;height:100%;overflow:hidden;overscroll-behavior:none}body{position:fixed;inset:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}button,input,textarea{font:inherit}@media(max-width:760px){.foxchat-emoji-popover{inset-inline-start:max(12px,calc((100vw - 354px)/2))!important;inset-block-start:auto!important;inset-block-end:calc(100dvh - var(--foxchat-viewport-height,100dvh) + 92px)!important}}.md-content{max-width:100%;min-width:0;overflow-wrap:anywhere;word-break:break-word}.md-content>*:not(.md-code-block){max-width:100%}
+export const GlobalStyle = createGlobalStyle`*{box-sizing:border-box}:root{--foxchat-code-bg:${(p) => p.theme.panel};--foxchat-code-toolbar-bg:${(p) => p.theme.panel};--foxchat-code-text:${(p) => p.theme.text};--foxchat-code-muted:${(p) => p.theme.muted};--foxchat-code-border:${(p) => p.theme.border}}html,body,#root{margin:0;width:100%;height:100%;overflow:hidden;overscroll-behavior:none}body{position:fixed;inset:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}button,input,textarea{font:inherit}@media(max-width:760px){.foxchat-emoji-popover{inset-inline-start:max(12px,calc((100vw - 354px)/2))!important;inset-block-start:auto!important;inset-block-end:calc(100dvh - var(--foxchat-viewport-height,100dvh) + 92px)!important}}.md-content{max-width:100%;min-width:0;overflow-wrap:anywhere;word-break:break-word}.md-content>*:not(.md-code-block){max-width:100%}.foxchat-timestamp{display:inline-flex;align-items:center;padding:0 .28em;border-radius:.3em;background:color-mix(in srgb,currentColor 10%,transparent);font:inherit;font-weight:600;white-space:nowrap;cursor:help}
 .md-content strong,.md-content b{font-weight:700}
 .md-content em,.md-content i{font-style:italic}
 .md-content del,.md-content s{text-decoration:line-through}
@@ -1148,7 +1148,7 @@ export const ReadMark = styled.span<{
 }>`
   position: absolute;
   z-index: 1;
-  right: 6px;
+  right: 1px;
   bottom: -9px;
   display: inline-flex;
   padding-right: 3px;

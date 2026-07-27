@@ -1,19 +1,13 @@
 import { Name, Preview } from '../../styles'
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Divider, Segmented, Switch } from 'antd'
-import {
-  AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT,
-  matrixService,
-} from '../../matrix/MatrixClientService'
+import { Divider, Segmented } from 'antd'
+import { matrixService } from '../../matrix/MatrixClientService'
 import { accountsOpenFromUrl, clearAccountsUrl } from '../../lib/urlState'
 
 export function AccountModeSetting() {
   const [target, setTarget] = useState<HTMLElement>()
   const [combined, setCombined] = useState(() => matrixService.combinedAccountsEnabled())
-  const [readAllAccounts, setReadAllAccounts] = useState(() =>
-    matrixService.autoReadAllAccountsEnabled(),
-  )
   useEffect(() => {
     let timer: number | undefined
     const find = () => {
@@ -27,19 +21,14 @@ export function AccountModeSetting() {
     const show = () => {
       setTarget(undefined)
       setCombined(matrixService.combinedAccountsEnabled())
-      setReadAllAccounts(matrixService.autoReadAllAccountsEnabled())
       timer = window.setTimeout(find, 0)
     }
-    const readPreferenceChanged = () =>
-      setReadAllAccounts(matrixService.autoReadAllAccountsEnabled())
     window.addEventListener('foxchat-accounts', show)
     window.addEventListener('foxchat-accounts-state-changed', show)
-    window.addEventListener(AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT, readPreferenceChanged)
     if (accountsOpenFromUrl()) show()
     return () => {
       window.removeEventListener('foxchat-accounts', show)
       window.removeEventListener('foxchat-accounts-state-changed', show)
-      window.removeEventListener(AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT, readPreferenceChanged)
       if (timer !== undefined) window.clearTimeout(timer)
     }
   }, [])
@@ -76,33 +65,6 @@ export function AccountModeSetting() {
             matrixService.setCombinedAccountsEnabled(enabled)
             clearAccountsUrl()
             location.reload()
-          }}
-        />
-      </div>
-      <Divider />
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 16,
-        }}
-      >
-        <div>
-          <Name>Read rooms with every account</Name>
-          <Preview>
-            {combined
-              ? "Send read receipts for every logged-in account that joined the room. Badges still follow the room's selected sending account."
-              : 'Available when the account layout is Combined.'}
-          </Preview>
-        </div>
-        <Switch
-          aria-label="Read rooms with every account"
-          checked={readAllAccounts}
-          disabled={!combined}
-          onChange={(enabled) => {
-            setReadAllAccounts(enabled)
-            matrixService.setAutoReadAllAccountsEnabled(enabled)
           }}
         />
       </div>

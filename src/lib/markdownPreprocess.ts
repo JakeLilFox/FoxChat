@@ -1,3 +1,5 @@
+import { timestampMarkdownLinks } from './timestamps'
+
 const MENTION_RE = /(?<![A-Za-z0-9_/:.?&=%-])@([A-Za-z0-9._=/-]+:[A-Za-z0-9.-]+)/g
 const ROOM_RE = /(?<![A-Za-z0-9_/:.?&=%-])#([A-Za-z0-9._=-]+(?::[A-Za-z0-9.-]+)?)/g
 const ROOM_ID_RE = /(?<![A-Za-z0-9_/:.?&=%-])!([A-Za-z0-9_-]+(?::[A-Za-z0-9.-]+)?)/g
@@ -18,7 +20,7 @@ export function preprocessMarkdown(text: string): string {
     .split('```')
     .map((segment, index) => {
       if (index % 2) return segment
-      return segment
+      return timestampMarkdownLinks(segment)
         .replace(
           MENTION_RE,
           (match) => `[${match}](foxchat://mention/${encodeURIComponent(match)})`,

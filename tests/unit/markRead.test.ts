@@ -62,6 +62,26 @@ describe('markRead target selection (auto-read-all-accounts preference)', () => 
     expect(clientB.sendReadReceipt).not.toHaveBeenCalled()
   })
 
+  it('keeps a delayed read callback bound to the account that observed the timeline', async () => {
+    localStorage.clear()
+    localStorage.setItem('foxchat.matrix.autoReadAllAccounts', 'false')
+    const message = fakeEvent({ id: '$1', roomId: ROOM_ID, sender: '@carol:example.org' })
+    const roomA = fakeRoom({ roomId: ROOM_ID, events: [message] })
+    const roomB = fakeRoom({ roomId: ROOM_ID, events: [message] })
+    const clientA = fakeClient([roomA], '@a:example.org')
+    const clientB = fakeClient([roomB], '@b:example.org')
+    const service = serviceWithAccounts([
+      { id: 'a', userId: '@a:example.org', client: clientA },
+      { id: 'b', userId: '@b:example.org', client: clientB },
+    ])
+    localStorage.setItem('foxchat.matrix.roomAccounts', JSON.stringify({ [ROOM_ID]: 'b' }))
+
+    await service.markRead(message, 'a')
+
+    expect(clientA.sendReadReceipt).toHaveBeenCalled()
+    expect(clientB.sendReadReceipt).not.toHaveBeenCalled()
+  })
+
   it('keeps every account read while server receipts catch up to the merged timeline', async () => {
     localStorage.clear()
     const first = fakeEvent({

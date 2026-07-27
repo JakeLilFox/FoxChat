@@ -5,6 +5,12 @@ import { CloseOutlined, CopyOutlined } from '@ant-design/icons'
 import { highlightCode } from '../../lib/codeHighlight'
 import { preprocessMarkdown } from '../../lib/markdownPreprocess'
 import { JsonFilePreview } from './JsonFilePreview'
+import {
+  formatTimestamp,
+  timestampDate,
+  timestampFromHref,
+  timestampTitle,
+} from '../../lib/timestamps'
 
 const safeHtml = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -209,6 +215,11 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
       if (href && href.startsWith('foxchat://spoiler/')) {
         return `<span class="md-spoiler" data-spoiler tabindex="0" role="button" aria-label="Spoiler, click to reveal">${safeHtml(text ?? href)}</span>`
       }
+      const timestamp = href ? timestampFromHref(href) : undefined
+      if (timestamp) {
+        const date = timestampDate(timestamp.seconds)!
+        return `<time class="foxchat-timestamp" datetime="${date.toISOString()}" title="${safeHtml(timestampTitle(timestamp.seconds))}" data-timestamp-seconds="${timestamp.seconds}" data-timestamp-style="${timestamp.style}">${safeHtml(formatTimestamp(timestamp.seconds, timestamp.style))}</time>`
+      }
       const safeHref = safeHtml(href ?? '')
       return `<a href="${safeHref}" target="_blank" rel="noopener noreferrer" style="color:#ff8a3d!important">${safeHtml(text ?? '')}</a>`
     }
@@ -254,6 +265,26 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
   useEffect(() => {
     const root = contentRef.current
     if (!root) return
+    const updateTimestamps = () => {
+      for (const element of root.querySelectorAll<HTMLElement>('[data-timestamp-seconds]')) {
+        const seconds = Number(element.dataset.timestampSeconds)
+        const style = element.dataset.timestampStyle
+        if (
+          !Number.isSafeInteger(seconds) ||
+          !style ||
+          !['d', 'D', 't', 'T', 'f', 'F', 's', 'S', 'R'].includes(style)
+        )
+          continue
+        element.textContent = formatTimestamp(
+          seconds,
+          style as Parameters<typeof formatTimestamp>[1],
+        )
+      }
+    }
+    updateTimestamps()
+    const timestampTimer = root.querySelector('[data-timestamp-style="R"]')
+      ? window.setInterval(updateTimestamps, 30_000)
+      : undefined
     for (const pre of root.querySelectorAll('pre')) {
       if (pre.parentElement?.classList.contains('md-code-block')) continue
       const code = pre.querySelector('code')
@@ -313,6 +344,7 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
     root.addEventListener('click', click)
     root.addEventListener('keydown', keydown)
     return () => {
+      if (timestampTimer) window.clearInterval(timestampTimer)
       root.removeEventListener('click', click)
       root.removeEventListener('keydown', keydown)
     }

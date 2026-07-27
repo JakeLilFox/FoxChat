@@ -6,6 +6,19 @@ export function addedVisibleEventCount(previousCount: number, currentCount: numb
   return Math.max(0, currentCount - previousCount)
 }
 
+export function shouldHandleTimelineGrowth(newestChanged: boolean, addedVisibleEvents: number) {
+  return newestChanged || addedVisibleEvents > 0
+}
+
+export function nextFollowLatest(
+  followingLatest: boolean,
+  atBottom: boolean,
+  hasUserScrollIntent: boolean,
+) {
+  if (atBottom) return true
+  return hasUserScrollIntent ? false : followingLatest
+}
+
 export function shouldFollowAddedEvents(
   followingLatest: boolean,
   windowEndOffset: number,
@@ -34,7 +47,7 @@ export function initialTimelinePosition(
   readEventId: string | undefined,
   unreadCount: number,
   ownUserIds: ReadonlySet<string>,
-  boundaryEventId?: string,
+  boundaryEventId?: string | null,
 ) {
   // Unread counters can clear before sync echoes the latest receipt.
   if (unreadCount <= 0) {
@@ -43,9 +56,14 @@ export function initialTimelinePosition(
   const boundaryIndex = boundaryEventId
     ? events.findIndex((event) => event.getId() === boundaryEventId)
     : -1
-  // Ignore a boundary that is no longer in the window.
+  // null means the room had no events when positioning began. Ignore a string boundary that is
+  // no longer in the window.
   const boundedEvents =
-    boundaryEventId && boundaryIndex >= 0 ? events.slice(0, boundaryIndex + 1) : events
+    boundaryEventId === null
+      ? []
+      : boundaryEventId && boundaryIndex >= 0
+        ? events.slice(0, boundaryIndex + 1)
+        : events
   const current = boundedEvents.filter(isVisibleMessageEvent)
   const readIndex = readEventId ? current.findIndex((event) => event.getId() === readEventId) : -1
   const firstCandidate =

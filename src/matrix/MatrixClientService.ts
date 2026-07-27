@@ -2908,12 +2908,12 @@ export class MatrixClientService {
     if (client?.getRoom(roomId)) await client.sendTyping(roomId, typing, 5000)
   }
 
-  async markRead(event: MatrixEvent) {
+  async markRead(event: MatrixEvent, visibleAccountId?: string) {
     const roomId = event.getRoomId()
     const eventId = event.getId()
     if (!roomId || !isServerEventId(eventId)) return
     const joinedAccounts = this.roomAccounts(roomId)
-    const selectedAccountId = this.selectedRoomAccountId(roomId)
+    const selectedAccountId = visibleAccountId ?? this.selectedRoomAccountId(roomId)
     const accounts = this.autoReadAllAccountsEnabled()
       ? joinedAccounts
       : joinedAccounts.filter((account) => account.id === selectedAccountId)

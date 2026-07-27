@@ -186,8 +186,7 @@ export async function openAppSettings(page: Page, tab: string) {
 
 export async function setAutoReadAllAccounts(page: Page, enabled: boolean) {
   const dialog = await openAppSettings(page, 'Push notifications')
-  const item = dialog.locator('li').filter({ hasText: 'Read rooms for all my accounts at once' })
-  const toggle = item.getByRole('switch')
+  const toggle = dialog.getByRole('switch', { name: 'Read rooms with every account' })
   if ((await toggle.getAttribute('aria-checked')) !== String(enabled)) await toggle.click()
   await expect(toggle).toHaveAttribute('aria-checked', String(enabled))
   await closeDialog(page)

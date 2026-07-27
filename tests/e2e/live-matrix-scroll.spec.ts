@@ -457,19 +457,8 @@ test.describe('live timeline scroll-position journey', () => {
         await expectAwayFromBottom(page!)
       })
 
-      await test.step('combined account settings expose read synchronization', async () => {
-        await page!.getByTestId('account-menu').click()
-        await page!.getByText('Switch accounts', { exact: true }).click()
-        const accounts = page!.getByRole('dialog', { name: 'Accounts' })
-        await expect(accounts).toBeVisible()
-        const readAll = accounts.getByRole('switch', {
-          name: 'Read rooms with every account',
-        })
-        await expect(readAll).toBeVisible()
-        await expect(readAll).toHaveAttribute('aria-checked', 'false')
-        await readAll.click()
-        await expect(readAll).toHaveAttribute('aria-checked', 'true')
-        await accounts.getByRole('button', { name: 'Close' }).click()
+      await test.step('app settings expose read synchronization', async () => {
+        await setAutoReadAllAccounts(page!, true)
       })
 
       await test.step('reading at the bottom clears the badge for both accounts and it stays cleared', async () => {
