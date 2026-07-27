@@ -1,0 +1,31 @@
+:root {
+  --text: #6b6375;
+  --text-h: #08060d;
+  --bg: #fafaf9;
+  --card-bg: #fff;
+  --border: #e5e4e7;
+  --accent: #e06a28;
+  --accent-hover: #c95a20;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-size: 16px;
+  color: var(--text-h);
+  background: var(--bg);
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--text-h);
+}

@@ -1,0 +1,625 @@
+import { expect, test, type Locator, type Page } from '@playwright/test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { liveMatrixConfig } from './support/env'
+import {
+  cleanTestRoom,
+  getRoomState,
+  removeOtherDevices,
+  setAccountData,
+  setRoomState,
+  storedSessions,
+  uploadMedia,
+  type StoredSession,
+} from './support/matrix-api'
+import { pace } from './support/retry'
+import {
+  closeDialog,
+  addAccount,
+  openChannelInSpace,
+  openRoomActions,
+  openRoomRow,
+  openRoomSettings,
+  signIn,
+} from './support/ui'
+
+const live = liveMatrixConfig()
+const FAVICON_PATH = resolve(process.cwd(), 'public/favicon.png')
+
+const packButton = (page: Page, name: string) =>
+  page.locator('.pack').getByRole('button', { name: new RegExp(name) })
+
+const openEmojiPicker = async (page: Page) => {
+  await page.getByTitle('Emoji and stickers').click()
+  await page.getByRole('tab', { name: /^Matrix/ }).click()
+  await page.getByRole('tab', { name: /^Stickers/ }).click()
+}
+
+const closeEmojiPicker = async (page: Page) => {
+  await page.keyboard.press('Escape')
+}
+
+const switchAccount = async (page: Page, userId: string) => {
+  await page.getByTestId('account-menu').click()
+  await page.getByText('Switch accounts', { exact: true }).click()
+  const accounts = page.getByRole('dialog', { name: 'Accounts' })
+  const row = accounts.locator('.ant-list-item').filter({ hasText: userId })
+  await expect(row).toBeVisible()
+  await row.getByRole('button', { name: 'Switch', exact: true }).click()
+  await expect(accounts).toBeHidden({ timeout: 90_000 })
+  await expect(page.getByTestId('room-sidebar').first()).toBeVisible({
+    timeout: 90_000,
+  })
+}
+
+const saveChanges = async (page: Page, scope: Page | Locator) => {
+  await scope.getByRole('button', { name: 'Save all changes' }).click()
+
+  await expect(page.getByText('Image pack saved').last()).toBeVisible({
+    timeout: 30_000,
+  })
+}
+
+const uploadAndSave = async (page: Page, scope: Page | Locator, name: string) => {
+  const fileInput = scope.locator('input[type="file"]')
+  await fileInput.setInputFiles(FAVICON_PATH)
+
+  await expect(scope.getByLabel('Sticker name').last()).toHaveValue('favicon', { timeout: 30_000 })
+  await scope.getByLabel('Sticker name').last().fill(name)
+  await saveChanges(page, scope)
+}
+
+const clearImagePack = async (page: Page, scope: Locator) => {
+  while (await scope.getByTitle('Remove').count()) {
+    await scope.getByTitle('Remove').first().click()
+  }
+  await saveChanges(page, scope)
+}
+
+test.describe('live sticker pack journey', () => {
+  test.describe.configure({ mode: 'serial' })
+  test.skip(!live.enabled, live.reason)
+
+  test('upload, view, rename, remove, and send stickers for account, room, and space packs', async ({
+    browser,
+    baseURL,
+  }, testInfo) => {
+    test.setTimeout(8 * 60_000)
+    const account1 = live.account1!
+    const runId = `${Date.now()}-${testInfo.retry}-${testInfo.workerIndex}`
+    const roomName = `${live.roomPrefix} Stickers ${runId}`
+    const spaceName = `${live.roomPrefix} Sticker Space ${runId}`
+    const channelName = `${live.roomPrefix} Sticker Channel ${runId}`
+    const personalStickerName = `personal-${runId}`
+    const roomStickerName = `room-${runId}`
+    const spaceStickerName = `space-${runId}`
+
+    let context
+    let page: Page | undefined
+    let roomId: string | undefined
+    let spaceId: string | undefined
+    let channelId: string | undefined
+    let account1Id: string | undefined
+    let journeyError: unknown
+
+    try {
+      context = await browser.newContext({ baseURL })
+      page = await context.newPage()
+
+      await test.step('sign in', async () => {
+        await signIn(page!, account1)
+        account1Id = (await storedSessions(page!)).at(-1)?.userId
+        expect(account1Id).toMatch(/^@[^:]+:.+/)
+      })
+
+      await test.step('create a room to send stickers into', async () => {
+        await openRoomActions(page!)
+        await page!.getByText('Create a room', { exact: true }).click()
+        const dialog = page!.getByRole('dialog', { name: 'Create a room' })
+        await expect(dialog).toBeVisible()
+        await dialog.getByLabel('Account').click()
+        await page!.getByText(account1Id!, { exact: true }).last().click()
+        await dialog.getByLabel('Room name').fill(roomName)
+        await dialog.getByRole('button', { name: 'Create room' }).click()
+        await expect(
+          page!.getByTestId('room-header').getByRole('heading', {
+            name: roomName,
+          }),
+        ).toBeVisible({ timeout: 60_000 })
+        roomId = new URL(page!.url()).searchParams.get('room') ?? undefined
+        expect(roomId).toMatch(/^!/)
+      })
+
+      await test.step('personal sticker: upload, rename, and it shows in settings', async () => {
+        await page!.getByTestId('account-menu').click()
+        await page!
+          .getByTestId('account-menu')
+          .getByRole('button', { name: 'Open settings' })
+          .click()
+        const settings = page!.getByRole('dialog', { name: 'Settings' })
+        await expect(settings).toBeVisible()
+        await settings.getByRole('tab', { name: 'Stickers & emoji' }).click()
+        const panel = settings.getByRole('tabpanel', {
+          name: 'Stickers & emoji',
+        })
+        await clearImagePack(page!, panel)
+        await uploadAndSave(page!, panel, personalStickerName)
+        await closeDialog(page!)
+        await page!.getByTestId('account-menu').click()
+        await page!
+          .getByTestId('account-menu')
+          .getByRole('button', { name: 'Open settings' })
+          .click()
+        await settings.getByRole('tab', { name: 'Stickers & emoji' }).click()
+        await expect(panel.getByLabel('Sticker name')).toHaveValue(personalStickerName, {
+          timeout: 30_000,
+        })
+        await expect(panel.locator('.packImage img')).toHaveAttribute('src', /.+/, {
+          timeout: 30_000,
+        })
+        await closeDialog(page!)
+      })
+
+      await test.step('personal sticker: shows in the sticker picker and sends into a room', async () => {
+        await openEmojiPicker(page!)
+        const stickerButton = packButton(page!, personalStickerName)
+        await expect(stickerButton).toBeVisible({ timeout: 30_000 })
+        await expect(stickerButton.locator('img')).toHaveAttribute('src', /.+/, { timeout: 30_000 })
+        await stickerButton.click()
+        await expect(page!.locator('[data-event-id^="$"]').last().locator('img')).toHaveAttribute(
+          'src',
+          /.+/,
+          { timeout: 30_000 },
+        )
+      })
+
+      await test.step('personal sticker: remove and it disappears from settings and the picker', async () => {
+        await page!.getByTestId('account-menu').click()
+        await page!
+          .getByTestId('account-menu')
+          .getByRole('button', { name: 'Open settings' })
+          .click()
+        const settings = page!.getByRole('dialog', { name: 'Settings' })
+        await settings.getByRole('tab', { name: 'Stickers & emoji' }).click()
+        const panel = settings.getByRole('tabpanel', {
+          name: 'Stickers & emoji',
+        })
+        await panel.getByTitle('Remove').click()
+        await saveChanges(page!, panel)
+        await closeDialog(page!)
+        await openEmojiPicker(page!)
+        await expect(packButton(page!, personalStickerName)).toHaveCount(0)
+        await closeEmojiPicker(page!)
+      })
+
+      await test.step('room sticker: upload, rename, and it shows in settings', async () => {
+        const dialog = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        await uploadAndSave(page!, dialog, roomStickerName)
+        await closeDialog(page!)
+        const reopened = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        await expect(reopened.getByLabel('Sticker name')).toHaveValue(roomStickerName, {
+          timeout: 30_000,
+        })
+        await expect(reopened.locator('.packImage img')).toHaveAttribute('src', /.+/, {
+          timeout: 30_000,
+        })
+        await closeDialog(page!)
+      })
+
+      await test.step('room sticker: shows in the sticker picker and sends into the room', async () => {
+        await openEmojiPicker(page!)
+        const stickerButton = packButton(page!, roomStickerName)
+        await expect(stickerButton).toBeVisible({ timeout: 30_000 })
+        await expect(stickerButton.locator('img')).toHaveAttribute('src', /.+/, { timeout: 30_000 })
+        await stickerButton.click()
+        await expect(page!.locator('[data-event-id^="$"]').last().locator('img')).toHaveAttribute(
+          'src',
+          /.+/,
+          { timeout: 30_000 },
+        )
+      })
+
+      await test.step('room sticker: remove and it disappears from settings and the picker', async () => {
+        const dialog = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        await dialog.getByTitle('Remove').click()
+        await saveChanges(page!, dialog)
+        await closeDialog(page!)
+        await openEmojiPicker(page!)
+        await expect(packButton(page!, roomStickerName)).toHaveCount(0)
+        await closeEmojiPicker(page!)
+      })
+
+      await test.step('create a space with a channel', async () => {
+        await openRoomActions(page!)
+        await page!.getByText('Create Space', { exact: true }).click()
+        const dialog = page!.getByRole('dialog', { name: 'Create a Space' })
+        await expect(dialog).toBeVisible()
+        await dialog.getByLabel('Account').click()
+        await page!.getByText(account1Id!, { exact: true }).last().click()
+        await dialog.getByLabel('Space name').fill(spaceName)
+        await dialog.getByRole('button', { name: 'Create Space' }).click()
+        await expect(page!.getByText(spaceName, { exact: true }).first()).toBeVisible({
+          timeout: 60_000,
+        })
+        spaceId = new URL(page!.url()).searchParams.get('space') ?? undefined
+        await page!.waitForTimeout(2_000)
+
+        const spaceDialog = await openRoomSettings(page!, spaceName, 'Channels')
+        await spaceDialog.getByRole('button', { name: 'plus' }).click()
+        const channelDialog = page!.getByRole('dialog', {
+          name: 'Create channel',
+        })
+        await expect(channelDialog).toBeVisible({ timeout: 15_000 })
+        await channelDialog.getByRole('textbox').first().fill(channelName)
+        await channelDialog.getByRole('button', { name: 'Create channel' }).click()
+        await expect(spaceDialog.getByText(channelName, { exact: true })).toBeVisible({
+          timeout: 60_000,
+        })
+        await closeDialog(page!)
+        await pace(page!, 2_000)
+        await openChannelInSpace(page!, spaceName, channelName)
+        await expect(
+          page!.getByTestId('room-header').getByRole('heading', {
+            name: channelName,
+          }),
+        ).toBeVisible({ timeout: 60_000 })
+        channelId = new URL(page!.url()).searchParams.get('room') ?? undefined
+      })
+
+      await test.step('space sticker: upload, rename, and it shows in settings', async () => {
+        const dialog = await openRoomSettings(page!, spaceName, 'Stickers & emoji')
+        await uploadAndSave(page!, dialog, spaceStickerName)
+        await closeDialog(page!)
+        const reopened = await openRoomSettings(page!, spaceName, 'Stickers & emoji')
+        await expect(reopened.getByLabel('Sticker name')).toHaveValue(spaceStickerName, {
+          timeout: 30_000,
+        })
+        await expect(reopened.locator('.packImage img')).toHaveAttribute('src', /.+/, {
+          timeout: 30_000,
+        })
+        await closeDialog(page!)
+      })
+
+      await test.step('space sticker: shows in the picker from a channel inside the space, and sends', async () => {
+        await openChannelInSpace(page!, spaceName, channelName)
+        await expect(
+          page!.getByTestId('room-header').getByRole('heading', {
+            name: channelName,
+          }),
+        ).toBeVisible({ timeout: 60_000 })
+        await openEmojiPicker(page!)
+        const stickerButton = packButton(page!, spaceStickerName)
+        await expect(stickerButton).toBeVisible({ timeout: 30_000 })
+        await expect(stickerButton.locator('img')).toHaveAttribute('src', /.+/, { timeout: 30_000 })
+        await stickerButton.click()
+        await expect(page!.locator('[data-event-id^="$"]').last().locator('img')).toHaveAttribute(
+          'src',
+          /.+/,
+          { timeout: 30_000 },
+        )
+      })
+
+      await test.step('space sticker: remove and it disappears from settings and the channel picker', async () => {
+        const dialog = await openRoomSettings(page!, spaceName, 'Stickers & emoji')
+        await dialog.getByTitle('Remove').click()
+        await saveChanges(page!, dialog)
+        await closeDialog(page!)
+        await openChannelInSpace(page!, spaceName, channelName)
+        await openEmojiPicker(page!)
+        await expect(packButton(page!, spaceStickerName)).toHaveCount(0)
+        await closeEmojiPicker(page!)
+      })
+    } catch (error) {
+      journeyError = error
+    } finally {
+      let cleanupError: unknown
+      try {
+        const sessions: StoredSession[] = []
+        if (page && !page.isClosed()) sessions.push(...(await storedSessions(page).catch(() => [])))
+        if (roomId) await cleanTestRoom(roomId, sessions)
+        if (channelId) await cleanTestRoom(channelId, sessions)
+        if (spaceId) await cleanTestRoom(spaceId, sessions)
+        if (account1Id) {
+          const current = sessions.filter((s) => s.userId === account1Id).at(-1)
+          if (current) await removeOtherDevices(browser, current, account1.password)
+        }
+      } catch (error) {
+        cleanupError = error
+      } finally {
+        await context?.close()
+      }
+      if (!journeyError && cleanupError) journeyError = cleanupError
+    }
+    if (journeyError) throw journeyError
+  })
+
+  test('combined accounts share default-on personal emoji and stickers after switching and reloading', async ({
+    browser,
+    baseURL,
+  }, testInfo) => {
+    test.setTimeout(5 * 60_000)
+    const account1 = live.account1!
+    const account2 = live.account2!
+    const runId = `${Date.now()}-${testInfo.retry}-${testInfo.workerIndex}`
+    const roomName = `${live.roomPrefix} Combined Packs ${runId}`
+    const sharedImageName = `combined-pack-${runId}`
+
+    let context
+    let page: Page | undefined
+    let roomId: string | undefined
+    let account1Id: string | undefined
+    let account2Id: string | undefined
+    let account1Session: StoredSession | undefined
+    let journeyError: unknown
+
+    try {
+      context = await browser.newContext({ baseURL })
+      page = await context.newPage()
+
+      await test.step('sign in two accounts in the default Combined layout', async () => {
+        await signIn(page!, account1)
+        await addAccount(page!, account2)
+        const sessions = await storedSessions(page!)
+        account1Session = sessions.find((session) => session.userId !== sessions.at(-1)?.userId)
+        const account2Session = sessions.at(-1)
+        account1Id = account1Session?.userId
+        account2Id = account2Session?.userId
+        expect(account1Id).toMatch(/^@[^:]+:.+/)
+        expect(account2Id).toMatch(/^@[^:]+:.+/)
+        expect(account1Id).not.toBe(account2Id)
+      })
+
+      await test.step('create a room with account two', async () => {
+        await openRoomActions(page!)
+        await page!.getByText('Create a room', { exact: true }).click()
+        const dialog = page!.getByRole('dialog', { name: 'Create a room' })
+        await expect(dialog).toBeVisible()
+        await dialog.getByLabel('Account').click()
+        await page!.getByText(account2Id!, { exact: true }).last().click()
+        await dialog.getByLabel('Room name').fill(roomName)
+        await dialog.getByRole('button', { name: 'Create room' }).click()
+        await expect(
+          page!.getByTestId('room-header').getByRole('heading', {
+            name: roomName,
+          }),
+        ).toBeVisible({ timeout: 60_000 })
+        roomId = new URL(page!.url()).searchParams.get('room') ?? undefined
+        expect(roomId).toMatch(/^!/)
+      })
+
+      await test.step('switch to account one and upload an image usable as both emoji and sticker', async () => {
+        await switchAccount(page!, account1Id!)
+        const settings = page!.getByRole('dialog', { name: 'Settings' })
+        await page!.getByTestId('account-menu').click()
+        await page!
+          .getByTestId('account-menu')
+          .getByRole('button', { name: 'Open settings' })
+          .click()
+        await settings.getByRole('tab', { name: 'Stickers & emoji' }).click()
+        const panel = settings.getByRole('tabpanel', {
+          name: 'Stickers & emoji',
+        })
+        const sharing = panel.getByRole('switch', {
+          name: 'Show emoji and stickers from every account',
+        })
+        await expect(sharing).toBeEnabled()
+        await expect(sharing).toHaveAttribute('aria-checked', 'true')
+        await clearImagePack(page!, panel)
+        await panel.locator('input[type="file"]').setInputFiles(FAVICON_PATH)
+        const name = panel.getByLabel('Sticker name').last()
+        await expect(name).toHaveValue('favicon', { timeout: 30_000 })
+        await name.fill(sharedImageName)
+        await panel.getByText('Both', { exact: true }).last().click()
+        await saveChanges(page!, panel)
+        await closeDialog(page!)
+      })
+
+      await test.step("switch to account two, reload again, and retain the other account's pack", async () => {
+        await switchAccount(page!, account2Id!)
+        await page!.reload()
+        await expect(page!.getByTestId('room-sidebar').first()).toBeVisible({
+          timeout: 90_000,
+        })
+        await openRoomRow(page!, roomName)
+
+        await openEmojiPicker(page!)
+        const sticker = packButton(page!, sharedImageName)
+        await expect(sticker).toBeVisible({ timeout: 30_000 })
+        await expect(sticker.locator('img')).toHaveAttribute('src', /.+/, {
+          timeout: 30_000,
+        })
+        await expect(
+          sticker
+            .locator("xpath=ancestor::div[contains(@class, 'pack')]")
+            .getByText(account1Id!, { exact: false }),
+        ).toBeVisible()
+        await closeEmojiPicker(page!)
+
+        await page!.getByTitle('Emoji and stickers').click()
+        await page!.getByRole('tab', { name: /^Matrix/ }).click()
+        await page!.getByRole('tab', { name: /^Emoji/ }).click()
+        await expect(packButton(page!, sharedImageName)).toBeVisible()
+        await closeEmojiPicker(page!)
+      })
+
+      await test.step('the preference can hide and restore other-account packs', async () => {
+        await page!.getByTestId('account-menu').click()
+        await page!
+          .getByTestId('account-menu')
+          .getByRole('button', { name: 'Open settings' })
+          .click()
+        const settings = page!.getByRole('dialog', { name: 'Settings' })
+        await settings.getByRole('tab', { name: 'Stickers & emoji' }).click()
+        const sharing = settings.getByRole('switch', {
+          name: 'Show emoji and stickers from every account',
+        })
+        await sharing.click()
+        await expect(sharing).toHaveAttribute('aria-checked', 'false')
+        await closeDialog(page!)
+        await openEmojiPicker(page!)
+        await expect(packButton(page!, sharedImageName)).toHaveCount(0)
+        await closeEmojiPicker(page!)
+
+        await page!.getByTestId('account-menu').click()
+        await page!
+          .getByTestId('account-menu')
+          .getByRole('button', { name: 'Open settings' })
+          .click()
+        await settings.getByRole('tab', { name: 'Stickers & emoji' }).click()
+        await sharing.click()
+        await expect(sharing).toHaveAttribute('aria-checked', 'true')
+        await closeDialog(page!)
+        await openEmojiPicker(page!)
+        await expect(packButton(page!, sharedImageName)).toBeVisible()
+        await closeEmojiPicker(page!)
+      })
+    } catch (error) {
+      journeyError = error
+    } finally {
+      let cleanupError: unknown
+      try {
+        const sessions = page && !page.isClosed() ? await storedSessions(page).catch(() => []) : []
+        if (account1Session)
+          await setAccountData(account1Session, 'im.ponies.user_emotes', {
+            pack: { display_name: 'Personal stickers' },
+            images: {},
+          })
+        if (roomId) await cleanTestRoom(roomId, sessions)
+        for (const [userId, password] of [
+          [account1Id, account1.password],
+          [account2Id, account2.password],
+        ] as const) {
+          const current = sessions.filter((session) => session.userId === userId).at(-1)
+          if (current) await removeOtherDevices(browser, current, password)
+        }
+      } catch (error) {
+        cleanupError = error
+      } finally {
+        await context?.close()
+      }
+      if (!journeyError && cleanupError) journeyError = cleanupError
+    }
+    if (journeyError) throw journeyError
+  })
+
+  test('a pack under a custom (non-empty) state_key is detected and edited in place, not duplicated under ""', async ({
+    browser,
+    baseURL,
+  }, testInfo) => {
+    test.setTimeout(3 * 60_000)
+    const account1 = live.account1!
+    const runId = `${Date.now()}-${testInfo.retry}-${testInfo.workerIndex}`
+    const roomName = `${live.roomPrefix} Named Pack ${runId}`
+    const initialStickerName = `named-${runId}`
+    const renamedStickerName = `named-renamed-${runId}`
+    const packStateKey = 'Fox'
+
+    let context
+    let page: Page | undefined
+    let roomId: string | undefined
+    let account1Id: string | undefined
+    let journeyError: unknown
+
+    try {
+      context = await browser.newContext({ baseURL })
+      page = await context.newPage()
+
+      await test.step('sign in', async () => {
+        await signIn(page!, account1)
+        account1Id = (await storedSessions(page!)).at(-1)?.userId
+        expect(account1Id).toMatch(/^@[^:]+:.+/)
+      })
+
+      await test.step('create a room', async () => {
+        await openRoomActions(page!)
+        await page!.getByText('Create a room', { exact: true }).click()
+        const dialog = page!.getByRole('dialog', { name: 'Create a room' })
+        await expect(dialog).toBeVisible()
+        await dialog.getByLabel('Account').click()
+        await page!.getByText(account1Id!, { exact: true }).last().click()
+        await dialog.getByLabel('Room name').fill(roomName)
+        await dialog.getByRole('button', { name: 'Create room' }).click()
+        await expect(
+          page!.getByTestId('room-header').getByRole('heading', {
+            name: roomName,
+          }),
+        ).toBeVisible({ timeout: 60_000 })
+        roomId = new URL(page!.url()).searchParams.get('room') ?? undefined
+        expect(roomId).toMatch(/^!/)
+      })
+
+      await test.step("seed a pack under a custom state_key via the raw API, bypassing the app's own write path", async () => {
+        const session = (await storedSessions(page!)).at(-1)!
+        const contentUri = await uploadMedia(
+          session,
+          readFileSync(FAVICON_PATH),
+          'favicon.png',
+          'image/png',
+        )
+        await setRoomState(session, roomId!, 'im.ponies.room_emotes', packStateKey, {
+          pack: { display_name: 'Fox' },
+          images: {
+            [initialStickerName]: {
+              url: contentUri,
+              info: { mimetype: 'image/png' },
+            },
+          },
+        })
+      })
+
+      await test.step('Room settings > Stickers & emoji detects the named pack instead of showing empty', async () => {
+        const panel = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        await expect(panel.getByLabel('Sticker name')).toHaveValue(initialStickerName, {
+          timeout: 30_000,
+        })
+        await closeDialog(page!)
+      })
+
+      await test.step('editing and saving writes back to the same state_key, not a new "" one', async () => {
+        const panel = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        await panel.getByLabel('Sticker name').fill(renamedStickerName)
+        await saveChanges(page!, panel)
+        await closeDialog(page!)
+
+        const session = (await storedSessions(page!)).at(-1)!
+        const namedEvent = (await getRoomState(
+          session,
+          roomId!,
+          'im.ponies.room_emotes',
+          packStateKey,
+        )) as { images?: Record<string, unknown> } | undefined
+        expect(Object.keys(namedEvent?.images ?? {})).toEqual([renamedStickerName])
+
+        const emptyKeyEvent = await getRoomState(session, roomId!, 'im.ponies.room_emotes', '')
+        expect(emptyKeyEvent).toBeUndefined()
+      })
+
+      await test.step('the renamed sticker shows in the picker', async () => {
+        await openEmojiPicker(page!)
+        await expect(packButton(page!, renamedStickerName)).toBeVisible({
+          timeout: 30_000,
+        })
+        await closeEmojiPicker(page!)
+      })
+    } catch (error) {
+      journeyError = error
+    } finally {
+      let cleanupError: unknown
+      try {
+        const sessions: StoredSession[] = []
+        if (page && !page.isClosed()) sessions.push(...(await storedSessions(page).catch(() => [])))
+        if (roomId) await cleanTestRoom(roomId, sessions)
+        if (account1Id) {
+          const current = sessions.filter((s) => s.userId === account1Id).at(-1)
+          if (current) await removeOtherDevices(browser, current, account1.password)
+        }
+      } catch (error) {
+        cleanupError = error
+      } finally {
+        await context?.close()
+      }
+      if (!journeyError && cleanupError) journeyError = cleanupError
+    }
+    if (journeyError) throw journeyError
+  })
+})

@@ -1,0 +1,52 @@
+:root {
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+html,
+body,
+#root {
+  background-color: #f5f6fa;
+}
+@media (prefers-color-scheme: dark) {
+  html,
+  body,
+  #root {
+    background-color: #11131a;
+  }
+}
+html[data-theme='light'],
+html[data-theme='light'] body,
+html[data-theme='light'] #root {
+  background-color: #f5f6fa;
+}
+html[data-theme='dark'],
+html[data-theme='dark'] body,
+html[data-theme='dark'] #root {
+  background-color: #11131a;
+}
+body {
+  min-width: 320px;
+}
+html.foxchat-android {
+  --foxchat-top-inset: 30px;
+}
+
+@media (max-width: 760px) {
+  .ant-modal {
+    max-width: 100vw;
+    margin: 0;
+    top: 0;
+    padding: 0;
+  }
+  .ant-modal-content {
+    min-height: calc(var(--foxchat-viewport-height, 100dvh) - var(--foxchat-top-inset, 0px));
+    border-radius: 0 !important;
+  }
+  .ant-modal-body > aside {
+    height: calc(var(--foxchat-viewport-height, 100dvh) - var(--foxchat-top-inset, 0px));
+  }
+  html.foxchat-android .ant-modal {
+    top: var(--foxchat-top-inset) !important;
+  }
+}

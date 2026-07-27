@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-test-android-auto-notification"
+description = "Enables the test_android_auto_notification command without any pre-configured scope."
+commands.allow = ["test_android_auto_notification"]
+
+[[permission]]
+identifier = "deny-test-android-auto-notification"
+description = "Denies the test_android_auto_notification command without any pre-configured scope."
+commands.deny = ["test_android_auto_notification"]

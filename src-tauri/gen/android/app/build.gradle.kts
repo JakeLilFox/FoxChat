@@ -1,0 +1,126 @@
+import java.util.Properties
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("rust")
+}
+
+// Firebase configuration is supplied per deployment and is intentionally not
+// committed. Applying the plugin when the file is present generates the
+// Android resources required by Firebase Messaging for background delivery.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+} else {
+    logger.warn("google-services.json is missing: closed-app FCM notifications will not work")
+}
+
+val tauriProperties = Properties().apply {
+    val propFile = file("tauri.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
+// CI passes VERSION_CODE as the app's semver (e.g. "0.0.15"), which Android's
+// integer versionCode can't hold directly, so a plain "x.y.z" is packed into
+// major*1_000_000 + minor*1_000 + patch instead of failing to parse.
+fun versionCodeOf(raw: String): Int {
+    raw.toIntOrNull()?.let { return it }
+    val (major, minor, patch) = raw.split(".").map { it.toIntOrNull() ?: 0 } + listOf(0, 0, 0)
+    return major * 1_000_000 + minor * 1_000 + patch
+}
+
+android {
+    compileSdk = 36
+    namespace = "foxchat.jakefox.de"
+    defaultConfig {
+        manifestPlaceholders["usesCleartextTraffic"] = "false"
+        applicationId = "foxchat.jakefox.de"
+        minSdk = 24
+        targetSdk = 36
+        versionCode = System.getenv("VERSION_CODE")?.let { versionCodeOf(it) } ?: tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
+        versionName = if (System.getenv("VERSION_NAME") != null) System.getenv("VERSION_NAME") else tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    buildTypes {
+        getByName("debug") {
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+            isDebuggable = true
+            isJniDebuggable = true
+            isMinifyEnabled = false
+            packaging {
+                jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
+                jniLibs.keepDebugSymbols.add("*/armeabi-v7a/*.so")
+                jniLibs.keepDebugSymbols.add("*/x86/*.so")
+                jniLibs.keepDebugSymbols.add("*/x86_64/*.so")
+            }
+        }
+    val keystorePath = if (project.hasProperty("PKEYSTORE_PATH")) project.property("PKEYSTORE_PATH") as String else (System.getenv("PKEYSTORE_PATH") ?: "")
+    val keystorePassword = if (project.hasProperty("PKEYSTORE_PASSWORD")) project.property("PKEYSTORE_PASSWORD") as String else (System.getenv("PKEYSTORE_PASSWORD") ?: "")
+    val keystoreAlias = if (project.hasProperty("PKEYSTORE_ALIAS")) project.property("PKEYSTORE_ALIAS") as String else (System.getenv("PKEYSTORE_ALIAS") ?: "release")
+    val keystoreAliasPassword = if (project.hasProperty("PKEYSTORE_ALIAS_PASSWORD")) project.property("PKEYSTORE_ALIAS_PASSWORD") as String else (System.getenv("PKEYSTORE_ALIAS_PASSWORD") ?: keystorePassword)
+
+    signingConfigs {
+        if (keystorePath.isNotEmpty() && keystorePassword.isNotEmpty()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = keystorePassword
+                keyAlias = keystoreAlias
+                keyPassword = keystoreAliasPassword
+            }
+        }
+    }
+
+        getByName("release") {
+            isMinifyEnabled = true
+            proguardFiles(
+                *fileTree(".") { include("**/*.pro") }
+                    .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
+                    .toList().toTypedArray()
+            )
+            if (keystorePath.isNotEmpty() && keystorePassword.isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+    buildFeatures {
+        buildConfig = true
+    }
+}
+
+rust {
+    rootDirRel = "../../../"
+}
+
+dependencies {
+    implementation("com.google.firebase:firebase-messaging:24.1.2")
+    implementation("androidx.webkit:webkit:1.14.0")
+    implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("androidx.activity:activity-ktx:1.10.1")
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    implementation("androidx.security:security-crypto:1.1.0")
+    // Matrix's supported native crypto implementation. Keep this aligned with the
+    // Rust crypto generation used by matrix-js-sdk; room sessions are exported by
+    // the WebView and imported into this native store for process-dead push decrypts.
+    implementation("org.matrix.rustcomponents:crypto-android:26.05.12")
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.1.4")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
+}
+
+// Keep normal desktop/web development buildable before the Firebase file is
+// provisioned. Android push is enabled as soon as google-services.json exists.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
+val tauriBuild = project.file("tauri.build.gradle.kts")
+if (tauriBuild.exists()) {
+    apply(from = "tauri.build.gradle.kts")
+} else {
+    println("Warning: tauri.build.gradle.kts not found at ${tauriBuild.absolutePath}")
+}

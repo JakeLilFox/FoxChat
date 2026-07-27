@@ -1,0 +1,769 @@
+[
+  {
+    "type": "worker",
+    "id": "21179be3-a2a2-4661-9063-45e1545242cd",
+    "name": "Test",
+    "children": [
+      {
+        "type": "step",
+        "id": "ea29f575-ed22-4c4f-90a5-5d419f032a81",
+        "name": "Test",
+        "tasks": [
+          {
+            "type": "checkout",
+            "id": "94f7ecf4-d799-441c-a5bf-651884fb9f32"
+          },
+          {
+            "type": "grapsecrets",
+            "id": "94f7ecf4-d799-441c-a5bf-651884eb9f32",
+            "files": [
+              "test.env"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "601c11c7-61a4-4155-9eef-32f56b79fa4d",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "6ddab78c-a8ed-43dc-9e25-8e39b098ea54",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && npm install"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "b611bb8b-a7dd-4439-ab91-d46efe70eb34",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && npx playwright install --with-deps chromium"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "57f4bd85-822f-4c15-be03-3d943d9a43d7",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && npm run test:e2e:cleanup-rooms"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "cd3a1519-3a57-48e6-965e-d5a9ae378b61",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && export CI=true && npm run typecheck && npm run lint && npm run test:unit && npm run test:e2e"
+            ],
+            "flags": [
+              "ignore-errors"
+            ],
+            "exitCodeVar": "e2e_code"
+          },
+          {
+            "type": "addtestresults",
+            "id": "b611bb8b-a7dd-5439-ab91-d46efe70eb34",
+            "file": "playwright-report/index.html"
+          },
+          {
+            "type": "cmd",
+            "id": "2678f77a-b816-4ba0-9d6d-bdfb7104d8f6",
+            "cmd": [
+              "exit ${e2e_code}"
+            ]
+          }
+        ]
+      }
+    ],
+    "image": "build-container-tauri",
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "worker",
+    "id": "9f73307f-3fc3-49a7-8654-7b0b3109722f",
+    "name": "HomeBuild",
+    "children": [
+      {
+        "type": "step",
+        "id": "595fa7fa-18ee-4878-ac34-383d4b3f4e3e",
+        "name": "Checkout",
+        "tasks": [
+          {
+            "type": "checkout",
+            "id": "cf36cae6-c292-4418-b547-a8cbb419af29"
+          },
+          {
+            "type": "cmd",
+            "id": "74186f82-af65-44f2-9f8f-da557abb4eb0",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "7d19dfc2-9656-46bb-b3be-c6c63141ae4a",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && cd foxchathomepage && npm install"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "816eb02b-f211-4dd4-a62f-7f7b71a60f82",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && cd foxchathomepage && export VITE_BUILD_VERSION=${version} && npm run build"
+            ]
+          },
+          {
+            "type": "asset",
+            "id": "bbcd75ff-e0d4-4db7-aa04-90dcaf0d3562",
+            "files": [
+              "foxchathomepage/dist/"
+            ],
+            "prefix": "home"
+          }
+        ]
+      }
+    ],
+    "image": "build-container-tauri",
+    "depends": [
+      "Test"
+    ],
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "worker",
+    "id": "9f73307f-3fc3-49a7-8654-7b0b3109721f",
+    "name": "Web",
+    "children": [
+      {
+        "type": "step",
+        "id": "595fa7fa-18ee-4878-ac34-383d4b3f4e2e",
+        "name": "Checkout",
+        "tasks": [
+          {
+            "type": "checkout",
+            "id": "cf36cae6-c292-4418-b547-a8cbb219af29"
+          },
+          {
+            "type": "cmd",
+            "id": "74186f82-af65-44f2-9f8f-da5a7abb4eb0",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "7d19dfc2-9656-46bb-b3be-c6ca3141ae4a",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && npm install"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "816eb02b-f211-4dd4-a62f-7f4b71a60f82",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && export VITE_BUILD_VERSION=${version} && npm run build"
+            ]
+          },
+          {
+            "type": "asset",
+            "id": "bbcd75ff-e0d4-4db7-aa04-90dcaf0d3562",
+            "files": [
+              "dist/"
+            ],
+            "prefix": "web"
+          }
+        ]
+      }
+    ],
+    "image": "build-container-tauri",
+    "depends": [
+      "Test"
+    ],
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "worker",
+    "id": "75c71204-9b3f-4457-bdd4-2890325daad7",
+    "name": "Desktop",
+    "children": [
+      {
+        "type": "checkout",
+        "id": "46893e5a-4816-454e-a2cd-6fc9d08aa75d"
+      },
+      {
+        "type": "cmd",
+        "id": "3056602e-e608-4bdc-9990-cfa730203afc",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "e4392610-6b07-4ecb-8511-254b125c2830",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && npm install"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "329d837e-1311-48af-99c0-31e7091131d0",
+        "cmd": [
+          "cargo tauri --version >/dev/null 2>&1 || cargo install tauri-cli --version '^2.0.0' --locked"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "c073572c-3772-4c8c-aa36-f3370d793649",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && export VITE_BUILD_VERSION=${version} && npm run desktop:build"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "70a06e06-29ef-49ed-9164-f89df8048aa2",
+        "cmd": [
+          "cargo build --manifest-path bridge/Cargo.toml --release && mkdir -p bridge/dist && cp bridge/target/release/foxchat-bridge bridge/dist/FoxChatBridge-linux-x86_64"
+        ]
+      },
+      {
+        "type": "asset",
+        "id": "ec691e65-7332-4c03-ad88-4db31dfce1b7",
+        "files": [
+          "src-tauri/target/release/bundle/",
+          "bridge/dist/FoxChatBridge-linux-x86_64"
+        ],
+        "prefix": "desktop"
+      },
+      {
+        "type": "cmd",
+        "id": "f1934ef1-85f5-4099-a188-8f74480fe4cc",
+        "cmd": [
+          "sudo apt-get update && sudo apt-get install -y nsis llvm lld clang"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "a56bc7ca-6ed8-4f84-b8cc-3c699beb7f6d",
+        "cmd": [
+          "rustup target add x86_64-pc-windows-msvc"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "d6ebec99-0527-4c35-b6c5-208da822d700",
+        "cmd": [
+          "cargo xwin --version >/dev/null 2>&1 || cargo install --locked cargo-xwin"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "c5ae85c3-a549-4227-bed2-eb06100ce334",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && export VITE_BUILD_VERSION=${version} && npm run desktop:build:exe"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "5c454160-acde-48e3-931f-294ea96fdcf2",
+        "cmd": [
+          "cargo xwin build --manifest-path bridge/Cargo.toml --release --target x86_64-pc-windows-msvc && mkdir -p bridge/dist && cp bridge/target/x86_64-pc-windows-msvc/release/foxchat-bridge.exe bridge/dist/FoxChatBridge-windows-x86_64.exe"
+        ]
+      },
+      {
+        "type": "asset",
+        "id": "921280b9-53cb-47c7-8ec1-f01b53e1fed7",
+        "files": [
+          "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/",
+          "bridge/dist/FoxChatBridge-windows-x86_64.exe"
+        ],
+        "prefix": "windows"
+      },
+      {
+        "type": "deployment",
+        "id": "FoxCHAT2",
+        "name": "FoxChat Deploymen2t",
+        "token": "Nginx_^ixX5qY)12_4jwAld0yUm%5WrHj*lQaE",
+        "down": [],
+        "up": [
+          {
+            "type": "upload",
+            "id": "17fe0d51-a6b0-4d61-aa65-aa99cd40fd3f",
+            "from": "windows/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis",
+            "to": "/var/www/foxchathome/public/"
+          },
+          {
+            "type": "upload",
+            "id": "17fe0d51-a6b0-4d61-aa65-aa58cd40fd3f",
+            "from": "desktop/src-tauri/target/release/bundle/appimage/FoxChat_0.1.0_amd64.AppImage",
+            "to": "/var/www/foxchathome/public/"
+          },
+          {
+            "type": "upload",
+            "id": "17fe0d51-a6b0-4d61-aa65-a798cd40fd3f",
+            "from": "desktop/src-tauri/target/release/bundle/deb/FoxChat_0.1.0_amd64.deb",
+            "to": "/var/www/foxchathome/public/"
+          },
+          {
+            "type": "upload",
+            "id": "17fe0d51-a6b0-4d61-aa65-a898cd40fd3f",
+            "from": "desktop/src-tauri/target/release/bundle/rpm/FoxChat-0.1.0-1.x86_64.rpm",
+            "to": "/var/www/foxchathome/public/"
+          },
+          {
+            "type": "upload",
+            "id": "9e829aa2-71b7-4665-b9ee-15eb13ef3da7",
+            "from": "desktop/bridge/dist/FoxChatBridge-linux-x86_64",
+            "to": "/var/www/foxchathome/public/"
+          },
+          {
+            "type": "upload",
+            "id": "25aef660-ee54-430f-ac5f-c4cf23541a68",
+            "from": "windows/bridge/dist/FoxChatBridge-windows-x86_64.exe",
+            "to": "/var/www/foxchathome/public/"
+          }
+        ],
+        "update": [],
+        "status": []
+      }
+    ],
+    "image": "build-container-tauri",
+    "depends": [
+      "Test"
+    ],
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "worker",
+    "id": "9b506600-bd3a-4065-bf0d-a85428d53531",
+    "name": "Android",
+    "children": [
+      {
+        "type": "checkout",
+        "id": "e6998416-1ba6-4773-97d5-0c5b340074e5"
+      },
+      {
+        "type": "grapsecrets",
+        "id": "94f7ecf4-d799-441c-a5bf-651784eb9f32"
+      },
+      {
+        "type": "loadvars",
+        "id": "dca2598c-eb0e-470f-a90f-2c6b6e540d64",
+        "file": "andriod.env"
+      },
+      {
+        "type": "cmd",
+        "id": "94f7ecf4-d799-441c-a5bf-651984eb9f32",
+        "cmd": [
+          "cp google-services.json src-tauri/gen/android/app/google-services.json"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "25bc908b-14bd-4f6b-9eeb-4afe5e2a8137",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "2d6e97fe-76d4-4a0d-850b-55a0cbcaa5d8",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && npm install"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "67cb9040-83ea-4c16-a94e-329498477c29",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && npx playwright install --with-deps chromium"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "52633ea7-8055-4ac4-9f57-f45b2786b715",
+        "cmd": [
+          "sudo apt-get update && sudo apt-get install -y openjdk-17-jdk curl unzip python3-pip screen"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "a1b2c3d4-5e6f-4708-9182-3a4b5c6d7e8f",
+        "cmd": [
+          "pip3 install --break-system-packages --user --quiet fdroidserver && export PATH=\"$HOME/.local/bin:$PATH\" && fdroid --version"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "f9e0a1b2-3456-4c78-d4e0-1f2a3b4c5d6e",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && if [ -n \"${KEYSTORE_BASE64}\" ]; then echo \"${KEYSTORE_BASE64}\" | tr -d '\\n\\r ' | base64 -d > /tmp/release.keystore && node scripts/generate-assetlinks.js /tmp/release.keystore ${KEYSTORE_ALIAS} \"${KEYSTORE_PASSWORD}\"; else echo 'No KEYSTORE_BASE64 - skipping assetlinks.json generation'; fi"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "4aea197d-69bd-4272-bdf1-b1c020c64365",
+        "cmd": [
+          "rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "f8d9e0a1-2345-4b67-c3d9-0e1f2a3b4c5d",
+        "cmd": [
+          "curl -fsSL https://static.jakefox.de/OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz -o /tmp/jdk21.tar.gz && mkdir -p /tmp/jdk21 && tar xzf /tmp/jdk21.tar.gz -C /tmp/jdk21 --strip-components=1 && echo \"JDK installed: $(/tmp/jdk21/bin/java --version)\""
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "d25e532e-152e-4463-9624-856786b900c6",
+        "cmd": [
+          "source scripts/setup-android-ci.sh && source /home/ubuntu1/.nvm/nvm.sh && export JAVA_HOME=/tmp/jdk21 && export PATH=$JAVA_HOME/bin:$PATH && export VITE_BUILD_VERSION=${version} && export VERSION_CODE=${version} && export VERSION_NAME=${version} && npm run build && npm run android:init && if [ -n \"${KEYSTORE_BASE64}\" ]; then echo \"${KEYSTORE_BASE64}\" | tr -d '\\n\\r ' | base64 -d > /tmp/release.keystore && export PKEYSTORE_PATH=/tmp/release.keystore && export PKEYSTORE_PASSWORD=\"${KEYSTORE_PASSWORD}\" && export PKEYSTORE_ALIAS=\"${KEYSTORE_ALIAS}\" && export PKEYSTORE_ALIAS_PASSWORD=\"${KEYSTORE_PASSWORD}\" && npm run android:aab; else npm run android:build; fi && echo \"VERSION_CODE=${version}\" > /tmp/android_version.env && echo \"VERSION_NAME=${version}\" >> /tmp/android_version.env"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "6a1b2c3d-4e5f-4071-8a9b-0c1d2e3f4a5b",
+        "cmd": [
+          "if [ -n \"${KEYSTORE_BASE64}\" ]; then AAB_PATH=$(ls src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab src-tauri/gen/android/app/build/outputs/bundle/release/app-release.aab src-tauri/gen/android/app/build/outputs/bundle/release/app-universal-release.aab 2>/dev/null | head -n 1) && curl -fsSL -o /tmp/bundletool.jar https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar && /tmp/jdk21/bin/java -jar /tmp/bundletool.jar build-apks --bundle=\"$AAB_PATH\" --output=/tmp/app.apks --mode=universal --ks=/tmp/release.keystore --ks-pass=pass:\"${KEYSTORE_PASSWORD}\" --ks-key-alias=\"${KEYSTORE_ALIAS}\" --key-pass=pass:\"${KEYSTORE_PASSWORD}\" --overwrite && mkdir -p /tmp/fdroid-apk && unzip -p /tmp/app.apks universal.apk > /tmp/fdroid-apk/app-universal.apk; else echo 'No KEYSTORE_BASE64 - skipping F-Droid APK extraction'; fi"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "7b2c3d4e-5f60-4182-9b0c-1d2e3f4a5b6c",
+        "cmd": [
+          "source /tmp/android_version.env && if [ -f /tmp/fdroid-apk/app-universal.apk ]; then export PATH=\"$HOME/.local/bin:$PATH\" && export ANDROID_HOME=\"$PWD/.android-sdk\" && export ANDROID_SDK_ROOT=\"$ANDROID_HOME\" && export FDROID_KEYSTORE_PATH=/tmp/fdroid-repo-keystore.p12 && export FDROID_KEYSTORE_PASSWORD=\"${FDROID_KEYSTORE_PASSWORD}\" && echo \"${FDROID_KEYSTORE_BASE64}\" | tr -d '\\n\\r ' | base64 -d > \"$FDROID_KEYSTORE_PATH\" && mkdir -p fdroid-repo/repo && cp /tmp/fdroid-apk/app-universal.apk \"fdroid-repo/repo/foxchat.jakefox.de_${VERSION_CODE}.apk\" && cp src-tauri/icons/128x128.png fdroid-repo/icon.png && (cd fdroid-repo && fdroid update); else echo 'No APK available - skipping F-Droid repo update'; fi"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "08183649-acee-4e33-b02f-a798e32feb5d",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64=${GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64} node scripts/upload-to-play-store.mjs"
+        ]
+      },
+      {
+        "type": "asset",
+        "id": "d27b557c-ac51-451c-849b-903d05dd4532",
+        "files": [
+          "src-tauri/gen/android/app/build/outputs/"
+        ],
+        "prefix": "android"
+      },
+      {
+        "type": "asset",
+        "id": "8c3d4e5f-6071-4293-ac1d-2e3f4a5b6c7d",
+        "files": [
+          "fdroid-repo/repo/"
+        ],
+        "prefix": "fdroid"
+      },
+      {
+        "type": "cmd",
+        "id": "747e3a1d-99a3-4143-809a-ff08174ea58f",
+        "cmd": [
+          "sudo chmod 666 /dev/kvm || true"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "d4c3e6f8-9001-4c23-bd4e-5f6a7b8c9d0e",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export JAVA_HOME=/tmp/jdk21 && export PATH=$JAVA_HOME/bin:$PATH && export ANDROID_E2E_ADB_KEY_BASE64=\"${ANDROID_E2E_ADB_KEY_BASE64}\" && if [ -f /tmp/fdroid-apk/app-universal.apk ]; then APK_PATH=/tmp/fdroid-apk/app-universal.apk; else APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk -type f -path '*/x86_64/*' -name '*.apk' | sort | head -n 1); fi && test -n \"$APK_PATH\" && export ANDROID_E2E_APK_PATH=\"$APK_PATH\" && npm run android:e2e:setup-emulator && npm run test:e2e:android"
+        ],
+        "flags": [
+          "ignore-errors"
+        ],
+        "exitCodeVar": "android_e2e_code"
+      },
+      {
+        "type": "asset",
+        "id": "e5d4f709-a112-4d34-ce5f-607b8c9d0e1f",
+        "files": [
+          "scripts/android-e2e/.out/"
+        ],
+        "prefix": "android-e2e"
+      },
+      {
+        "type": "cmd",
+        "id": "2678f77a-b816-4ba0-9d6d-bdfb6104d8f6",
+        "cmd": [
+          "exit ${android_e2e_code}"
+        ]
+      }
+    ],
+    "image": "build-container-tauri",
+    "depends": [
+      "Test"
+    ],
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "worker",
+    "id": "3eecf3fb-11e6-4024-a53f-64a34dda2d74",
+    "name": "Deploy Web",
+    "children": [
+      {
+        "type": "deployment",
+        "id": "FoxCHAT",
+        "name": "FoxChat Deployment",
+        "token": "Nginx_^ixX5qY)12_4jwAld0yUm%5WrHj*lQaE",
+        "down": [],
+        "up": [
+          {
+            "type": "upload",
+            "id": "17fe0d51-a6b0-4d61-aa65-aa98cd40fd3f",
+            "from": "web/dist/",
+            "to": "/var/www/foxchat/"
+          }
+        ],
+        "update": [],
+        "status": []
+      }
+    ],
+    "image": "build-container-tauri",
+    "depends": [
+      "Web",
+      "Test"
+    ],
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "worker",
+    "id": "3eecf3fb-11e6-4024-a53f-64a31dda2d74",
+    "name": "Deploy Home",
+    "children": [
+      {
+        "type": "deployment",
+        "id": "FoxCHATHome",
+        "name": "FoxChatHome Deployment",
+        "token": "Nginx_^ixX5qY)12_4jwAld0yUm%5WrHj*lQaE",
+        "down": [],
+        "up": [
+          {
+            "type": "upload",
+            "id": "17fe0d51-a6b0-4d61-aa65-aa96cd40fd3f",
+            "from": "home/foxchathomepage/dist/",
+            "to": "/var/www/foxchathome/"
+          }
+        ],
+        "update": [],
+        "status": []
+      }
+    ],
+    "image": "build-container-tauri",
+    "depends": [
+      "HomeBuild",
+      "Test"
+    ],
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "worker",
+    "id": "3eecf3fb-11e6-4024-a53f-64a32dda2d74",
+    "name": "DeployFdroid",
+    "children": [
+      {
+        "type": "deployment",
+        "id": "FoxCHATFdroid",
+        "name": "FoxChat Fdroid Deployment",
+        "token": "Nginx_^ixX5qY)12_4jwAld0yUm%5WrHj*lQaE",
+        "down": [],
+        "up": [
+          {
+            "type": "upload",
+            "id": "17fe0d51-a6b0-4d61-aa65-aa97cd40fd3f",
+            "from": "fdroid/fdroid-repo/repo/",
+            "to": "/var/www/foxchatfdroid/repo/"
+          }
+        ],
+        "update": [],
+        "status": []
+      }
+    ],
+    "image": "build-container-tauri",
+    "depends": [
+      "Android",
+      "Test"
+    ],
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "variable",
+    "id": "e1e9091f-6dfe-4c83-95f2-22c615c2f52b",
+    "variables": {
+      "docker_container_name": "foxchat-push"
+    }
+  },
+  {
+    "type": "worker",
+    "id": "6dd074ce-d173-4fb8-98a0-97b05ef41e63",
+    "name": "Push",
+    "children": [
+      {
+        "type": "step",
+        "id": "337f4e25-8d13-4761-b2f7-82eaf9d64dd0",
+        "name": "Checkout",
+        "tasks": [
+          {
+            "type": "checkout",
+            "id": "19369581-e12f-423d-b94d-d286fee3fede"
+          },
+          {
+            "type": "cmd",
+            "id": "b5e7d684-96b8-4f3a-8e98-8f6bbad91d90",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use --lts"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "b37e321e-c503-4889-a54a-c34512f0d658",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && npm install"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "83624b15-37d0-4304-9d4f-771abc151de5",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && export VITE_BUILD_VERSION=${version} && npm run build"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "fce18de5-979b-4b17-871a-ec63e4f53c51",
+            "cmd": [
+              "screen -dmS docker sudo dockerd --storage-driver=vfs"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "31c3a219-a7bd-4a5d-8c2c-60165eab0cbb",
+            "cmd": [
+              "sleep 5"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "22686321-981e-414f-95bc-95aca834b051",
+            "cmd": [
+              "sudo docker build -t ${docker_container_name} ."
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "6625748f-bc11-4002-aef4-2e344efc7616",
+            "cmd": [
+              "sudo docker tag ${docker_container_name} repo.zenzon.net/${docker_container_name}"
+            ]
+          },
+          {
+            "type": "task",
+            "id": "95c420bd-23a6-4b2b-a7ec-4513c99ce689",
+            "tasks": [
+              "dockerLogin"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "a49477eb-582f-495f-a211-18dbdb8cbd05",
+            "cmd": [
+              "sudo docker push repo.zenzon.net/${docker_container_name}"
+            ]
+          },
+          {
+            "type": "task",
+            "id": "cff95d62-3779-4880-a95c-46a8d8e1d642",
+            "tasks": [
+              "Cluster"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "c6c10d35-92ab-493d-9938-54ba6ddcada6",
+            "cmd": [
+              "curl -X POST -H \"X-Global-Auth-Key: ${cluster_key}\" -d \"repo.zenzon.net/${docker_container_name}:latest\" ${cluster} "
+            ]
+          }
+        ]
+      }
+    ],
+    "image": "build-container-node",
+    "depends": [
+      "Test"
+    ],
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  }
+]

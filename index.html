@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>FoxChat</title>
+    <script>
+      // Paint the correct theme background before any CSS/JS bundle loads,
+      // so the WebView's default white surface never flashes on cold start,
+      // keyboard-open resizes, or the Android share sheet (same WebView).
+      (function () {
+        var mode = localStorage.getItem("foxchat-theme") || "light";
+        var bg = mode === "dark" ? "#11131a" : "#f5f6fa";
+        document.documentElement.setAttribute("data-theme", mode);
+        document.documentElement.style.colorScheme = mode;
+        document.documentElement.style.backgroundColor = bg;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,23 @@
+# fdroidserver config for the self-hosted FoxChat F-Droid repo.
+# Run with the official `fdroid` CLI (pip install fdroidserver) from inside this directory:
+#   fdroid update
+#
+# Secrets are pulled from the environment at run time via the `env:` lookup,
+# so this file is safe to commit. CI must export FDROID_KEYSTORE_PATH (path to
+# the decoded keystore) and FDROID_KEYSTORE_PASSWORD before running `fdroid update`.
+
+repo_url: https://fdroid.jakefox.de/repo
+repo_name: FoxChat
+repo_description: FoxChat F-Droid repository
+repo_icon: icon.png
+
+keystore:
+  env: FDROID_KEYSTORE_PATH
+keystorepass:
+  env: FDROID_KEYSTORE_PASSWORD
+keypass:
+  env: FDROID_KEYSTORE_PASSWORD
+repo_keyalias: repo
+keydname: CN=FoxChat, OU=F-Droid, O=FoxChat
+
+make_current_version_link: false

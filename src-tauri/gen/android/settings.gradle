@@ -1,0 +1,8 @@
+include ':app'
+
+def tauriSettings = new File(settingsDir, 'tauri.settings.gradle')
+if (tauriSettings.exists()) {
+    apply from: tauriSettings
+} else {
+    println "Warning: tauri.settings.gradle not found at ${tauriSettings.absolutePath}. This is normal if tauri android init hasn't run yet."
+}

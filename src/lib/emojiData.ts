@@ -1,0 +1,231 @@
+import { useEffect, useState } from 'react'
+import { MatrixClient, Room } from 'matrix-js-sdk'
+import { type ImageInfo } from 'matrix-js-sdk/lib/@types/media'
+
+export type MatrixEmote = {
+  name: string
+  body: string
+  url: string
+  info?: ImageInfo
+  usage?: string[]
+  client?: MatrixClient
+}
+export type MatrixEmotePack = {
+  pack?: { display_name?: string }
+  images?: Record<string, { body?: string; url?: string; info?: ImageInfo; usage?: string[] }>
+}
+export type NamedEmotePack = {
+  id: string
+  label: string
+  pack: MatrixEmotePack
+  client: MatrixClient
+}
+export type ImagePackAccount<TClient = MatrixClient> = {
+  id: string
+  userId: string
+  client: TClient
+}
+export const ALL_ACCOUNT_IMAGE_PACKS_KEY = 'foxchat.imagePacks.allCombinedAccounts'
+export const ALL_ACCOUNT_IMAGE_PACKS_CHANGED_EVENT = 'foxchat-all-account-image-packs-changed'
+export const allAccountImagePacksEnabled = () =>
+  localStorage.getItem(ALL_ACCOUNT_IMAGE_PACKS_KEY) !== 'false'
+export const setAllAccountImagePacksEnabled = (enabled: boolean) => {
+  localStorage.setItem(ALL_ACCOUNT_IMAGE_PACKS_KEY, String(enabled))
+  window.dispatchEvent(
+    new CustomEvent(ALL_ACCOUNT_IMAGE_PACKS_CHANGED_EVENT, {
+      detail: enabled,
+    }),
+  )
+}
+export const imagePackAccounts = <TClient>(
+  accounts: ImagePackAccount<TClient>[],
+  currentClient: TClient | undefined,
+  combinedAccounts: boolean,
+  allAccountsEnabled: boolean,
+) => {
+  if (combinedAccounts && allAccountsEnabled && accounts.length > 1) return accounts
+  const current = accounts.find((account) => account.client === currentClient)
+  return current ? [current] : []
+}
+export const deduplicateFavoritePacks = <
+  TPack extends {
+    favoriteKey: string
+    client: unknown
+  },
+>(
+  packs: TPack[],
+  preferredClient?: unknown,
+) => {
+  const unique = new Map<string, TPack>()
+  for (const pack of packs) {
+    const existing = unique.get(pack.favoriteKey)
+    if (!existing || (pack.client === preferredClient && existing.client !== preferredClient)) {
+      unique.set(pack.favoriteKey, pack)
+    }
+  }
+  return [...unique.values()]
+}
+export function useAllAccountImagePacks() {
+  const [enabled, setEnabled] = useState(allAccountImagePacksEnabled)
+  useEffect(() => {
+    const update = () => setEnabled(allAccountImagePacksEnabled())
+    window.addEventListener(ALL_ACCOUNT_IMAGE_PACKS_CHANGED_EVENT, update)
+    return () => window.removeEventListener(ALL_ACCOUNT_IMAGE_PACKS_CHANGED_EVENT, update)
+  }, [])
+  return enabled
+}
+export const uniquePackName = (wanted: string, used: Set<string>) => {
+  const base = wanted.trim().replace(/\.[^.]+$/, '') || 'sticker'
+  let name = base
+  let number = 2
+  while (used.has(name)) name = `${base} ${number++}`
+  used.add(name)
+  return name
+}
+export const roomImagePackTypes = ['m.image_pack', 'im.ponies.room_emotes'] as const
+export const preferNonEmptyPack = (
+  candidates: (MatrixEmotePack | undefined)[],
+): MatrixEmotePack | undefined =>
+  candidates.find((candidate) => candidate?.images && Object.keys(candidate.images).length > 0) ??
+  candidates.at(-1)
+export type RoomImagePackLocation = {
+  type: (typeof roomImagePackTypes)[number]
+  stateKey: string
+  pack: MatrixEmotePack
+}
+export const findRoomImagePack = (room: Room): RoomImagePackLocation | undefined => {
+  const candidates = roomImagePackTypes.flatMap((type) =>
+    room.currentState.getStateEvents(type).map((event) => ({
+      type,
+      stateKey: event.getStateKey() ?? '',
+      pack: event.getContent<MatrixEmotePack>(),
+    })),
+  )
+  return (
+    candidates.find(
+      (candidate) => candidate.pack.images && Object.keys(candidate.pack.images).length > 0,
+    ) ?? candidates.at(-1)
+  )
+}
+export const imagePackRoomsTypes = ['m.image_pack.rooms', 'im.ponies.emote_rooms'] as const
+export const accountImagePackTypes = ['m.image_pack', 'im.ponies.user_emotes'] as const
+export const recentStorage = {
+  reactions: 'foxchat-recent-reactions',
+  unicode: 'foxchat-recent-unicode',
+  emojis: 'foxchat-recent-custom-emojis',
+  stickers: 'foxchat-recent-stickers',
+} as const
+export type StoredEmote = {
+  name: string
+  body: string
+  url: string
+  info?: ImageInfo
+  usage?: string[]
+}
+export const readRecent = <T>(key: string): T[] => {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || '[]')
+    return Array.isArray(value) ? value : []
+  } catch {
+    return []
+  }
+}
+export const rememberRecent = <T>(key: string, value: T, identity: (item: T) => string) => {
+  const next = [
+    value,
+    ...readRecent<T>(key).filter((item) => identity(item) !== identity(value)),
+  ].slice(0, 5)
+  localStorage.setItem(key, JSON.stringify(next))
+  window.dispatchEvent(new CustomEvent('foxchat-recents', { detail: key }))
+  return next
+}
+export function useRecents<T>(key: string) {
+  const [items, setItems] = useState<T[]>(() => readRecent<T>(key))
+  useEffect(() => {
+    const update = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === key) setItems(readRecent<T>(key))
+    }
+    window.addEventListener('foxchat-recents', update)
+    return () => window.removeEventListener('foxchat-recents', update)
+  }, [key])
+  return items
+}
+export const emojiList = (value: string) => value.trim().split(/\s+/)
+export const countryFlags =
+  'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS XK YE YT ZA ZM ZW'
+    .split(' ')
+    .map((code) =>
+      String.fromCodePoint(...[...code].map((letter) => 127397 + letter.charCodeAt(0))),
+    )
+export const unicodeCategories = [
+  {
+    key: 'smileys',
+    label: '😀',
+    title: 'Smileys',
+    items: emojiList(
+      '😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 🙃 😉 😌 😍 🥰 😘 😗 😙 😚 😋 😛 😝 😜 🤪 🤨 🧐 🤓 😎 🥸 🤩 🥳 😏 😒 😞 😔 😟 😕 🙁 ☹️ 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🤗 🤔 🫣 🤭 🫢 🤫 🤥 😶 😐 😑 😬 🙄 😯 😦 😧 😮 😲 🥱 😴 🤤 😪 😵 🤐 🥴 🤢 🤮 🤧 😷 🤒 🤕',
+    ),
+  },
+  {
+    key: 'people',
+    label: '👋',
+    title: 'People',
+    items: emojiList(
+      '👋 🤚 🖐️ ✋ 🖖 🫱 🫲 🫳 🫴 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ 🫵 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 🫶 👐 🤲 🤝 🙏 ✍️ 💅 🤳 💪 🦾 🦿 🦵 🦶 👂 👃 🧠 🫀 🫁 🦷 👀 👁️ 👅 👄 🫦 👶 🧒 👦 👧 🧑 👱 👨 🧔 👩 🧓 👴 👵 🙍 🙎 🙅 🙆 💁 🙋 🧏 🙇 🤦 🤷 🧑‍⚕️ 🧑‍🎓 🧑‍🏫 🧑‍⚖️ 🧑‍🌾 🧑‍🍳 🧑‍🔧 🧑‍🏭 🧑‍💻 🧑‍🎨 🧑‍🚀 🧑‍🚒 👮 🕵️ 💂 🥷 👷 🤴 👸 🧙 🧚 🧛 🧜 🧝 🧞 🧟',
+    ),
+  },
+  {
+    key: 'animals',
+    label: '🐻',
+    title: 'Animals',
+    items: emojiList(
+      '🐵 🐒 🦍 🦧 🐶 🐕 🦮 🐩 🐺 🦊 🦝 🐱 🐈 🦁 🐯 🐅 🐆 🐴 🫎 🫏 🐎 🦄 🦓 🦌 🦬 🐮 🐂 🐃 🐄 🐷 🐖 🐗 🐽 🐏 🐑 🐐 🐪 🐫 🦙 🦒 🐘 🦣 🦏 🦛 🐭 🐁 🐀 🐹 🐰 🐇 🐿️ 🦫 🦔 🦇 🐻 🐨 🐼 🦥 🦦 🦨 🦘 🦡 🐾 🦃 🐔 🐓 🐣 🐤 🐥 🐦 🐧 🕊️ 🦅 🦆 🦢 🦉 🦩 🦚 🦜 🪽 🐦‍⬛ 🪿 🐸 🐊 🐢 🦎 🐍 🐲 🐉 🦕 🦖 🐳 🐋 🐬 🦭 🐟 🐠 🐡 🦈 🐙 🐚 🪸 🪼 🐌 🦋 🐛 🐜 🐝 🪲 🐞 🦗 🪳 🕷️ 🦂 🦟 🪰 🪱',
+    ),
+  },
+  {
+    key: 'food',
+    label: '🍕',
+    title: 'Food',
+    items: emojiList(
+      '🍏 🍎 🍐 🍊 🍋 🍌 🍉 🍇 🍓 🫐 🍈 🍒 🍑 🥭 🍍 🥥 🥝 🍅 🍆 🥑 🥦 🫛 🥬 🥒 🌶️ 🫑 🌽 🥕 🫒 🧄 🧅 🥔 🍠 🫚 🥐 🥯 🍞 🥖 🥨 🧀 🥚 🍳 🧈 🥞 🧇 🥓 🥩 🍗 🍖 🌭 🍔 🍟 🍕 🫓 🥪 🥙 🧆 🌮 🌯 🫔 🥗 🥘 🫕 🥫 🍝 🍜 🍲 🍛 🍣 🍱 🥟 🦪 🍤 🍙 🍚 🍘 🍥 🥠 🥮 🍢 🍡 🍧 🍨 🍦 🥧 🧁 🍰 🎂 🍮 🍭 🍬 🍫 🍿 🍩 🍪 🌰 🥜 🍯 ☕ 🍵 🧃 🥤 🧋 🍺 🍻 🥂 🍷 🥃 🍸 🍹 🧉',
+    ),
+  },
+  {
+    key: 'activities',
+    label: '⚽',
+    title: 'Activities',
+    items: emojiList(
+      '⚽ 🏀 🏈 ⚾ 🥎 🎾 🏐 🏉 🥏 🎱 🪀 🏓 🏸 🏒 🏑 🥍 🏏 🪃 🥅 ⛳ 🪁 🏹 🎣 🤿 🥊 🥋 🎽 🛹 🛼 🛷 ⛸️ 🥌 🎿 ⛷️ 🏂 🪂 🏋️ 🤼 🤸 ⛹️ 🤺 🤾 🏌️ 🏇 🧘 🏄 🏊 🤽 🚣 🧗 🚵 🚴 🏆 🥇 🥈 🥉 🏅 🎖️ 🏵️ 🎗️ 🎫 🎟️ 🎪 🤹 🎭 🩰 🎨 🎬 🎤 🎧 🎼 🎹 🥁 🪘 🎷 🎺 🪗 🎸 🪕 🎻 🎲 ♟️ 🎯 🎳 🎮 🎰 🧩',
+    ),
+  },
+  {
+    key: 'travel',
+    label: '🚀',
+    title: 'Travel',
+    items: emojiList(
+      '🚗 🚕 🚙 🚌 🚎 🏎️ 🚓 🚑 🚒 🚐 🛻 🚚 🚛 🚜 🏍️ 🛵 🚲 🛴 🛹 🛼 🚨 🚔 🚍 🚘 🚖 🚡 🚠 🚟 🚃 🚋 🚞 🚝 🚄 🚅 🚈 🚂 🚆 🚇 🚊 🚉 ✈️ 🛫 🛬 🛩️ 💺 🛰️ 🚀 🛸 🚁 🛶 ⛵ 🚤 🛥️ 🛳️ ⛴️ 🚢 ⚓ 🛟 ⛽ 🚧 🚦 🚥 🗺️ 🗿 🗽 🗼 🏰 🏯 🏟️ 🎡 🎢 🎠 ⛲ ⛱️ 🏖️ 🏝️ 🏜️ 🌋 ⛰️ 🏕️ ⛺ 🛖 🏠 🏡 🏢 🏥 🏦 🏨 🏪 🏫 🏛️ ⛪ 🕌 🛕 🕍 ⛩️ 🕋',
+    ),
+  },
+  {
+    key: 'objects',
+    label: '💡',
+    title: 'Objects',
+    items: emojiList(
+      '⌚ 📱 💻 ⌨️ 🖥️ 🖨️ 🖱️ 🕹️ 🗜️ 💽 💾 💿 📀 📼 📷 📸 📹 🎥 📞 ☎️ 📟 📠 📺 📻 🎙️ ⏱️ ⏲️ ⏰ 🕰️ ⌛ ⏳ 📡 🔋 🪫 🔌 💡 🔦 🕯️ 🧯 🛢️ 💸 💵 💴 💶 💷 🪙 💳 💎 ⚖️ 🪜 🧰 🪛 🔧 🔨 ⚒️ 🛠️ ⛏️ 🪚 🔩 ⚙️ 🪤 🧱 ⛓️ 🧲 🔫 💣 🧨 🪓 🔪 🗡️ ⚔️ 🛡️ 🚬 ⚰️ 🪦 ⚱️ 🔮 📿 🧿 🪬 💈 ⚗️ 🔭 🔬 🕳️ 🩹 🩺 💊 💉 🩸 🧬 🦠 🧫 🧪 🌡️ 🧹 🪠 🧺 🧻 🚽 🚿 🛁 🧼 🪥 🪒 🧽 🪣 🧴',
+    ),
+  },
+  {
+    key: 'symbols',
+    label: '❤️',
+    title: 'Symbols',
+    items: emojiList(
+      '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 ❤️‍🔥 ❤️‍🩹 ❣️ 💕 💞 💓 💗 💖 💘 💝 💟 ☮️ ✝️ ☪️ 🕉️ ☸️ ✡️ 🔯 🕎 ☯️ ☦️ 🛐 ⛎ ♈ ♉ ♊ ♋ ♌ ♍ ♎ ♏ ♐ ♑ ♒ ♓ 🆔 ⚛️ ☢️ ☣️ 📴 📳 🈶 🈚 🈸 🈺 🈷️ ✴️ 🆚 💮 🉐 ㊙️ ㊗️ 🈴 🈵 🈹 🈲 🅰️ 🅱️ 🆎 🆑 🅾️ 🆘 ❌ ⭕ 🛑 ⛔ 📛 🚫 💯 💢 ♨️ 🚷 🚯 🚳 🚱 🔞 📵 🚭 ❗ ❕ ❓ ❔ ‼️ ⁉️ 🔅 🔆 〽️ ⚠️ 🚸 🔱 ⚜️ 🔰 ♻️ ✅ 🈯 💹 ❇️ ✳️ ❎ 🌐 💠 Ⓜ️ 🌀 💤 🏧 🚾 ♿ 🅿️ 🛗 🈳 🈂️ 🛂 🛃 🛄 🛅',
+    ),
+  },
+  {
+    key: 'flags',
+    label: '🏳️',
+    title: 'Flags',
+    items: ['🏁', '🚩', '🎌', '🏴', '🏳️', '🏳️‍🌈', '🏳️‍⚧️', '🏴‍☠️', ...countryFlags],
+  },
+]

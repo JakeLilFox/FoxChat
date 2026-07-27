@@ -1,0 +1,17 @@
+{
+  "name": "foxchat-push-gateway",
+  "private": true,
+  "version": "0.1.0",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "google-auth-library": "^10.3.0"
+  }
+}

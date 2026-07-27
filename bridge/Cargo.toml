@@ -1,0 +1,17 @@
+[package]
+name = "foxchat-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Local WebSocket bridge for FoxChat Web automation"
+license-file = "../LICENSE"
+
+[dependencies]
+futures-util = "0.3"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = "0.28"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

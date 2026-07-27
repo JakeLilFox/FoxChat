@@ -1,0 +1,254 @@
+package foxchat.jakefox.de
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.graphics.Rect
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.OpenableColumns
+import android.provider.Settings
+import android.util.Base64
+import android.view.View
+import android.webkit.WebView
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.Executors
+import app.tauri.remotepush.NativeCryptoBridge
+import app.tauri.remotepush.NotificationDebugBridge
+
+class MainActivity : TauriActivity() {
+  private var webView: WebView? = null
+  private var pendingShareIntent: Intent? = null
+  private var pendingNotificationRoomId: String? = null
+  private val shareExecutor = Executors.newSingleThreadExecutor()
+  private val notificationReplyReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) { dispatchPendingNotificationReplies() }
+  }
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+    getSharedPreferences("foxchat_boot_diagnostics", Context.MODE_PRIVATE).edit()
+      .putString("stage", "MainActivity.onCreate entered")
+      .putLong("at", System.currentTimeMillis()).commit()
+    NativeCryptoBridge.sync = { userId, deviceId, homeserver, accessToken, roomKeys, rooms, backupVersion, backupRecoveryKey ->
+      NativeNotificationCrypto.stageSync(applicationContext, userId, deviceId, homeserver, accessToken, roomKeys, rooms, backupVersion, backupRecoveryKey)
+    }
+    NativeCryptoBridge.status = { NativeNotificationCrypto.status(applicationContext).toString() }
+    NativeCryptoBridge.test = { roomId, eventId ->
+      val result = NativeNotificationCrypto.decrypt(applicationContext, roomId, eventId)
+      NativeNotificationCrypto.setEnabled(applicationContext, true)
+      JSONObject()
+        .put("ok", true)
+        .put("roomId", roomId)
+        .put("eventId", eventId)
+        .put("senderId", result.senderId)
+        .put("body", result.body)
+        .toString()
+    }
+    NotificationDebugBridge.showAndroidAutoTest = { roomId, roomName, senderName, body ->
+      val eventId = "\$android-auto-test-${System.currentTimeMillis()}"
+      NativeNotificationCrypto.recordNotificationDiagnostic(
+        applicationContext, "android-auto-test-posted", roomId, eventId,
+      )
+      NotificationRenderer.show(
+        applicationContext,
+        roomId,
+        eventId,
+        "@foxchat:test",
+        senderName,
+        body,
+        roomName,
+        MESSAGE_NOTIFICATION_CHANNEL_ID,
+        false,
+        System.currentTimeMillis(),
+      )
+    }
+    NotificationRenderer.ensureChannels(applicationContext)
+    enableEdgeToEdge()
+    super.onCreate(savedInstanceState)
+    acceptNotificationIntent(intent)
+    getSharedPreferences("foxchat_boot_diagnostics", Context.MODE_PRIVATE).edit()
+      .putString("stage", "MainActivity.onCreate completed").apply()
+    // Request camera and microphone access only when WebRTC needs them.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      registerReceiver(notificationReplyReceiver, IntentFilter("foxchat.action.NATIVE_REPLY_READY"), RECEIVER_NOT_EXPORTED)
+    } else {
+      @Suppress("DEPRECATION")
+      registerReceiver(notificationReplyReceiver, IntentFilter("foxchat.action.NATIVE_REPLY_READY"))
+    }
+    acceptShareIntent(intent)
+  }
+
+  override fun onWebViewCreate(webView: WebView) {
+    // The Android E2E suite drives the exact release APK produced by CI. A
+    // release WebView normally has no DevTools socket, so expose one only
+    // when ADB is enabled and Appium supplies the dedicated launch flag.
+    // Enabling Developer options alone never changes release behavior.
+    val e2eDebugRequested =
+      intent?.getBooleanExtra("foxchat.e2e.webview_debug", false) == true
+    if (
+      e2eDebugRequested &&
+      Settings.Global.getInt(contentResolver, Settings.Global.ADB_ENABLED, 0) == 1
+    ) {
+      WebView.setWebContentsDebuggingEnabled(true)
+    }
+    this.webView = webView
+    dispatchPendingNotificationReplies()
+    pendingNotificationRoomId?.let {
+      pendingNotificationRoomId = null
+      openNotificationRoom(it)
+    }
+    pendingShareIntent?.let {
+      pendingShareIntent = null
+      acceptShareIntent(it)
+    }
+    handleWindowInsets(webView)
+    getSharedPreferences("foxchat_boot_diagnostics", Context.MODE_PRIVATE).edit()
+      .putString("stage", "WebView created").apply()
+  }
+
+  // Chromium owns keyboard resizing. Native insets only expose navigation mode
+  // and reserve edge gestures while the keyboard is closed.
+  private fun handleWindowInsets(webView: WebView) {
+    val contentRoot = window.decorView.findViewById<View>(android.R.id.content)
+    val edgeWidth = (40 * resources.displayMetrics.density).toInt()
+    var imeVisible = false
+    var appliedButtonNav: Boolean? = null
+    val applyGestureExclusion = {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val width = webView.width
+        val height = webView.height
+        if (width > 0 && height > 0) {
+          webView.systemGestureExclusionRects = if (imeVisible) {
+            emptyList()
+          } else {
+            val half = width / 2
+            listOf(
+              Rect(0, 0, edgeWidth.coerceAtMost(half), height),
+              Rect((width - edgeWidth).coerceAtLeast(half), 0, width, height),
+            )
+          }
+        }
+      }
+    }
+    webView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyGestureExclusion() }
+    webView.post { applyGestureExclusion() }
+
+    val applyInsets = { insets: WindowInsetsCompat ->
+      val navigationBar = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+      val tappable = insets.getInsets(WindowInsetsCompat.Type.tappableElement()).bottom
+      val buttonNav = navigationBar > 0 && tappable > 0
+      // Avoid bridge work on every keyboard animation frame.
+      if (buttonNav != appliedButtonNav) {
+        appliedButtonNav = buttonNav
+        webView.evaluateJavascript(
+          "document.documentElement.classList.toggle('android-button-nav',$buttonNav)",
+          null,
+        )
+      }
+    }
+
+    ViewCompat.setOnApplyWindowInsetsListener(contentRoot) { _, insets ->
+      val nowVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
+      if (nowVisible != imeVisible) {
+        imeVisible = nowVisible
+        applyGestureExclusion()
+      }
+      applyInsets(insets)
+      insets
+    }
+    ViewCompat.requestApplyInsets(contentRoot)
+  }
+
+  private fun dispatchPendingNotificationReplies() {
+    val target = webView ?: return
+    val preferences = getSharedPreferences("foxchat_pending_notification_replies", Context.MODE_PRIVATE)
+    val raw = preferences.getString("replies", "[]") ?: "[]"
+    val replies = try { JSONArray(raw) } catch (_: Exception) { JSONArray() }
+    if (replies.length() == 0) return
+    // Remove replies before dispatch so they cannot replay after restart.
+    preferences.edit().remove("replies").apply()
+    val payload = replies.toString()
+    runOnUiThread {
+      target.evaluateJavascript("window.__foxchatPendingNotificationReplies=$payload;window.dispatchEvent(new CustomEvent('foxchat-native-notification-replies',{detail:window.__foxchatPendingNotificationReplies}));", null)
+    }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    acceptNotificationIntent(intent)
+    acceptShareIntent(intent)
+  }
+
+  private fun acceptNotificationIntent(intent: Intent?) {
+    val roomId = intent?.getStringExtra("room_id")?.takeIf { it.isNotBlank() } ?: return
+    intent.removeExtra("room_id")
+    if (webView == null) pendingNotificationRoomId = roomId else openNotificationRoom(roomId)
+  }
+
+  private fun openNotificationRoom(roomId: String) {
+    val payload = JSONObject.quote(roomId)
+    runOnUiThread {
+      webView?.evaluateJavascript(
+        "window.__foxchatPendingNotificationRoom=$payload;window.dispatchEvent(new CustomEvent('foxchat-open-room',{detail:$payload}));",
+        null,
+      )
+    }
+  }
+
+  private fun acceptShareIntent(intent: Intent?) {
+    if (intent?.action != Intent.ACTION_SEND && intent?.action != Intent.ACTION_SEND_MULTIPLE) return
+    if (webView == null) {
+      pendingShareIntent = intent
+      return
+    }
+    val uris = sharedUris(intent)
+    if (uris.isEmpty()) return
+    shareExecutor.execute {
+      val files = JSONArray()
+      for (uri in uris) {
+        try {
+          val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: continue
+          val item = JSONObject()
+            .put("name", displayName(uri))
+            .put("type", contentResolver.getType(uri) ?: intent.type ?: "application/octet-stream")
+            .put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
+          files.put(item)
+        } catch (_: Exception) { }
+      }
+      if (files.length() == 0) return@execute
+      val payload = JSONObject().put("files", files).toString()
+      runOnUiThread {
+        webView?.evaluateJavascript("window.__foxchatPendingShare=$payload;window.dispatchEvent(new CustomEvent('foxchat-native-share',{detail:window.__foxchatPendingShare}));", null)
+      }
+    }
+  }
+
+  @Suppress("DEPRECATION")
+  private fun sharedUris(intent: Intent): List<Uri> {
+    val result = mutableListOf<Uri>()
+    intent.clipData?.let { clip -> for (index in 0 until clip.itemCount) clip.getItemAt(index).uri?.let(result::add) }
+    if (intent.action == Intent.ACTION_SEND_MULTIPLE) intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let(result::addAll)
+    else intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let(result::add)
+    return result.distinct()
+  }
+
+  private fun displayName(uri: Uri): String {
+    contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+      if (cursor.moveToFirst()) return cursor.getString(0) ?: "shared-file"
+    }
+    return uri.lastPathSegment ?: "shared-file"
+  }
+
+  override fun onDestroy() {
+    unregisterReceiver(notificationReplyReceiver)
+    shareExecutor.shutdownNow()
+    super.onDestroy()
+  }
+}

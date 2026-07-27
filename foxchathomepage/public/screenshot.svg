@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540">
+  <rect width="960" height="540" fill="#f4f3ec"/>
+  <rect x="0" y="0" width="200" height="540" fill="#e5e4e7"/>
+  <rect x="8" y="8" width="184" height="32" fill="#d4d3d8" rx="6"/>
+  <rect x="8" y="52" width="184" height="24" fill="#d4d3d8" rx="4"/>
+  <rect x="8" y="84" width="184" height="24" fill="#d4d3d8" rx="4"/>
+  <rect x="8" y="116" width="184" height="24" fill="#d4d3d8" rx="4"/>
+  <text x="100" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="18" fill="#b0adaa">
+    Drop your screenshot here
+  </text>
+  <text x="100" y="328" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#b0adaa">
+    or put a real screenshot.png in /public
+  </text>
+</svg>

@@ -1,0 +1,269 @@
+# FoxChat Local Automation API v1
+
+FoxChat can expose a local WebSocket API for stream decks, overlays, bots, and
+other trusted desktop automation. Enable it under **Settings → Automation API**.
+
+The desktop app hosts the API directly. The web app uses the separately
+installed FoxChat Bridge. In both cases the server is disabled by default,
+binds only to `127.0.0.1`, and never listens on a LAN interface. Every
+connection must authenticate before it can subscribe or make requests.
+
+## Browser bridge installation
+
+Download the CI-built executable for your platform, then install it for the
+current user:
+
+```text
+# Windows
+FoxChatBridge-windows-x86_64.exe --install
+
+# Linux
+chmod +x FoxChatBridge-linux-x86_64
+./FoxChatBridge-linux-x86_64 --install
+```
+
+Installation does not require administrator/root access. On Windows it uses
+the current user's Run registry key. On Linux it installs an XDG autostart
+entry. The bridge then starts at login.
+
+The newest authenticated FoxChat browser tab is the only active Matrix
+provider. When a newer tab connects, the bridge closes the older provider and
+all consumer connections. Consumers should reconnect and authenticate again.
+
+The FoxChat website is HTTPS, but the loopback WebSocket intentionally remains
+`ws://`: Chrome-family and Firefox browsers allow loopback WebSockets from a
+secure page without a locally trusted TLS certificate. Current Chromium
+versions may ask the user to allow local-network access. Keep the address as
+`127.0.0.1`; do not change it to a LAN/private IP.
+
+## Connection and authentication
+
+Connect to:
+
+```text
+ws://127.0.0.1:29331/v1
+```
+
+The port is configurable. The first frame, sent within five seconds, must be:
+
+```json
+{"type":"authenticate","api_key":"YOUR_API_KEY"}
+```
+
+Success:
+
+```json
+{"type":"authenticated","protocol":"foxchat.automation.v1"}
+```
+
+Failed authentication closes the socket. Rotate the key in settings if it is
+ever exposed; existing connections are disconnected when the server restarts.
+Because this is an unencrypted loopback connection, do not proxy it or bind it
+to another interface.
+
+## Requests
+
+Requests use caller-generated string IDs:
+
+```json
+{
+  "type": "request",
+  "id": "request-1",
+  "method": "message.send",
+  "params": {
+    "room_id": "!room:example.org",
+    "body": "Hello from my automation"
+  }
+}
+```
+
+Success:
+
+```json
+{"type":"response","id":"request-1","ok":true,"result":{"room_id":"!room:example.org","event_id":"$event"}}
+```
+
+Failure:
+
+```json
+{"type":"response","id":"request-1","ok":false,"error":{"code":"not_found","message":"Room is not available"}}
+```
+
+Common error codes are `invalid_request`, `invalid_params`, `not_found`,
+`not_ready`, `call_unavailable`, `method_not_found`, and `internal_error`.
+
+### Available methods
+
+| Method | Parameters | Result/purpose |
+| --- | --- | --- |
+| `system.ping` | none | Protocol health and version |
+| `rooms.list` | none | Joined/known rooms, names, membership, unread counts, avatars |
+| `room.get` | `room_id` | One room’s status |
+| `room.read` | `room_id` | Mark the latest known event as read |
+| `message.send` | `room_id`, `body` | Send a plain Matrix text message |
+| `user.get` | `user_id`, optional `room_id` | Display name, avatar, banner, presence, and room membership |
+| `user.avatar.get` | `user_id`, optional `room_id` | Matrix and downloadable HTTP avatar URLs |
+| `user.banner.get` | `user_id`, optional `room_id` | The user’s `chat.commet.profile_banner`, when published |
+| `call.current` | none | Whether FoxChat is currently in a call and, when active, its `room_id` and local input/share state |
+| `call.status` | `room_id` | Whether a MatrixRTC call is active and local input/share state |
+| `call.open` | `room_id` | Open/join the room’s call in FoxChat |
+| `call.leave` | `room_id` | Leave the currently open call |
+| `call.users` | `room_id` | Participants, speaking state, and local playback settings |
+| `call.input.get` | `room_id` | Local microphone, camera, and screen-share state |
+| `call.input.set` | `room_id`; optional `microphone_muted`, `camera_enabled`, `screen_sharing` | Change local call inputs |
+| `call.screenshare.view` | `room_id`, `user_id` | Focus/join a user’s active screen-share view |
+| `call.screenshare.leave` | `room_id`, `user_id` | Stop viewing that screen share |
+| `call.user_audio.set` | `user_id`, optional `source`, `volume`, `muted` | Set local playback. `source` is `microphone` or `screen_share_audio`; volume is 0–200. `muted` applies to screen-share audio. |
+
+Call input and screen-share viewing commands require that the corresponding
+call is currently open in FoxChat. They return `call_unavailable` otherwise.
+Volume changes are local playback preferences and do not mute another user for
+other participants.
+
+### Current call
+
+Query the call FoxChat itself is currently participating in:
+
+```json
+{"type":"request","id":"current-call","method":"call.current","params":{}}
+```
+
+When FoxChat is not in a call:
+
+```json
+{"type":"response","id":"current-call","ok":true,"result":{"active":false,"room_id":null}}
+```
+
+When FoxChat is in a call:
+
+```json
+{
+  "type": "response",
+  "id": "current-call",
+  "ok": true,
+  "result": {
+    "active": true,
+    "room_id": "!room:example.org",
+    "input": {
+      "microphone_muted": false,
+      "camera_enabled": false,
+      "screen_sharing": false
+    },
+    "screenshares": [],
+    "viewed_screenshares": []
+  }
+}
+```
+
+## Event subscriptions
+
+Subscriptions can use exact event names, `*`, or a trailing wildcard such as
+`call.*`. IDs are chosen by the caller.
+
+```json
+{
+  "type": "subscribe",
+  "id": "room-call-events",
+  "events": ["call.*", "message.received"],
+  "filters": {
+    "room_id": "!room:example.org"
+  }
+}
+```
+
+Acknowledgement:
+
+```json
+{"type":"subscribed","id":"room-call-events"}
+```
+
+Remove it with:
+
+```json
+{"type":"unsubscribe","id":"room-call-events"}
+```
+
+Filters are equality checks. Currently useful filter keys are `room_id` and
+`user_id`. A matching field can be at the event data root or inside its `room`
+or `user` object.
+
+Delivered event:
+
+```json
+{
+  "type": "event",
+  "subscription_id": "room-call-events",
+  "event": "call.user_joined",
+  "timestamp": 1784894400000,
+  "data": {
+    "room_id": "!room:example.org",
+    "user_id": "@alice:example.org"
+  }
+}
+```
+
+### Available events
+
+| Event | Important data |
+| --- | --- |
+| `call.started` | `room_id` |
+| `call.ended` | `room_id` |
+| `call.user_joined` | `room_id`, `user_id` |
+| `call.user_left` | `room_id`, `user_id` |
+| `call.input_changed` | `room_id`, `input` |
+| `call.screenshare_started` | `room_id`, `user_id` |
+| `call.screenshare_ended` | `room_id`, `user_id` |
+| `call.screenshare_joined` | `room_id`, `user_id` (FoxChat began viewing it) |
+| `call.screenshare_left` | `room_id`, `user_id` |
+| `message.received` | room, sender, event ID, timestamp, and message body/type |
+| `notification.received` | Same message shape, only when Matrix push rules notify |
+
+Message events may include messages sent by the current user. Consumers that
+only want incoming messages should filter the `sender` against their own
+Matrix user ID.
+
+## Minimal JavaScript client
+
+```js
+const socket = new WebSocket("ws://127.0.0.1:29331/v1");
+
+socket.addEventListener("open", () => {
+  socket.send(JSON.stringify({
+    type: "authenticate",
+    api_key: process.env.FOXCHAT_API_KEY,
+  }));
+});
+
+socket.addEventListener("message", ({ data }) => {
+  const frame = JSON.parse(data);
+  console.log(frame);
+
+  if (frame.type === "authenticated") {
+    socket.send(JSON.stringify({
+      type: "subscribe",
+      id: "calls",
+      events: ["call.*"],
+      filters: {},
+    }));
+
+    socket.send(JSON.stringify({
+      type: "request",
+      id: crypto.randomUUID(),
+      method: "call.status",
+      params: { room_id: "!room:example.org" },
+    }));
+  }
+});
+```
+
+## Design guarantees and limits
+
+- Protocol version 1 uses JSON text frames only.
+- Authentication is required before all operations.
+- The server does not expose Matrix access tokens or encryption keys.
+- Matrix permissions still apply to API actions.
+- Multiple automation consumers and subscriptions are supported. With the web
+  bridge, only the latest FoxChat Matrix provider remains connected.
+- Delivery is best-effort while FoxChat is running; this is not a durable event
+  queue. Reconnect and query current status after a disconnect.
+- Slow or disconnected clients are dropped without blocking FoxChat.

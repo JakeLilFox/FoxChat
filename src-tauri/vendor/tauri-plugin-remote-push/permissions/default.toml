@@ -1,0 +1,12 @@
+[default]
+description = "Allows FoxChat remote-push registration, notification updates, and native crypto diagnostics."
+permissions = [
+  "allow-get-token",
+  "allow-request-permission",
+  "allow-clear-room-notification",
+  "allow-update-notification",
+  "allow-sync-native-crypto",
+  "allow-native-crypto-status",
+  "allow-test-native-crypto",
+  "allow-test-android-auto-notification",
+]

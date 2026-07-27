@@ -1,0 +1,11 @@
+Categories:
+  - Internet
+License: Unknown
+SourceCode: https://github.com/FEinerhand/foxchat
+IssueTracker: https://github.com/FEinerhand/foxchat/issues
+
+AutoName: FoxChat
+Summary: A modern, feature-rich Matrix client
+Description: |-
+    A modern, feature-rich Matrix client built with React, TypeScript, and Tauri,
+    designed for a fluid chat experience across Web, Desktop, and Android.
