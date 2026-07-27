@@ -36,6 +36,7 @@ import {
 import { deriveRecoveryKeyFromPassphrase } from 'matrix-js-sdk/lib/crypto-api/key-passphrase.js'
 import { decodeRecoveryKey, encodeRecoveryKey } from 'matrix-js-sdk/lib/crypto-api/recovery-key.js'
 import type { ImageInfo } from 'matrix-js-sdk/lib/@types/media'
+import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts'
 import { GroupCallIntent, GroupCallType, type GroupCall } from 'matrix-js-sdk/lib/webrtc/groupCall'
 import { SetPresence } from 'matrix-js-sdk/lib/sync'
 import {
@@ -2930,8 +2931,17 @@ export class MatrixClientService {
         }
         const previous = receipts.get(roomId)
         if (previous?.eventId !== eventId) {
-          await client.sendReadReceipt(receiptEvent, undefined, true)
-          receipts.set(roomId, { eventId, timestamp: event.getTs() })
+          const optimistic = { eventId, timestamp: event.getTs() }
+          receipts.set(roomId, optimistic)
+          try {
+            await client.setRoomReadMarkers(roomId, eventId, receiptEvent)
+          } catch (error) {
+            if (receipts.get(roomId) === optimistic) {
+              if (previous) receipts.set(roomId, previous)
+              else receipts.delete(roomId)
+            }
+            throw error
+          }
         }
         const latestNotifiable = [...accountRoom.getLiveTimeline().getEvents()]
           .reverse()
@@ -3070,16 +3080,21 @@ export class MatrixClientService {
     return { marked: targets.length }
   }
 
-  private unreadReceiptIndex(room: Room, client: MatrixClient, events: MatrixEvent[]) {
+  private unreadReceiptPosition(room: Room, client: MatrixClient, events: MatrixEvent[]) {
     const userId = client.getSafeUserId()
-    // Include public, private, and fully-read markers.
+    // getEventReadUpTo deliberately hides receipts whose events are not loaded. Keep the raw
+    // public and private receipt IDs too, so a limited initial sync cannot resurrect read history.
+    const publicReceipt = room.getReadReceiptForUserId(userId, true, ReceiptType.Read)
+    const privateReceipt = room.getReadReceiptForUserId(userId, true, ReceiptType.ReadPrivate)
     const serverReceiptIds = new Set(
       [
         room.getEventReadUpTo(userId),
-        room.getReadReceiptForUserId(userId)?.eventId,
+        publicReceipt?.eventId,
+        privateReceipt?.eventId,
         room.getAccountData(EventType.FullyRead)?.getContent<{ event_id?: string }>().event_id,
       ].filter((eventId): eventId is string => !!eventId),
     )
+    const hasKnownReceipt = serverReceiptIds.size > 0
     let receiptIndex = -1
     for (const eventId of serverReceiptIds) {
       receiptIndex = Math.max(
@@ -3087,9 +3102,22 @@ export class MatrixClientService {
         events.findIndex((event) => event.getId() === eventId),
       )
     }
+    const receiptTimestamp = Math.max(
+      -1,
+      publicReceipt?.data?.ts ?? -1,
+      privateReceipt?.data?.ts ?? -1,
+    )
+    if (receiptTimestamp >= 0) {
+      for (let index = events.length - 1; index >= 0; index--) {
+        if (events[index].getTs() <= receiptTimestamp) {
+          receiptIndex = Math.max(receiptIndex, index)
+          break
+        }
+      }
+    }
     const localReceipts = this.lastReadReceipts.get(client)
     const optimistic = localReceipts?.get(room.roomId)
-    if (!optimistic) return receiptIndex
+    if (!optimistic) return { index: receiptIndex, known: hasKnownReceipt }
     if (
       serverReceiptIds.has(optimistic.eventId) ||
       [...serverReceiptIds].some(
@@ -3097,11 +3125,11 @@ export class MatrixClientService {
       )
     ) {
       localReceipts?.delete(room.roomId)
-      return receiptIndex
+      return { index: receiptIndex, known: hasKnownReceipt }
     }
 
     const optimisticIndex = events.findIndex((event) => event.getId() === optimistic.eventId)
-    if (optimisticIndex >= 0) return Math.max(receiptIndex, optimisticIndex)
+    if (optimisticIndex >= 0) return { index: Math.max(receiptIndex, optimisticIndex), known: true }
 
     for (let index = events.length - 1; index >= 0; index--) {
       if (events[index].getTs() <= optimistic.timestamp) {
@@ -3109,15 +3137,15 @@ export class MatrixClientService {
         break
       }
     }
-    return receiptIndex
+    return { index: receiptIndex, known: true }
   }
 
   private filteredUnreadEvents(room: Room, client: MatrixClient, ownUserIds: Set<string>) {
     const appearance = timelineAppearanceSettings()
     const events = room.getLiveTimeline().getEvents()
-    const receiptIndex = this.unreadReceiptIndex(room, client, events)
+    const receipt = this.unreadReceiptPosition(room, client, events)
     const unread = events
-      .slice(receiptIndex >= 0 ? receiptIndex + 1 : 0)
+      .slice(receipt.index >= 0 ? receipt.index + 1 : 0)
       .filter(
         (event) =>
           !event.isRedacted() &&
@@ -3125,20 +3153,21 @@ export class MatrixClientService {
           !isHiddenTimelineActivity(event, appearance) &&
           (isVisibleMessageEvent(event) || client.getPushActionsForEvent(event)?.notify === true),
       )
-    if (receiptIndex >= 0) return unread
+    if (receipt.index >= 0) return unread
     const expected = Math.max(
       room.getUnreadNotificationCount(NotificationCountType.Total),
       room.getUnreadNotificationCount(NotificationCountType.Highlight),
     )
+    if (receipt.known) return expected > 0 ? unread.slice(-expected) : []
     return expected > 0 ? unread.slice(-expected) : unread
   }
 
   private filteredUnreadEventCount(room: Room, client: MatrixClient, ownUserIds: Set<string>) {
     const appearance = timelineAppearanceSettings()
     const events = room.getLiveTimeline().getEvents()
-    const receiptIndex = this.unreadReceiptIndex(room, client, events)
+    const receipt = this.unreadReceiptPosition(room, client, events)
     let count = 0
-    for (let index = receiptIndex >= 0 ? receiptIndex + 1 : 0; index < events.length; index++) {
+    for (let index = receipt.index >= 0 ? receipt.index + 1 : 0; index < events.length; index++) {
       const event = events[index]
       if (
         !event.isRedacted() &&
@@ -3148,11 +3177,12 @@ export class MatrixClientService {
       )
         count++
     }
-    if (receiptIndex >= 0) return count
+    if (receipt.index >= 0) return count
     const expected = Math.max(
       room.getUnreadNotificationCount(NotificationCountType.Total),
       room.getUnreadNotificationCount(NotificationCountType.Highlight),
     )
+    if (receipt.known) return Math.min(count, expected)
     return expected > 0 ? Math.min(count, expected) : count
   }
 

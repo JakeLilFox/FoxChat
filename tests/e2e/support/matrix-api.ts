@@ -494,6 +494,22 @@ export async function sendReadReceipt(session: StoredSession, roomId: string, ev
   )
 }
 
+export async function roomUnreadCount(session: StoredSession, roomId: string): Promise<number> {
+  const response = await fetch(`${session.baseUrl}/_matrix/client/v3/sync?timeout=0`, {
+    headers: { Authorization: `Bearer ${session.accessToken}` },
+  })
+  if (!response.ok)
+    throw new Error(
+      `Could not read unread count for ${roomId}: ${response.status} ${await response.text()}`,
+    )
+  const sync = (await response.json()) as {
+    rooms?: {
+      join?: Record<string, { unread_notifications?: { notification_count?: number } }>
+    }
+  }
+  return sync.rooms?.join?.[roomId]?.unread_notifications?.notification_count ?? 0
+}
+
 export async function sendFillerMessages(
   session: StoredSession,
   roomId: string,

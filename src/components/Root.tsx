@@ -30,6 +30,18 @@ export function Root() {
     void startAutomationApiIntegration()
   }, [])
   useEffect(() => {
+    const preventFileNavigation = (event: DragEvent) => {
+      if (event.dataTransfer && [...event.dataTransfer.types].includes('Files'))
+        event.preventDefault()
+    }
+    window.addEventListener('dragover', preventFileNavigation)
+    window.addEventListener('drop', preventFileNavigation)
+    return () => {
+      window.removeEventListener('dragover', preventFileNavigation)
+      window.removeEventListener('drop', preventFileNavigation)
+    }
+  }, [])
+  useEffect(() => {
     const session = matrixService.restoreSession()
     if (!session) {
       setAuth('guest')

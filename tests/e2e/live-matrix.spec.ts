@@ -358,8 +358,9 @@ test.describe('live three-account Matrix journey', () => {
         await expect(replyQuote).toContainText(thirdMessage)
       })
 
-      await test.step('dropping an image directly on the composer attaches it instead of inlining it into the text', async () => {
+      await test.step('dropping an image anywhere on the composer bar attaches it instead of opening or inlining it', async () => {
         const composer = page!.getByTestId('message-composer')
+        const composerBar = page!.getByTestId('composer-bar')
         const bytes = [...readFileSync(FAVICON_PATH)]
         const dataTransfer = await page!.evaluateHandle(
           ({ bytes, name }) => {
@@ -369,7 +370,7 @@ test.describe('live three-account Matrix journey', () => {
           },
           { bytes, name: 'dropped.png' },
         )
-        await composer.dispatchEvent('drop', { dataTransfer })
+        await composerBar.dispatchEvent('drop', { dataTransfer })
 
         await expect(page!.getByRole('button', { name: 'Remove image' })).toBeVisible({
           timeout: 10_000,

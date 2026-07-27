@@ -6,8 +6,12 @@ export function addedVisibleEventCount(previousCount: number, currentCount: numb
   return Math.max(0, currentCount - previousCount)
 }
 
-export function shouldHandleTimelineGrowth(newestChanged: boolean, addedVisibleEvents: number) {
-  return newestChanged || addedVisibleEvents > 0
+export function shouldHandleTimelineGrowth(
+  newestChanged: boolean,
+  addedVisibleEvents: number,
+  historyPageInProgress = false,
+) {
+  return !historyPageInProgress && (newestChanged || addedVisibleEvents > 0)
 }
 
 export function nextFollowLatest(

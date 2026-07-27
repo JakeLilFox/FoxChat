@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { NotificationCountType } from 'matrix-js-sdk'
 import { MatrixClientService } from '../../src/matrix/MatrixClientService'
 import { fakeClient, fakeEvent, fakeRoom, type FakeClient } from './support/fakeMatrix'
@@ -38,8 +38,8 @@ describe('markRead target selection (auto-read-all-accounts preference)', () => 
 
     await service.markRead(message)
 
-    expect(clientA.sendReadReceipt).toHaveBeenCalled()
-    expect(clientB.sendReadReceipt).toHaveBeenCalled()
+    expect(clientA.setRoomReadMarkers).toHaveBeenCalledWith(ROOM_ID, '$1', message)
+    expect(clientB.setRoomReadMarkers).toHaveBeenCalledWith(ROOM_ID, '$1', message)
   })
 
   it('marks only the selected sending-as account read when the preference is off', async () => {
@@ -58,8 +58,8 @@ describe('markRead target selection (auto-read-all-accounts preference)', () => 
 
     await service.markRead(message)
 
-    expect(clientA.sendReadReceipt).toHaveBeenCalled()
-    expect(clientB.sendReadReceipt).not.toHaveBeenCalled()
+    expect(clientA.setRoomReadMarkers).toHaveBeenCalledWith(ROOM_ID, '$1', message)
+    expect(clientB.setRoomReadMarkers).not.toHaveBeenCalled()
   })
 
   it('keeps a delayed read callback bound to the account that observed the timeline', async () => {
@@ -78,8 +78,8 @@ describe('markRead target selection (auto-read-all-accounts preference)', () => 
 
     await service.markRead(message, 'a')
 
-    expect(clientA.sendReadReceipt).toHaveBeenCalled()
-    expect(clientB.sendReadReceipt).not.toHaveBeenCalled()
+    expect(clientA.setRoomReadMarkers).toHaveBeenCalledWith(ROOM_ID, '$1', message)
+    expect(clientB.setRoomReadMarkers).not.toHaveBeenCalled()
   })
 
   it('keeps every account read while server receipts catch up to the merged timeline', async () => {
@@ -124,9 +124,77 @@ describe('markRead target selection (auto-read-all-accounts preference)', () => 
 
     await service.markRead(latest)
 
-    expect(clientA.sendReadReceipt).toHaveBeenCalled()
-    expect(clientB.sendReadReceipt).toHaveBeenCalled()
+    expect(clientA.setRoomReadMarkers).toHaveBeenCalledWith(ROOM_ID, '$3', latest)
+    expect(clientB.setRoomReadMarkers).toHaveBeenCalledWith(ROOM_ID, '$3', latest)
     expect(service.effectiveUnreadCount(ROOM_ID)).toBe(0)
+  })
+
+  it('applies the optimistic read position before the durable marker request completes', async () => {
+    localStorage.clear()
+    const first = fakeEvent({
+      id: '$1',
+      roomId: ROOM_ID,
+      sender: '@carol:example.org',
+      ts: 10,
+    })
+    const latest = fakeEvent({
+      id: '$2',
+      roomId: ROOM_ID,
+      sender: '@carol:example.org',
+      ts: 20,
+    })
+    const room = fakeRoom({
+      roomId: ROOM_ID,
+      events: [first, latest],
+      unreadTotal: 1,
+      readReceipts: { '@me:example.org': '$1' },
+    })
+    const client = fakeClient([room], '@me:example.org')
+    let finishRequest: () => void = () => undefined
+    client.setRoomReadMarkers.mockImplementation(
+      () =>
+        new Promise<undefined>((resolve) => {
+          finishRequest = () => resolve(undefined)
+        }),
+    )
+    const service = serviceWithAccounts([{ id: 'me', userId: '@me:example.org', client }])
+
+    const marking = service.markRead(latest)
+
+    expect(service.effectiveUnreadCount(ROOM_ID)).toBe(0)
+    finishRequest()
+    await marking
+  })
+
+  it('rolls back an optimistic read position when the durable marker request fails', async () => {
+    localStorage.clear()
+    const first = fakeEvent({
+      id: '$1',
+      roomId: ROOM_ID,
+      sender: '@carol:example.org',
+      ts: 10,
+    })
+    const latest = fakeEvent({
+      id: '$2',
+      roomId: ROOM_ID,
+      sender: '@carol:example.org',
+      ts: 20,
+    })
+    const room = fakeRoom({
+      roomId: ROOM_ID,
+      events: [first, latest],
+      unreadTotal: 1,
+      readReceipts: { '@me:example.org': '$1' },
+    })
+    const client = fakeClient([room], '@me:example.org')
+    client.setRoomReadMarkers.mockRejectedValue(new Error('offline'))
+    const service = serviceWithAccounts([{ id: 'me', userId: '@me:example.org', client }])
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    await service.markRead(latest)
+
+    expect(service.effectiveUnreadCount(ROOM_ID)).toBe(1)
+    warning.mockRestore()
   })
 })
 

@@ -217,9 +217,8 @@ test.describe('live timeline scroll-position journey', () => {
       }
 
       const expectButtonWhenScrolledUp = async () => {
-        await remotePage!.getByTestId('timeline').evaluate((el) => {
-          el.scrollTop = 0
-        })
+        await remotePage!.getByTestId('timeline').hover()
+        await remotePage!.mouse.wheel(0, -10_000)
         await expectAwayFromBottom(remotePage!)
         await openRoom(page!, roomBName)
         const marker = `Scrolled-up live ${Date.now()}`
@@ -269,6 +268,34 @@ test.describe('live timeline scroll-position journey', () => {
         await expectAtBottom(remotePage!)
         await expectFollowsWhileAtBottom()
         await expectButtonWhenScrolledUp()
+      })
+
+      await test.step('fully-read rooms stay read after refresh, while a genuinely new unread survives refresh', async () => {
+        await remotePage!.waitForTimeout(1_000)
+        await remotePage!.reload()
+        await expect(roomRow(remotePage!, roomAName)).toBeVisible({ timeout: 60_000 })
+        await expect(roomRow(remotePage!, roomAName).getByTestId('unread-badge')).toHaveCount(0, {
+          timeout: 30_000,
+        })
+        await expect(roomRow(remotePage!, roomBName).getByTestId('unread-badge')).toHaveCount(0, {
+          timeout: 30_000,
+        })
+        await expect(unreadDivider(remotePage!)).toBeHidden({ timeout: 30_000 })
+
+        const marker = `Refresh genuine unread ${runId}`
+        await openRoom(page!, roomAName)
+        await sendMessage(page!, marker)
+        await expect(roomRow(remotePage!, roomAName)).toContainText(marker, { timeout: 30_000 })
+        await expect(roomRow(remotePage!, roomAName).getByTestId('unread-badge')).toBeVisible({
+          timeout: 30_000,
+        })
+
+        await remotePage!.reload()
+        await expect(roomRow(remotePage!, roomAName).getByTestId('unread-badge')).toBeVisible({
+          timeout: 60_000,
+        })
+        await openRoom(remotePage!, roomAName)
+        await expect(unreadDivider(remotePage!)).toBeVisible({ timeout: 30_000 })
       })
     } catch (error) {
       journeyError = error
@@ -346,6 +373,7 @@ test.describe('live timeline scroll-position journey', () => {
           .at(-1)
         account2Id = account2Session?.userId
         expect(account2Id).toMatch(/^@[^:]+:.+/)
+        await setAutoReadAllAccounts(page!, false)
 
         await signIn(remotePage!, account3)
         account3Session = (await storedSessions(remotePage!)).at(-1)
@@ -408,7 +436,6 @@ test.describe('live timeline scroll-position journey', () => {
         expect(
           await page!.getByTestId('timeline').locator('[data-message-box]').count(),
         ).toBeLessThanOrEqual(40)
-        await setAutoReadAllAccounts(page!, false)
       })
 
       await test.step('switching to the unread account positions at its own unread marker', async () => {

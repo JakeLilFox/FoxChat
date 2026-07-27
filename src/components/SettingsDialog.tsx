@@ -490,9 +490,21 @@ export function SettingsDialog({
             <OwnMessageAlignmentSetting />
             <AnonymizeFilenameSetting />
             <AutoSyncSpaceRolesSetting />
-            <TimelineAppearanceSettings />
           </AntList>
           <ChatBackgroundSettings />
+        </div>
+      ),
+    },
+    {
+      key: 'messages',
+      label: 'Messages',
+      children: (
+        <div>
+          <h2>Message behavior</h2>
+          <AntList>
+            <AutoReadAllAccountsSetting />
+            <TimelineAppearanceSettings />
+          </AntList>
         </div>
       ),
     },
@@ -743,10 +755,7 @@ export function SettingsDialog({
       label: 'Push notifications',
       children: (
         <div>
-          <h2>Multi-account notifications</h2>
-          <AntList>
-            <AutoReadAllAccountsSetting />
-          </AntList>
+          <h2>Push notifications</h2>
           <PushReceiverSettings />
         </div>
       ),

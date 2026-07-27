@@ -6,6 +6,7 @@ import {
   joinRoomAs,
   rawLogin,
   removeOtherDevices,
+  roomUnreadCount,
   sendFillerMessages,
   sendReadReceipt,
   storedSessions,
@@ -26,6 +27,7 @@ const live = liveMatrixConfig()
 const NEAR_BOTTOM = 60
 const AWAY_FROM_BOTTOM = 150
 const BACKLOG_COUNT = 40
+const ENCRYPTED_BACKLOG_COUNT = 16
 
 const roomRow = (page: Page, name: string) => page.getByTestId('room-row').filter({ hasText: name })
 
@@ -93,7 +95,6 @@ test.describe('live combined-account read-state positioning journey', () => {
       remoteContext = await browser.newContext({ baseURL })
       page = await context.newPage()
       remotePage = await remoteContext.newPage()
-
       await test.step("sign in account 3 (the sender) and get accounts 1/2 raw sessions only, so their tabs aren't syncing yet", async () => {
         await signIn(remotePage!, account3)
         account3Session = (await storedSessions(remotePage!)).at(-1)
@@ -153,6 +154,7 @@ test.describe('live combined-account read-state positioning journey', () => {
           .at(-1)
         account2Id = account2Session?.userId
         expect(account2Id).toMatch(/^@[^:]+:.+/)
+        await setAutoReadAllAccounts(page!, false)
       })
 
       await test.step('account 2 (not sending-as) genuinely has the whole backlog unread', async () => {
@@ -171,6 +173,30 @@ test.describe('live combined-account read-state positioning journey', () => {
           .poll(() => scrollBottomDistance(page!), { timeout: 30_000 })
           .toBeLessThanOrEqual(NEAR_BOTTOM)
         await expect(jumpToLatestButton(page!)).toBeHidden()
+
+        const [preservedUnreadEventId] = await sendFillerMessages(
+          account3Session!,
+          roomId!,
+          1,
+          'Combined read positioning unread preserved across refresh',
+        )
+        await sendReadReceipt(account1RawSession!, roomId!, preservedUnreadEventId)
+      })
+
+      await test.step('refresh preserves the selected read account without erasing the other account backlog', async () => {
+        await page!.reload()
+        await expect(roomRow(page!, roomName)).toBeVisible({ timeout: 60_000 })
+        await expect(roomRow(page!, roomName).getByTestId('unread-badge')).toHaveCount(0, {
+          timeout: 30_000,
+        })
+        await expect(unreadDivider(page!)).toBeHidden({ timeout: 30_000 })
+        await expect
+          .poll(() => scrollBottomDistance(page!), { timeout: 30_000 })
+          .toBeLessThanOrEqual(NEAR_BOTTOM)
+
+        await expect
+          .poll(() => roomUnreadCount(account2Session!, roomId!), { timeout: 30_000 })
+          .toBeGreaterThan(0)
       })
 
       await test.step('a fresh sign-in with both accounts already combined from the start also lands at the bottom while sending-as account 1', async () => {
@@ -323,12 +349,13 @@ test.describe('live combined-account read-state positioning journey', () => {
       })
 
       await test.step('the independent account sends encrypted messages while account 1 reads them and account 2 never views the room', async () => {
-        for (let i = 0; i < BACKLOG_COUNT; i++)
+        for (let i = 0; i < ENCRYPTED_BACKLOG_COUNT; i++)
           await sendMessage(remotePage!, `Encrypted combined-read filler ${i + 1}`)
         const lastEventId = await sendMessage(remotePage!, lastLabel)
         await expect(
           page!.locator('[data-event-id^="$"]').filter({ hasText: lastLabel }).last(),
         ).toBeVisible({ timeout: 60_000 })
+        if (await jumpToLatestButton(page!).isVisible()) await jumpToLatestButton(page!).click()
         await sendReadReceipt(account1Session!, roomId!, lastEventId)
         await expect
           .poll(() => scrollBottomDistance(page!), { timeout: 30_000 })
@@ -350,6 +377,32 @@ test.describe('live combined-account read-state positioning journey', () => {
           .poll(() => scrollBottomDistance(page!), { timeout: 30_000 })
           .toBeLessThanOrEqual(NEAR_BOTTOM)
         await expect(jumpToLatestButton(page!)).toBeHidden()
+
+        const preservedUnreadLabel = 'Encrypted unread preserved across refresh'
+        const preservedUnreadEventId = await sendMessage(remotePage!, preservedUnreadLabel)
+        await expect(
+          page!.locator('[data-event-id^="$"]').filter({ hasText: preservedUnreadLabel }).last(),
+        ).toBeVisible({ timeout: 60_000 })
+        await sendReadReceipt(account1Session!, roomId!, preservedUnreadEventId)
+      })
+
+      await test.step('refresh keeps the encrypted room read for account 1 without erasing account 2 backlog', async () => {
+        await page!.waitForTimeout(1_000)
+        await page!.reload()
+        await expect(roomRow(page!, roomName)).toBeVisible({ timeout: 60_000 })
+        await openRoom(page!, roomName)
+        await selectSendingAs(page!, account1Id!)
+        await expect(roomRow(page!, roomName).getByTestId('unread-badge')).toHaveCount(0, {
+          timeout: 30_000,
+        })
+        await expect(unreadDivider(page!)).toBeHidden({ timeout: 30_000 })
+        await expect
+          .poll(() => scrollBottomDistance(page!), { timeout: 30_000 })
+          .toBeLessThanOrEqual(NEAR_BOTTOM)
+
+        await expect
+          .poll(() => roomUnreadCount(account2Session!, roomId!), { timeout: 30_000 })
+          .toBeGreaterThan(0)
       })
     } catch (error) {
       journeyError = error

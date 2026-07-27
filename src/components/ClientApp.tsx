@@ -12,6 +12,7 @@ import { UserProfileHost } from './profile'
 import { VerificationDialog } from './VerificationDialog'
 import { type ThemeMode } from '../lib/constants'
 import { useMediaQuery } from '../lib/hooks'
+import { shouldUseMobileLayout } from '../lib/responsiveLayout'
 import { containingSpacePath, lastSpaceRooms, rememberSpaceRoom } from '../lib/spaceHelpers'
 import {
   browseFromUrl,
@@ -43,11 +44,19 @@ import {
   listenForNotificationNavigation,
   notifyMatrixEvent,
 } from '../platform/notifications'
+import { isAndroidApp } from '../platform/nativeBackground'
 
 export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => void }) {
   const { message } = AntApp.useApp()
-  const desktopDetails = useMediaQuery('(min-width: 1101px)')
-  const mobileLayout = useMediaQuery('(max-width: 760px)')
+  const wideDetailsViewport = useMediaQuery('(min-width: 1101px)')
+  const narrowViewport = useMediaQuery('(max-width: 760px)')
+  const mobileLayout = shouldUseMobileLayout(
+    narrowViewport,
+    isAndroidApp(),
+    window.screen.width,
+    window.screen.height,
+  )
+  const desktopDetails = wideDetailsViewport && !mobileLayout
   const [desktopInfo, setDesktopInfo] = useState(true)
   const [rooms, setRooms] = useState<Room[]>(() => matrixService.rooms())
   const [matrixRevision, setMatrixRevision] = useState(0)
@@ -492,7 +501,11 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
       : (matrixService.activeAccountId() ?? matrixService.availableAccounts()[0]?.id)
   return (
     <>
-      <Shell $detailsOpen={desktopDetails && desktopInfo}>
+      <Shell
+        $detailsOpen={desktopDetails && desktopInfo}
+        $mobileLayout={mobileLayout}
+        data-mobile-layout={mobileLayout}
+      >
         {!mobileLayout && (
           <RoomList
             rooms={roots}

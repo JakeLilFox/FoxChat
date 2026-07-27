@@ -982,7 +982,7 @@ function TimelineView({
     const addedEvents = addedVisibleEventCount(lastVisibleEventCount.current, allEvents.length)
     // Encrypted events can decrypt out of order. Older messages may become visible after the
     // newest message without changing newestId, so visible growth must also update the anchor.
-    if (shouldHandleTimelineGrowth(newestChanged, addedEvents)) {
+    if (shouldHandleTimelineGrowth(newestChanged, addedEvents, loadingRef.current)) {
       positionStabilizerCleanup.current()
       mountPositionRetryCleanup.current()
       positionStabilizerSuperseded.current = true
@@ -1459,10 +1459,23 @@ function TimelineView({
     setContextTimeline(undefined)
     setWindowEndOffset(0)
     setShowJumpToLatest(false)
+    const latest = visibleReadBoundary(timelineEventsRef.current, undefined, true)
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         stabilizeTimelinePosition()
-        requestAnimationFrame(markVisibleRead)
+        requestAnimationFrame(() => {
+          if (initializedRoom.current === roomIdentity) {
+            const box = messagesRef.current
+            if (box && scrollAnchor.current?.type === 'bottom') {
+              box.scrollTop = box.scrollHeight
+              atBottom.current = true
+              followLatest.current = true
+              setShowJumpToLatest(false)
+            }
+            markVisibleRead()
+          }
+          if (latest) void matrixService.markRead(latest, visibleAccountId)
+        })
       }),
     )
   }
@@ -1832,6 +1845,11 @@ function TimelineView({
   const sendingAccountUserId = sendingAccount?.userId || readingUserId
   const sendingRoom = sendingAccount?.client.getRoom(room.roomId)
   const canSendMessages = sendingRoom?.maySendMessage() === true
+  const addPendingFiles = (files: File[]) => {
+    if (!canSendMessages || !files.length) return
+    setPendingImages((current) => [...current, ...files])
+    if (anonymizeFilenameDefault()) setAnonymizeFiles((current) => new Set([...current, ...files]))
+  }
   const sendingAccountPicker = (
     <Dropdown
       disabled={sendingAccounts.length < 2}
@@ -1874,7 +1892,20 @@ function TimelineView({
     .map(([txnId, upload]) => ({ txnId, ...upload }))
   return (
     <>
-      <Main>
+      <Main
+        onDragOverCapture={(event) => {
+          if (event.dataTransfer.types.includes('Files')) {
+            event.preventDefault()
+            event.dataTransfer.dropEffect = 'copy'
+          }
+        }}
+        onDropCapture={(event) => {
+          if (!event.dataTransfer.types.includes('Files')) return
+          event.preventDefault()
+          event.stopPropagation()
+          addPendingFiles([...event.dataTransfer.files])
+        }}
+      >
         <Topbar
           data-testid="room-header"
           style={{ cursor: 'pointer' }}
@@ -1964,7 +1995,7 @@ function TimelineView({
             event.preventDefault()
             if (!canSendMessages) return
             const files = [...event.dataTransfer.files]
-            if (files.length) setPendingImages((current) => [...current, ...files])
+            addPendingFiles(files)
           }}
         >
           <HistoryStatus>{loadingHistory ? 'Loading earlier messages…' : ''}</HistoryStatus>
@@ -2265,7 +2296,7 @@ function TimelineView({
                 ))}
               </ComposeTray>
             )}
-            <Composer>
+            <Composer data-testid="composer-bar">
               {mentionOptions.length > 0 && (
                 <MentionMenu>
                   {mentionOptions.map((option, index) => (
@@ -2292,11 +2323,7 @@ function TimelineView({
                 hidden
                 onChange={(e) => {
                   const files = [...(e.target.files ?? [])]
-                  if (files.length) {
-                    setPendingImages((current) => [...current, ...files])
-                    if (anonymizeFilenameDefault())
-                      setAnonymizeFiles((current) => new Set([...current, ...files]))
-                  }
+                  addPendingFiles(files)
                   e.target.value = ''
                 }}
               />
@@ -2364,10 +2391,7 @@ function TimelineView({
                       ? `Reply to ${replyingTo.sender?.name || replyingTo.getSender()}`
                       : `Message ${room.name}`
                 }
-                onDropFiles={(files) => {
-                  if (!canSendMessages) return
-                  setPendingImages((current) => [...current, ...files])
-                }}
+                onDropFiles={addPendingFiles}
               />
               <EmojiButton
                 room={room}

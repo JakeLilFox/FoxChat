@@ -34,6 +34,10 @@ describe('shouldHandleTimelineGrowth', () => {
   it('does nothing when neither the newest event nor visible count changed', () => {
     expect(shouldHandleTimelineGrowth(false, 0)).toBe(false)
   })
+
+  it('leaves backward pagination growth to the pagination anchor restore', () => {
+    expect(shouldHandleTimelineGrowth(false, 30, true)).toBe(false)
+  })
 })
 
 describe('nextFollowLatest', () => {

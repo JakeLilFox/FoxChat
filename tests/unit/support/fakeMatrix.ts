@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
 import { NotificationCountType, type MatrixEvent, type Room, type RoomType } from 'matrix-js-sdk'
+import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts'
 
 export type FakeRoomOptions = {
   roomId: string
@@ -16,6 +17,9 @@ export type FakeRoomOptions = {
   unreadTotal?: number
   unreadHighlight?: number
   readReceipts?: Record<string, string>
+  readReceiptTimestamps?: Record<string, number>
+  privateReadReceipts?: Record<string, string>
+  privateReadReceiptTimestamps?: Record<string, number>
   readUpTo?: Record<string, string>
   fullyRead?: string
   hasThreadUnread?: boolean
@@ -74,6 +78,7 @@ export function fakeRoom(options: FakeRoomOptions): Room {
     [NotificationCountType.Highlight]: options.unreadHighlight ?? 0,
   } as Record<NotificationCountType, number>
   const receipts = { ...(options.readReceipts ?? {}) }
+  const privateReceipts = { ...(options.privateReadReceipts ?? {}) }
   let hasThreadUnread = options.hasThreadUnread ?? false
   const threads = options.threads ?? []
   const room = {
@@ -110,9 +115,24 @@ export function fakeRoom(options: FakeRoomOptions): Room {
     getLiveTimeline: () => ({ getEvents: () => events }),
     findEventById: (eventId: string) => events.find((event) => event.getId() === eventId),
     hasPendingEvent: () => false,
-    getReadReceiptForUserId: (userId: string) =>
-      receipts[userId] ? { eventId: receipts[userId] } : null,
-    getEventReadUpTo: (userId: string) => options.readUpTo?.[userId] ?? receipts[userId] ?? null,
+    getReadReceiptForUserId: (
+      userId: string,
+      _ignoreSynthesized = false,
+      receiptType = ReceiptType.Read,
+    ) => {
+      const eventId =
+        receiptType === ReceiptType.ReadPrivate ? privateReceipts[userId] : receipts[userId]
+      const timestamp =
+        receiptType === ReceiptType.ReadPrivate
+          ? options.privateReadReceiptTimestamps?.[userId]
+          : options.readReceiptTimestamps?.[userId]
+      return eventId ? { eventId, data: timestamp === undefined ? {} : { ts: timestamp } } : null
+    },
+    getEventReadUpTo: (userId: string) => {
+      const eventId =
+        options.readUpTo?.[userId] ?? privateReceipts[userId] ?? receipts[userId] ?? null
+      return eventId && events.some((event) => event.getId() === eventId) ? eventId : null
+    },
     getAccountData: (type: string) =>
       type === 'm.fully_read' && options.fullyRead
         ? { getContent: () => ({ event_id: options.fullyRead }) }

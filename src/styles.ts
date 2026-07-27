@@ -28,20 +28,20 @@ export const GlobalStyle = createGlobalStyle`*{box-sizing:border-box}:root{--fox
 .md-room-mention{border-radius:4px;padding:0 3px;background:${(p) => p.theme.accentSoft};color:${(p) => p.theme.accent};font-weight:600;cursor:pointer}
 .md-spoiler{border-radius:4px;padding:0 3px;background:${(p) => p.theme.text};color:transparent;cursor:pointer;transition:background .12s ease,color .12s ease}
 .md-spoiler.revealed{background:${(p) => p.theme.input};color:inherit}`
-export const Shell = styled.div<{ $detailsOpen?: boolean }>`
+export const Shell = styled.div<{ $detailsOpen?: boolean; $mobileLayout?: boolean }>`
   position: relative;
   isolation: isolate;
   height: var(--foxchat-viewport-height, 100dvh);
   min-height: 0;
   overflow: hidden;
   display: grid;
-  grid-template-columns: 350px minmax(0, 1fr);
-  padding-right: ${(p) => (p.$detailsOpen ? '320px' : '0')};
+  grid-template-columns: ${(p) => (p.$mobileLayout ? 'minmax(0, 1fr)' : '350px minmax(0, 1fr)')};
+  padding-right: ${(p) => (p.$detailsOpen && !p.$mobileLayout ? '320px' : '0')};
   transition: padding-right 0.2s ease;
   background: ${(p) => p.theme.bg};
   color: ${(p) => p.theme.text};
   @media (max-width: 1100px) {
-    grid-template-columns: 310px minmax(0, 1fr);
+    grid-template-columns: ${(p) => (p.$mobileLayout ? 'minmax(0, 1fr)' : '310px minmax(0, 1fr)')};
     padding-right: 0;
   }
   @media (max-width: 760px) {
@@ -3011,6 +3011,11 @@ export const MobileMenu = styled(IconBtn)`
     display: none;
   }
   @media (max-width: 760px) {
+    && {
+      display: inline-flex;
+    }
+  }
+  [data-mobile-layout='true'] & {
     && {
       display: inline-flex;
     }
