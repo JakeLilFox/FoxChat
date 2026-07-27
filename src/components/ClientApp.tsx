@@ -1,13 +1,9 @@
 import { ImageViewerHost, VideoViewerHost } from './media'
-import { MessageSearchOverlay } from './MessageSearchOverlay'
 import { RoomDetails } from './rooms'
-import { RoomDirectoryModal } from './rooms'
 import { RoomList } from './rooms'
 import { RoomSettingsHost } from './rooms/settings'
-import { SettingsDialog } from './SettingsDialog'
 import { SpaceOverview } from './spaces'
 import { Timeline } from './chat'
-import { UnreadInbox } from './unread'
 import { UserProfileHost } from './profile'
 import { VerificationDialog } from './VerificationDialog'
 import { type ThemeMode } from '../lib/constants'
@@ -15,26 +11,33 @@ import { useMediaQuery } from '../lib/hooks'
 import { shouldUseMobileLayout } from '../lib/responsiveLayout'
 import { containingSpacePath, lastSpaceRooms, rememberSpaceRoom } from '../lib/spaceHelpers'
 import {
+  accountsOpenFromUrl,
   browseFromUrl,
   closeRoomDirectoryUrl,
   closeSearchUrl,
   closeSettingsUrl,
   closeVerificationUrl,
+  emojiOpenFromUrl,
   isDrawerOpenFromUrl,
+  messageMenuOpenFromUrl,
   openSettingsUrl,
   openVerificationUrl,
+  roomActionFromUrl,
   roomDirectoryOpenFromUrl,
   roomIdFromUrl,
+  roomModalFromUrl,
   searchOpenFromUrl,
   setDrawerOpenUrl,
   settingsOpenFromUrl,
   spaceIdFromUrl,
+  threadViewFromUrl,
   unreadFromUrl,
+  userProfileIdFromUrl,
   verificationOpenFromUrl,
   writeRoomUrl,
 } from '../lib/urlState'
 import { Shell, themes } from '../styles'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Drawer, Input, Modal, Segmented, Spin, App as AntApp } from 'antd'
 import { Room, RoomType } from 'matrix-js-sdk'
 import { type VerificationRequest } from 'matrix-js-sdk/lib/crypto-api'
@@ -45,6 +48,32 @@ import {
   notifyMatrixEvent,
 } from '../platform/notifications'
 import { isAndroidApp } from '../platform/nativeBackground'
+
+const MessageSearchOverlay = lazy(() =>
+  import('./MessageSearchOverlay').then((module) => ({ default: module.MessageSearchOverlay })),
+)
+const RoomDirectoryModal = lazy(() =>
+  import('./rooms/RoomDirectoryModal').then((module) => ({
+    default: module.RoomDirectoryModal,
+  })),
+)
+const SettingsDialog = lazy(() =>
+  import('./SettingsDialog').then((module) => ({ default: module.SettingsDialog })),
+)
+const UnreadInbox = lazy(() =>
+  import('./unread/UnreadInbox').then((module) => ({ default: module.UnreadInbox })),
+)
+
+const visibleEscapeLayer = () =>
+  [
+    ...document.querySelectorAll<HTMLElement>(
+      '.ant-modal-wrap, .ant-dropdown, .ant-popover, [role="menu"], [role="dialog"][aria-modal="true"], .md-code-fullscreen',
+    ),
+  ].some((element) => {
+    if (element.closest('.ant-drawer')) return false
+    const style = getComputedStyle(element)
+    return !element.hidden && style.display !== 'none' && style.visibility !== 'hidden'
+  })
 
 export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => void }) {
   const { message } = AntApp.useApp()
@@ -287,6 +316,54 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
   useEffect(() => {
     if (openedRoomId && !spaceOverview) rememberSpaceRoom(openedRoomId)
   }, [openedRoomId, spaceOverview])
+  useEffect(() => {
+    if (!openedRoomId) return
+    const closeCurrentChat = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Escape' ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.repeat ||
+        settings ||
+        directory ||
+        !!search ||
+        recovery ||
+        !!verification ||
+        mobile ||
+        info ||
+        callViewOpen ||
+        accountsOpenFromUrl() ||
+        !!roomActionFromUrl() ||
+        !!userProfileIdFromUrl() ||
+        !!roomModalFromUrl() ||
+        !!threadViewFromUrl() ||
+        emojiOpenFromUrl() ||
+        messageMenuOpenFromUrl() ||
+        !!document.querySelector('[data-message-editing="true"]') ||
+        visibleEscapeLayer()
+      )
+        return
+      event.preventDefault()
+      setSelected(undefined)
+      setSpaceOverview(false)
+      setDesktopInfo(false)
+      setInfo(false)
+      writeRoomUrl(undefined, false, space)
+    }
+    window.addEventListener('keydown', closeCurrentChat)
+    return () => window.removeEventListener('keydown', closeCurrentChat)
+  }, [
+    openedRoomId,
+    space,
+    settings,
+    directory,
+    search,
+    recovery,
+    verification,
+    mobile,
+    info,
+    callViewOpen,
+  ])
   const open = useCallback(
     (id: string) => {
       setUnreadInbox(false)
@@ -524,15 +601,17 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
           />
         )}
         {unreadInbox ? (
-          <UnreadInbox
-            rooms={rooms}
-            revision={matrixRevision}
-            onMenu={() => {
-              setMobile(true)
-              setDrawerOpenUrl(true)
-            }}
-            onOpen={openUnreadMessage}
-          />
+          <Suspense fallback={<Spin />}>
+            <UnreadInbox
+              rooms={rooms}
+              revision={matrixRevision}
+              onMenu={() => {
+                setMobile(true)
+                setDrawerOpenUrl(true)
+              }}
+              onOpen={openUnreadMessage}
+            />
+          </Suspense>
         ) : spaceOverview && spaceRoom ? (
           <SpaceOverview
             room={spaceRoom}
@@ -621,28 +700,40 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
         <RoomDetails drawer room={spaceOverview ? spaceRoom : room} />
       </Drawer>
       <RoomSettingsHost />
-      <RoomDirectoryModal open={directory} onClose={hideDirectory} />
-      <MessageSearchOverlay
-        open={!!search}
-        scope={search ?? 'all'}
-        roomId={selected}
-        accountId={searchAccountId}
-        onClose={hideSearch}
-      />
+      {directory && (
+        <Suspense fallback={null}>
+          <RoomDirectoryModal open onClose={hideDirectory} />
+        </Suspense>
+      )}
+      {search && (
+        <Suspense fallback={null}>
+          <MessageSearchOverlay
+            open
+            scope={search}
+            roomId={selected}
+            accountId={searchAccountId}
+            onClose={hideSearch}
+          />
+        </Suspense>
+      )}
       <UserProfileHost />
       <ImageViewerHost />
       <VideoViewerHost />
-      <SettingsDialog
-        open={settings}
-        onClose={hideSettings}
-        mode={mode}
-        onMode={onMode}
-        onRecover={() => {
-          hideSettings()
-          setRecovery(true)
-        }}
-        onVerify={(id) => void verify(id)}
-      />
+      {settings && (
+        <Suspense fallback={null}>
+          <SettingsDialog
+            open
+            onClose={hideSettings}
+            mode={mode}
+            onMode={onMode}
+            onRecover={() => {
+              hideSettings()
+              setRecovery(true)
+            }}
+            onVerify={(id) => void verify(id)}
+          />
+        </Suspense>
+      )}
       <Modal
         title="Restore encrypted history"
         open={recovery}

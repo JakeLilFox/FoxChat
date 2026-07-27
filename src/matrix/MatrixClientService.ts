@@ -232,6 +232,8 @@ export class MatrixClientService {
   private presenceIdleTimer?: number
   private lastPresenceActivity = Date.now()
   private appliedPresenceStates = new WeakMap<MatrixClient, PresenceState>()
+  private savedAccountsSource?: string
+  private savedAccountsCache: MatrixSession[] = []
   private presenceQueues = new WeakMap<MatrixClient, Promise<void>>()
   private verificationRequests = new Set<VerificationRequest>()
   private trackedVerificationRequests = new WeakSet<VerificationRequest>()
@@ -281,13 +283,18 @@ export class MatrixClientService {
   }
 
   savedAccounts(): MatrixSession[] {
+    const source = localStorage.getItem(ACCOUNTS_KEY) ?? '[]'
+    if (source === this.savedAccountsSource) return this.savedAccountsCache
+    this.savedAccountsSource = source
     try {
-      const accounts = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) ?? '[]') as MatrixSession[]
-      return accounts.filter(
+      const accounts = JSON.parse(source) as MatrixSession[]
+      this.savedAccountsCache = accounts.filter(
         (session) => session.baseUrl && session.accessToken && session.userId && session.deviceId,
       )
+      return this.savedAccountsCache
     } catch {
-      return []
+      this.savedAccountsCache = []
+      return this.savedAccountsCache
     }
   }
 

@@ -2095,7 +2095,10 @@ function TimelineView({
           </JumpToLatest>
         )}
         {(acceptedInvite || room.getMyMembership() === 'join') && (
-          <ComposerArea ref={setComposerElement}>
+          <ComposerArea
+            ref={setComposerElement}
+            data-message-editing={editing ? 'true' : undefined}
+          >
             {!canSendMessages && (
               <NoSendNotice>
                 None of your joined accounts can send messages in this room

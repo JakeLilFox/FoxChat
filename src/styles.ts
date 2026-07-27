@@ -193,6 +193,8 @@ export const VoiceDockSlot = styled.div`
 export const VoiceChannelGroup = styled.div`
   width: 100%;
   min-width: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 68px;
 `
 export const ActiveSpaceVoiceAvatar = styled.span`
   display: inline-flex;

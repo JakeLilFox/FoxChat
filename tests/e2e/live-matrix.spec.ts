@@ -147,6 +147,19 @@ test.describe('live three-account Matrix journey', () => {
         expect(roomId).toMatch(/^!/)
       })
 
+      await test.step('Escape closes the selected chat and shows the empty room state', async () => {
+        await page!.keyboard.press('Escape')
+        await expect(page!.getByRole('heading', { name: 'Select a room' })).toBeVisible()
+        expect(new URL(page!.url()).searchParams.get('room')).toBeNull()
+
+        await page!.getByTestId('room-row').filter({ hasText: roomName }).click()
+        await expect(
+          page!.getByTestId('room-header').getByRole('heading', {
+            name: roomName,
+          }),
+        ).toBeVisible()
+      })
+
       await test.step('join the second combined account and invite the remote account', async () => {
         await pace(page!)
         const detailsTitle = page!.getByText('Channel details', {

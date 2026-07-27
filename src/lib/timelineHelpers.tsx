@@ -125,10 +125,13 @@ export const roomUnreadCount = (
     .filter((child): child is Room => !!child)
   return own + children.reduce((total, child) => total + roomUnreadCount(child, seen, ownUnread), 0)
 }
-export const roomHasTyping = (room: Room, seen = new Set<string>()): boolean => {
+export const roomHasTyping = (
+  room: Room,
+  seen = new Set<string>(),
+  ownIds = new Set(matrixService.availableAccounts().map((account) => account.userId)),
+): boolean => {
   if (seen.has(room.roomId)) return false
   seen.add(room.roomId)
-  const ownIds = new Set(matrixService.availableAccounts().map((account) => account.userId))
   if (room.getJoinedMembers().some((member) => member.typing && !ownIds.has(member.userId)))
     return true
   if (room.getType() !== RoomType.Space) return false
@@ -141,7 +144,7 @@ export const roomHasTyping = (room: Room, seen = new Set<string>()): boolean => 
         client?.getRoom(event.getStateKey() ?? '') ?? matrixService.room(event.getStateKey() ?? ''),
     )
     .filter((child): child is Room => !!child)
-    .some((child) => roomHasTyping(child, seen))
+    .some((child) => roomHasTyping(child, seen, ownIds))
 }
 export const typingPreview = (
   <TypingPreview>

@@ -8,6 +8,7 @@ import { type ThemeMode } from '../../lib/constants'
 import { eventBody, isVisibleMessageEvent } from '../../lib/eventHelpers'
 import { useMediaUrl } from '../../lib/hooks'
 import { roomBannerContent } from '../../lib/roomBanner'
+import { SelectiveCache } from '../../lib/selectiveCache'
 import { showRoomDevTools, showRoomSettings } from '../../lib/roomSettingsHelpers'
 import { compareSpaceChildren, containingSpacePath } from '../../lib/spaceHelpers'
 import {
@@ -208,30 +209,61 @@ export function RoomList({
       return unread
     }
   }, [changedRoomIds, revision])
+  const ownAccountUserIds = useMemo(() => {
+    void revision
+    return new Set(matrixService.availableAccounts().map((account) => account.userId))
+  }, [revision])
+  const summaryCache = useRef(
+    new SelectiveCache<
+      string,
+      {
+        last?: MatrixEvent
+        lastIsMine: boolean
+        lastReadByOther: boolean
+        unread: number
+        latest: number
+        typing: boolean
+      }
+    >(),
+  )
   const summaryFor = useMemo(() => {
     void allRooms
     void revision
-    const roomSummary = new Map<string, { last?: MatrixEvent; unread: number; latest: number }>()
-    return (room: Room) => {
-      const cached = roomSummary.get(room.roomId)
-      if (cached) return cached
-      const events = room.getLiveTimeline().getEvents()
-      let last
-      for (let index = events.length - 1; index >= 0; index -= 1) {
-        if (isVisibleMessageEvent(events[index])) {
-          last = events[index]
-          break
-        }
+    const cache = summaryCache.current
+    if (changedRoomIds.has('*')) cache.clear()
+    else {
+      const invalidated = new Set(changedRoomIds)
+      for (const candidate of allRooms) {
+        if (candidate.getType() === RoomType.Space) invalidated.add(candidate.roomId)
       }
-      const summary = {
-        last,
-        unread: roomUnreadCount(room, new Set(), unreadFor),
-        latest: roomLatestTs(room),
-      }
-      roomSummary.set(room.roomId, summary)
-      return summary
+      cache.invalidate(invalidated)
     }
-  }, [allRooms, revision, unreadFor])
+    cache.retain(new Set(allRooms.map((candidate) => candidate.roomId)))
+    return (room: Room) => {
+      return cache.get(room.roomId, () => {
+        const events = room.getLiveTimeline().getEvents()
+        let last
+        for (let index = events.length - 1; index >= 0; index -= 1) {
+          if (isVisibleMessageEvent(events[index])) {
+            last = events[index]
+            break
+          }
+        }
+        const lastIsMine = !!last && ownAccountUserIds.has(last.getSender() ?? '')
+        return {
+          last,
+          lastIsMine,
+          lastReadByOther:
+            !!last &&
+            lastIsMine &&
+            room.getUsersReadUpTo(last).some((reader) => !ownAccountUserIds.has(reader)),
+          unread: roomUnreadCount(room, new Set(), unreadFor),
+          latest: roomLatestTs(room),
+          typing: roomHasTyping(room, new Set(), ownAccountUserIds),
+        }
+      })
+    }
+  }, [allRooms, changedRoomIds, revision, unreadFor, ownAccountUserIds])
   const topSpaceId = spacePath[0]
   const outsideUnread = useMemo(
     () =>
@@ -421,9 +453,6 @@ export function RoomList({
         return ai === undefined ? 1 : bi === undefined ? -1 : ai - bi
       return summaryFor(b).latest - summaryFor(a).latest
     })
-  const ownAccountUserIds = new Set(
-    matrixService.availableAccounts().map((account) => account.userId),
-  )
   const respondToInvite = async (accountId: string, room: Room, accept: boolean) => {
     const key = `${accountId}\u0000${room.roomId}`
     setInviteBusy(key)
@@ -965,10 +994,8 @@ export function RoomList({
         {shown.map((room) => {
           const summary = summaryFor(room)
           const last = summary.last
-          const lastIsMine = !!last && ownAccountUserIds.has(last.getSender() ?? '')
-          const lastReadByOther =
-            lastIsMine &&
-            room.getUsersReadUpTo(last).some((reader) => !ownAccountUserIds.has(reader))
+          const lastIsMine = summary.lastIsMine
+          const lastReadByOther = summary.lastReadByOther
           const unread = summary.unread
           const pinned = pinnedIndex.has(room.roomId)
           const dropEdge =
@@ -1024,7 +1051,7 @@ export function RoomList({
                       )}
                       {room.name}
                     </Name>
-                    {roomHasTyping(room) ? (
+                    {summary.typing ? (
                       typingPreview
                     ) : (
                       <Preview>
