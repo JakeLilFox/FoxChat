@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const imageName = process.env.APPIMAGE_E2E_IMAGE ?? 'foxchat-appimage-e2e'
 const dockerNetwork = process.env.APPIMAGE_E2E_DOCKER_NETWORK?.trim()
+const sharedMemorySize = process.env.APPIMAGE_E2E_SHM_SIZE?.trim() || '512m'
 const dockerCommand = (process.env.APPIMAGE_E2E_DOCKER_COMMAND ?? 'docker')
   .trim()
   .split(/\s+/)
@@ -65,6 +66,8 @@ runDocker([
   'run',
   '--rm',
   ...(dockerNetwork ? ['--network', dockerNetwork] : []),
+  '--shm-size',
+  sharedMemorySize,
   '--env-file',
   envFile,
   '--mount',

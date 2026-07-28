@@ -27,6 +27,9 @@ export APPIMAGE_E2E_APPLICATION="${installed_appimage}"
 export APPIMAGE_E2E_OUTPUT_DIR="${output_directory}"
 export APPIMAGE_EXTRACT_AND_RUN=1
 export GDK_BACKEND=x11
+export GALLIUM_DRIVER=llvmpipe
+export LIBGL_ALWAYS_SOFTWARE=1
+export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
 export NO_AT_BRIDGE=1
 export WEBKIT_DISABLE_COMPOSITING_MODE=1
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
@@ -40,7 +43,17 @@ dbus-run-session -- xvfb-run \
     driver_log="${APPIMAGE_E2E_OUTPUT_DIR}/tauri-driver.log"
     tauri-driver --native-driver /usr/local/bin/WebKitWebDriver >"${driver_log}" 2>&1 &
     driver_pid=$!
-    trap "kill ${driver_pid} >/dev/null 2>&1 || true" EXIT
+    cleanup() {
+      status=$?
+      trap - EXIT
+      kill "${driver_pid}" >/dev/null 2>&1 || true
+      if (( status != 0 )); then
+        echo "tauri-driver/AppImage log:" >&2
+        cat "${driver_log}" >&2 || true
+      fi
+      exit "${status}"
+    }
+    trap cleanup EXIT
 
     for _ in $(seq 1 60); do
       if bash -c "</dev/tcp/127.0.0.1/4444" >/dev/null 2>&1; then

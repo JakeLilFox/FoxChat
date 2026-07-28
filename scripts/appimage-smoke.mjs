@@ -72,6 +72,37 @@ let sessionId
 
 const sessionPath = (suffix = '') => `/session/${sessionId}${suffix}`
 
+const sessionTerminated = (error) =>
+  error instanceof WebDriverError && /Session terminated without a reply/i.test(error.message)
+
+async function startSession() {
+  let lastError
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const session = await command('POST', '/session', {
+        capabilities: {
+          alwaysMatch: {
+            browserName: 'wry',
+            'tauri:options': { application },
+          },
+        },
+      })
+      sessionId = session.sessionId
+      if (!sessionId) throw new Error('tauri-driver did not return a session ID')
+      await waitFor('FoxChat login view', () => element('[data-testid="login-page"]'))
+      return
+    } catch (error) {
+      lastError = error
+      if (sessionId) await command('DELETE', sessionPath()).catch(() => undefined)
+      sessionId = undefined
+      if (!sessionTerminated(error) || attempt === 3) throw error
+      console.warn(`Native session ended during startup; retrying (${attempt}/3)`)
+      await delay(1_000)
+    }
+  }
+  throw lastError
+}
+
 async function element(selector) {
   const result = await command('POST', sessionPath('/element'), {
     using: 'css selector',
@@ -107,18 +138,7 @@ async function screenshot(name) {
 }
 
 try {
-  const session = await command('POST', '/session', {
-    capabilities: {
-      alwaysMatch: {
-        browserName: 'wry',
-        'tauri:options': { application },
-      },
-    },
-  })
-  sessionId = session.sessionId
-  if (!sessionId) throw new Error('tauri-driver did not return a session ID')
-
-  await waitFor('FoxChat login view', () => element('[data-testid="login-page"]'))
+  await startSession()
   const title = await command('GET', sessionPath('/title'))
   if (!String(title).includes('FoxChat'))
     throw new Error(`Expected the native app view title to contain FoxChat, received "${title}"`)
