@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const imageName = process.env.APPIMAGE_E2E_IMAGE ?? 'foxchat-appimage-e2e'
+const dockerNetwork = process.env.APPIMAGE_E2E_DOCKER_NETWORK?.trim()
 const dockerCommand = (process.env.APPIMAGE_E2E_DOCKER_COMMAND ?? 'docker')
   .trim()
   .split(/\s+/)
@@ -51,10 +52,19 @@ if (!existsSync(envFile)) throw new Error(`AppImage E2E environment file not fou
 const outputDirectory = resolve(root, 'test-results/appimage')
 mkdirSync(outputDirectory, { recursive: true })
 
-runDocker(['build', '--file', 'tests/appimage/Dockerfile', '--tag', imageName, '.'])
+runDocker([
+  'build',
+  ...(dockerNetwork ? ['--network', dockerNetwork] : []),
+  '--file',
+  'tests/appimage/Dockerfile',
+  '--tag',
+  imageName,
+  '.',
+])
 runDocker([
   'run',
   '--rm',
+  ...(dockerNetwork ? ['--network', dockerNetwork] : []),
   '--env-file',
   envFile,
   '--mount',
