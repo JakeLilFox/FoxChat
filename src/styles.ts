@@ -63,7 +63,7 @@ export const Shell = styled.div<{ $detailsOpen?: boolean; $mobileLayout?: boolea
     }
   }
 `
-export const Sidebar = styled.aside<{ $mobile?: boolean }>`
+export const Sidebar = styled.aside`
   border-right: 1px solid ${(p) => p.theme.border};
   background: ${(p) => p.theme.panel};
   color: ${(p) => p.theme.text};
@@ -73,9 +73,6 @@ export const Sidebar = styled.aside<{ $mobile?: boolean }>`
   min-height: 0;
   height: 100%;
   overflow: hidden;
-  @media (max-width: 760px) {
-    display: ${(p) => (p.$mobile ? 'flex' : 'none')};
-  }
 `
 export const SideHeader = styled.div`
   height: 76px;

@@ -748,7 +748,6 @@ export function RoomList({
   if (activeSpace)
     return (
       <Sidebar
-        $mobile={mobile}
         data-testid="room-sidebar"
         onTouchStart={(e) => {
           if (!mobile) return
@@ -846,7 +845,7 @@ export function RoomList({
       </Sidebar>
     )
   return (
-    <Sidebar $mobile={mobile} data-testid="room-sidebar">
+    <Sidebar data-testid="room-sidebar">
       <SideHeader>
         <Brand>
           <Logo>F</Logo>FoxChat
