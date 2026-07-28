@@ -3650,8 +3650,9 @@ export class MatrixClientService {
   }
 
   async logout() {
+    const session = this.restoreSession()
     try {
-      await this.client?.logout(true)
+      if (session) await this.revokeSession(session)
     } finally {
       await this.forgetCurrentAccount()
     }

@@ -2835,6 +2835,10 @@ export const PackCollection = styled.div`
 `
 export const PackEditorWrap = styled.div`
   color: ${(p) => p.theme.text};
+  .packNameInput {
+    max-width: 320px;
+    margin-bottom: 10px;
+  }
   .packActions {
     display: flex;
     gap: 8px;

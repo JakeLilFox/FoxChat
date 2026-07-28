@@ -93,19 +93,42 @@ export type RoomImagePackLocation = {
   stateKey: string
   pack: MatrixEmotePack
 }
-export const findRoomImagePack = (room: Room): RoomImagePackLocation | undefined => {
-  const candidates = roomImagePackTypes.flatMap((type) =>
-    room.currentState.getStateEvents(type).map((event) => ({
-      type,
-      stateKey: event.getStateKey() ?? '',
-      pack: event.getContent<MatrixEmotePack>(),
-    })),
+const choosePackLocation = (candidates: RoomImagePackLocation[]): RoomImagePackLocation | undefined =>
+  candidates.find(
+    (candidate) => candidate.pack.images && Object.keys(candidate.pack.images).length > 0,
+  ) ?? candidates.at(-1)
+export const findRoomImagePack = (room: Room): RoomImagePackLocation | undefined =>
+  choosePackLocation(
+    roomImagePackTypes.flatMap((type) =>
+      room.currentState.getStateEvents(type).map((event) => ({
+        type,
+        stateKey: event.getStateKey() ?? '',
+        pack: event.getContent<MatrixEmotePack>(),
+      })),
+    ),
   )
-  return (
-    candidates.find(
-      (candidate) => candidate.pack.images && Object.keys(candidate.pack.images).length > 0,
-    ) ?? candidates.at(-1)
-  )
+const packHasContent = (pack: MatrixEmotePack) =>
+  !!pack.pack?.display_name || !!(pack.images && Object.keys(pack.images).length)
+// A room can hold multiple m.room.image_pack/im.ponies.room_emotes state events, one per
+// state_key, each representing a distinct pack (MSC2545). Group by state_key so both the
+// stable and unstable type for the same pack collapse into a single entry.
+export const findRoomImagePacks = (room: Room): RoomImagePackLocation[] => {
+  const byStateKey = new Map<string, RoomImagePackLocation[]>()
+  for (const type of roomImagePackTypes) {
+    for (const event of room.currentState.getStateEvents(type)) {
+      const stateKey = event.getStateKey() ?? ''
+      const location: RoomImagePackLocation = {
+        type,
+        stateKey,
+        pack: event.getContent<MatrixEmotePack>(),
+      }
+      byStateKey.set(stateKey, [...(byStateKey.get(stateKey) ?? []), location])
+    }
+  }
+  return [...byStateKey.values()]
+    .map((candidates) => choosePackLocation(candidates)!)
+    .filter((location) => packHasContent(location.pack))
+    .sort((a, b) => (a.pack.pack?.display_name ?? '').localeCompare(b.pack.pack?.display_name ?? ''))
 }
 export const imagePackRoomsTypes = ['m.image_pack.rooms', 'im.ponies.emote_rooms'] as const
 export const accountImagePackTypes = ['m.image_pack', 'im.ponies.user_emotes'] as const

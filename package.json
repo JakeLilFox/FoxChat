@@ -45,6 +45,7 @@
     "@tauri-apps/plugin-updater": "^2.10.1",
     "antd": "^6.1.0",
     "highlight.js": "^11.11.1",
+    "jszip": "^3.10.1",
     "marked": "^18.0.6",
     "matrix-js-sdk": "^42.0.0",
     "react": "^19.2.7",

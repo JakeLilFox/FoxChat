@@ -7,10 +7,24 @@ import { RoomSecuritySettings } from './RoomSecuritySettings'
 import { SpaceInvitations } from '../../spaces'
 import { SpaceManagement } from '../../spaces'
 import { SpacePresentationSettings } from './SpacePresentationSettings'
-import { findRoomImagePack } from '../../../lib/emojiData'
+import { type MatrixEmotePack, findRoomImagePacks } from '../../../lib/emojiData'
+import { useState } from 'react'
 import { Divider, Modal, Tabs, Tag } from 'antd'
 import { EventType, Room, RoomType } from 'matrix-js-sdk'
 import { matrixService } from '../../../matrix/MatrixClientService'
+
+type PackSlot = { key: string; stateKey: string; pack?: MatrixEmotePack }
+const newPackStateKey = () => `pack-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+const slotsFromRoom = (room: Room): PackSlot[] => {
+  const locations = findRoomImagePacks(room)
+  return locations.length
+    ? locations.map((location) => ({
+        key: location.stateKey || 'default',
+        stateKey: location.stateKey,
+        pack: location.pack,
+      }))
+    : [{ key: 'default', stateKey: '', pack: undefined }]
+}
 
 export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () => void }) {
   const userId = matrixService.matrixClient?.getUserId()
@@ -20,8 +34,37 @@ export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () =
     room.currentState.maySendStateEvent(EventType.RoomPowerLevels, userId)
   const canManagePacks =
     !!userId && room.currentState.maySendStateEvent('im.ponies.room_emotes', userId)
-  const packLocation = findRoomImagePack(room)
+  const [packSlots, setPackSlots] = useState<PackSlot[]>(() => slotsFromRoom(room))
+  const [activePackKey, setActivePackKey] = useState<string>(() => packSlots[0]?.key ?? 'default')
   const kind = room.getType() === RoomType.Space ? 'Space' : 'Room'
+  const editPack = (targetKey: string, action: 'add' | 'remove') => {
+    if (action === 'add') {
+      const stateKey = newPackStateKey()
+      setPackSlots((current) => [...current, { key: stateKey, stateKey, pack: undefined }])
+      setActivePackKey(stateKey)
+      return
+    }
+    const slot = packSlots.find((candidate) => candidate.key === targetKey)
+    if (!slot) return
+    Modal.confirm({
+      title: 'Remove this pack?',
+      content: `${slot.pack?.pack?.display_name || 'This pack'} and its images will no longer be available in this ${kind.toLowerCase()}.`,
+      okText: 'Remove',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        if (slot.pack) await matrixService.saveRoomImagePack(room.roomId, {}, slot.stateKey)
+        setPackSlots((current) => {
+          const next = current.filter((candidate) => candidate.key !== targetKey)
+          return next.length ? next : [{ key: 'default', stateKey: '', pack: undefined }]
+        })
+        setActivePackKey((current) => {
+          if (current !== targetKey) return current
+          const remaining = packSlots.filter((candidate) => candidate.key !== targetKey)
+          return remaining[0]?.key ?? 'default'
+        })
+      },
+    })
+  }
   const items = [
     {
       key: 'general',
@@ -92,13 +135,38 @@ export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () =
               <div>
                 <h2>{kind} stickers and emoji</h2>
                 <p>
-                  Upload images for this {kind.toLowerCase()}. They are stored as room state and
-                  become available to participants.
+                  Upload images for this {kind.toLowerCase()}. Each tab is a separate pack, stored
+                  as its own room state event, and every pack becomes available to participants.
                 </p>
-                <ImagePackEditor
-                  pack={packLocation?.pack}
-                  roomId={room.roomId}
-                  stateKey={packLocation?.stateKey}
+                <Tabs
+                  type="editable-card"
+                  hideAdd={false}
+                  activeKey={activePackKey}
+                  onChange={setActivePackKey}
+                  onEdit={(targetKey, action) => {
+                    if (action === 'add') editPack('', 'add')
+                    else editPack(targetKey as string, 'remove')
+                  }}
+                  items={packSlots.map((slot, index) => ({
+                    key: slot.key,
+                    label: slot.pack?.pack?.display_name || `Pack ${index + 1}`,
+                    closable: true,
+                    children: (
+                      <ImagePackEditor
+                        pack={slot.pack}
+                        roomId={room.roomId}
+                        stateKey={slot.stateKey}
+                        defaultName={packSlots.length > 1 ? `Pack ${index + 1}` : undefined}
+                        onSaved={(content) =>
+                          setPackSlots((current) =>
+                            current.map((entry) =>
+                              entry.key === slot.key ? { ...entry, pack: content } : entry,
+                            ),
+                          )
+                        }
+                      />
+                    ),
+                  }))}
                 />
               </div>
             ),

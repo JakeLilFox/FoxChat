@@ -697,7 +697,14 @@ export function SettingsDialog({
           <Button
             danger
             icon={<LogoutOutlined />}
-            onClick={() => void matrixService.logout().then(() => location.reload())}
+            onClick={() =>
+              void matrixService
+                .logout()
+                .catch((error) =>
+                  console.warn('[account] Could not revoke the Matrix session remotely', error),
+                )
+                .finally(() => location.reload())
+            }
           >
             Sign out of FoxChat
           </Button>

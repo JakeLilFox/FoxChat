@@ -1,6 +1,8 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import JSZip from 'jszip'
 import { liveMatrixConfig } from './support/env'
 import {
   cleanTestRoom,
@@ -74,6 +76,20 @@ const clearImagePack = async (page: Page, scope: Locator) => {
     await scope.getByTitle('Remove').first().click()
   }
   await saveChanges(page, scope)
+}
+
+const STICKER_ZIP_ASSETS = ['pfp1.png', 'pfp2.png', 'pfp3.png']
+
+const buildStickerZip = async () => {
+  const zip = new JSZip()
+  for (const name of STICKER_ZIP_ASSETS) {
+    zip.file(name, readFileSync(resolve(process.cwd(), 'tests/assets', name)))
+  }
+  const buffer = await zip.generateAsync({ type: 'nodebuffer' })
+  const dir = mkdtempSync(join(tmpdir(), 'foxchat-e2e-stickers-'))
+  const zipPath = join(dir, 'stickers.zip')
+  writeFileSync(zipPath, buffer)
+  return { dir, zipPath }
 }
 
 test.describe('live sticker pack journey', () => {
@@ -606,6 +622,122 @@ test.describe('live sticker pack journey', () => {
     } finally {
       let cleanupError: unknown
       try {
+        const sessions: StoredSession[] = []
+        if (page && !page.isClosed()) sessions.push(...(await storedSessions(page).catch(() => [])))
+        if (roomId) await cleanTestRoom(roomId, sessions)
+        if (account1Id) {
+          const current = sessions.filter((s) => s.userId === account1Id).at(-1)
+          if (current) await removeOtherDevices(browser, current, account1.password)
+        }
+      } catch (error) {
+        cleanupError = error
+      } finally {
+        await context?.close()
+      }
+      if (!journeyError && cleanupError) journeyError = cleanupError
+    }
+    if (journeyError) throw journeyError
+  })
+
+  test('zip import: every image inside the zip is added as a sticker', async ({
+    browser,
+    baseURL,
+  }, testInfo) => {
+    test.setTimeout(4 * 60_000)
+    const account1 = live.account1!
+    const runId = `${Date.now()}-${testInfo.retry}-${testInfo.workerIndex}`
+    const roomName = `${live.roomPrefix} Zip Stickers ${runId}`
+
+    let context
+    let page: Page | undefined
+    let roomId: string | undefined
+    let account1Id: string | undefined
+    let scratchDir: string | undefined
+    let journeyError: unknown
+
+    try {
+      context = await browser.newContext({ baseURL })
+      page = await context.newPage()
+
+      await test.step('sign in', async () => {
+        await signIn(page!, account1)
+        account1Id = (await storedSessions(page!)).at(-1)?.userId
+        expect(account1Id).toMatch(/^@[^:]+:.+/)
+      })
+
+      await test.step('create a room to send stickers into', async () => {
+        await openRoomActions(page!)
+        await page!.getByText('Create a room', { exact: true }).click()
+        const dialog = page!.getByRole('dialog', { name: 'Create a room' })
+        await expect(dialog).toBeVisible()
+        await dialog.getByLabel('Account').click()
+        await page!.getByText(account1Id!, { exact: true }).last().click()
+        await dialog.getByLabel('Room name').fill(roomName)
+        await dialog.getByRole('button', { name: 'Create room' }).click()
+        await expect(
+          page!.getByTestId('room-header').getByRole('heading', { name: roomName }),
+        ).toBeVisible({ timeout: 60_000 })
+        roomId = new URL(page!.url()).searchParams.get('room') ?? undefined
+        expect(roomId).toMatch(/^!/)
+      })
+
+      await test.step('import a zip of pfp1/pfp2/pfp3 as stickers', async () => {
+        const dialog = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        await clearImagePack(page!, dialog)
+
+        const built = await buildStickerZip()
+        scratchDir = built.dir
+        const zipInput = dialog.locator('input[type="file"][accept*="zip"]')
+        await zipInput.setInputFiles(built.zipPath)
+
+        const names = dialog.getByLabel('Sticker name')
+        await expect(names).toHaveCount(3, { timeout: 30_000 })
+        const values = await Promise.all((await names.all()).map((entry) => entry.inputValue()))
+        expect(new Set(values)).toEqual(new Set(['pfp1', 'pfp2', 'pfp3']))
+
+        await expect(dialog.locator('.packImage img')).toHaveCount(3)
+        for (const image of await dialog.locator('.packImage img').all()) {
+          await expect(image).toHaveAttribute('src', /.+/, { timeout: 30_000 })
+        }
+
+        await saveChanges(page!, dialog)
+        await closeDialog(page!)
+      })
+
+      await test.step('reopening settings still shows all three imported stickers', async () => {
+        const reopened = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        await expect(reopened.getByLabel('Sticker name')).toHaveCount(3, { timeout: 30_000 })
+        await closeDialog(page!)
+      })
+
+      await test.step('all three imported stickers show in the picker and can be sent', async () => {
+        await openEmojiPicker(page!)
+        for (const name of STICKER_ZIP_ASSETS.map((asset) => asset.replace(/\.png$/, ''))) {
+          const stickerButton = packButton(page!, name)
+          await expect(stickerButton).toBeVisible({ timeout: 30_000 })
+          await expect(stickerButton.locator('img')).toHaveAttribute('src', /.+/, {
+            timeout: 30_000,
+          })
+        }
+        await packButton(page!, 'pfp2').click()
+        await expect(page!.locator('[data-event-id^="$"]').last().locator('img')).toHaveAttribute(
+          'src',
+          /.+/,
+          { timeout: 30_000 },
+        )
+      })
+
+      await test.step('clean up the imported pack', async () => {
+        const dialog = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        await clearImagePack(page!, dialog)
+        await closeDialog(page!)
+      })
+    } catch (error) {
+      journeyError = error
+    } finally {
+      let cleanupError: unknown
+      try {
+        if (scratchDir) rmSync(scratchDir, { recursive: true, force: true })
         const sessions: StoredSession[] = []
         if (page && !page.isClosed()) sessions.push(...(await storedSessions(page).catch(() => [])))
         if (roomId) await cleanTestRoom(roomId, sessions)
