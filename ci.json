@@ -215,6 +215,13 @@
         "id": "46893e5a-4816-454e-a2cd-6fc9d08aa75d"
       },
       {
+        "type": "grapsecrets",
+        "id": "a7c83855-6017-44c3-88fd-b27b8bfd1da2",
+        "files": [
+          "tauri-signing.key"
+        ]
+      },
+      {
         "type": "cmd",
         "id": "3056602e-e608-4bdc-9990-cfa730203afc",
         "cmd": [
@@ -239,7 +246,7 @@
         "type": "cmd",
         "id": "c073572c-3772-4c8c-aa36-f3370d793649",
         "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && export VITE_BUILD_VERSION=${version} && npm run desktop:build"
+          "source /home/ubuntu1/.nvm/nvm.sh && test -s tauri-signing.key && export TAURI_SIGNING_PRIVATE_KEY_PATH=\"$PWD/tauri-signing.key\" && node scripts/desktop-release.mjs prepare \"${version}\" && export VITE_BUILD_VERSION=${version} && npm run desktop:build"
         ]
       },
       {
@@ -283,7 +290,7 @@
         "type": "cmd",
         "id": "c5ae85c3-a549-4227-bed2-eb06100ce334",
         "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && export VITE_BUILD_VERSION=${version} && npm run desktop:build:exe"
+          "source /home/ubuntu1/.nvm/nvm.sh && test -s tauri-signing.key && export TAURI_SIGNING_PRIVATE_KEY_PATH=\"$PWD/tauri-signing.key\" && export VITE_BUILD_VERSION=${version} && npm run desktop:build:exe"
         ]
       },
       {
@@ -294,11 +301,19 @@
         ]
       },
       {
+        "type": "cmd",
+        "id": "33d00579-31b3-42fd-a35a-a4995b05eb5d",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && node scripts/desktop-release.mjs manifest \"${version}\""
+        ]
+      },
+      {
         "type": "asset",
         "id": "921280b9-53cb-47c7-8ec1-f01b53e1fed7",
         "files": [
           "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/",
-          "bridge/dist/FoxChatBridge-windows-x86_64.exe"
+          "bridge/dist/FoxChatBridge-windows-x86_64.exe",
+          "desktop-updates/"
         ],
         "prefix": "windows"
       },
@@ -318,19 +333,19 @@
           {
             "type": "upload",
             "id": "17fe0d51-a6b0-4d61-aa65-aa58cd40fd3f",
-            "from": "desktop/src-tauri/target/release/bundle/appimage/FoxChat_0.1.0_amd64.AppImage",
+            "from": "desktop/src-tauri/target/release/bundle/appimage/",
             "to": "/var/www/foxchathome/public/"
           },
           {
             "type": "upload",
             "id": "17fe0d51-a6b0-4d61-aa65-a798cd40fd3f",
-            "from": "desktop/src-tauri/target/release/bundle/deb/FoxChat_0.1.0_amd64.deb",
+            "from": "desktop/src-tauri/target/release/bundle/deb/",
             "to": "/var/www/foxchathome/public/"
           },
           {
             "type": "upload",
             "id": "17fe0d51-a6b0-4d61-aa65-a898cd40fd3f",
-            "from": "desktop/src-tauri/target/release/bundle/rpm/FoxChat-0.1.0-1.x86_64.rpm",
+            "from": "desktop/src-tauri/target/release/bundle/rpm/",
             "to": "/var/www/foxchathome/public/"
           },
           {
@@ -592,6 +607,12 @@
             "id": "17fe0d51-a6b0-4d61-aa65-aa96cd40fd3f",
             "from": "home/foxchathomepage/dist/",
             "to": "/var/www/foxchathome/"
+          },
+          {
+            "type": "upload",
+            "id": "41c3b43d-25ef-4085-be96-d42a4d16dd97",
+            "from": "windows/desktop-updates/",
+            "to": "/var/www/foxchathome/updates/"
           }
         ],
         "update": [],
@@ -601,6 +622,7 @@
     "image": "build-container-tauri",
     "depends": [
       "HomeBuild",
+      "Desktop",
       "Test"
     ],
     "trigger": {

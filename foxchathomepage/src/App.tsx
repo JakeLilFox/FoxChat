@@ -137,7 +137,7 @@ function App() {
             <p>Open in your browser</p>
             <span className="platform-link">chat.jakefox.de</span>
           </a>
-          <a href="public/FoxChat_0.1.0_x64-setup.exe" className="platform-card">
+          <a href="/updates/FoxChat-windows-x86_64-setup.exe" className="platform-card">
             <div className="platform-accent" />
             <h3>Desktop</h3>
             <p>Windows &amp; macOS</p>
@@ -190,15 +190,15 @@ function App() {
         <div className="linux-section">
           <h3>Linux</h3>
           <div className="linux-grid">
-            <a href="public/FoxChat_0.1.0_amd64.deb" className="linux-card">
+            <a href="/updates/FoxChat-linux-x86_64.deb" className="linux-card">
               <span className="linux-format">.deb</span>
               <span>Debian / Ubuntu</span>
             </a>
-            <a href="public/FoxChat-0.1.0-1.x86_64.rpm" className="linux-card">
+            <a href="/updates/FoxChat-linux-x86_64.rpm" className="linux-card">
               <span className="linux-format">.rpm</span>
               <span>Fedora / RHEL</span>
             </a>
-            <a href="public/FoxChat_0.1.0_amd64.AppImage" className="linux-card">
+            <a href="/updates/FoxChat-linux-x86_64.AppImage" className="linux-card">
               <span className="linux-format">.AppImage</span>
               <span>Universal</span>
             </a>
@@ -238,11 +238,7 @@ function App() {
             Matrix
           </a>
           .{' '}
-          <a
-            href="https://github.com/JakeLilFox/FoxChat"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <a href="https://github.com/JakeLilFox/FoxChat" target="_blank" rel="noopener noreferrer">
             View FoxChat on GitHub
           </a>
           .

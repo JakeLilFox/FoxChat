@@ -102,6 +102,11 @@ F-Droid publishing. It's written for a specific self-hosted CI system and
 build container, so it won't run as-is elsewhere, but it's a reasonably
 accurate description of the full release process if you want to adapt it.
 
+Desktop releases are signed for Tauri's updater and published beside the
+homepage under `https://foxchat.jakefox.de/updates/`. CI expects the private
+key as the `tauri-signing.key` file secret. Preserve that key securely: an
+installed desktop app will reject updates signed by a replacement key.
+
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE). You can use, modify, and

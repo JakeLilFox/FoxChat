@@ -14,6 +14,7 @@ dist-ssr
 src-tauri/target
 bridge/target
 bridge/dist
+desktop-updates/
 .android-sdk
 .android-command-line-tools*
 .gradle-ci
@@ -21,6 +22,8 @@ bridge/dist
 service-account*.json
 google-credentials*.json
 *.pem
+tauri-signing.key
+tauri-signing.key.pub
 test.env
 playwright-report/
 test-results/

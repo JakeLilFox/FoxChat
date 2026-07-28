@@ -3,6 +3,7 @@ import { RoomAvatar } from './RoomAvatar'
 import { RoomNotificationModeIcon } from './RoomNotificationModeIcon'
 import { SpaceChannelRow } from '../spaces'
 import { VoiceParticipantList } from '../calls/VoiceParticipantList'
+import { DesktopUpdateIndicator } from '../DesktopUpdateIndicator'
 import { isVoiceChannel, voicePresenceLabel } from '../calls/voiceRoom'
 import { type ThemeMode } from '../../lib/constants'
 import { eventBody, isVisibleMessageEvent } from '../../lib/eventHelpers'
@@ -858,6 +859,7 @@ export function RoomList({
             onClick={onUnreadInbox}
           />
         </Tooltip>
+        <DesktopUpdateIndicator />
         <Dropdown
           trigger={['click']}
           menu={{

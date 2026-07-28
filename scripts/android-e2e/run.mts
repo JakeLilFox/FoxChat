@@ -357,6 +357,140 @@ async function exerciseDrawerGestures(browser: WdioBrowser) {
   )
 }
 
+async function roomRowScreenCenter(browser: WdioBrowser, roomId: string) {
+  await switchToWebview(browser)
+  const rect = await browser.execute((expectedRoomId) => {
+    const row = [...document.querySelectorAll<HTMLElement>('[data-testid="room-row"]')].find(
+      (candidate) =>
+        candidate.dataset.roomId === expectedRoomId &&
+        candidate.getClientRects().length > 0 &&
+        getComputedStyle(candidate).visibility !== 'hidden',
+    )
+    if (!row) return null
+    const box = row.getBoundingClientRect()
+    return {
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
+      dpr: window.devicePixelRatio,
+    }
+  }, roomId)
+  if (!rect) throw new Error(`Could not find a visible drawer row for ${roomId}`)
+  await switchToNative(browser)
+  return {
+    x: (rect.x + rect.width / 2) * rect.dpr,
+    y: (rect.y + rect.height / 2) * rect.dpr,
+  }
+}
+
+async function waitForSingleTapRoomSelection(
+  browser: WdioBrowser,
+  roomId: string,
+  roomName: string,
+) {
+  await browser.waitUntil(
+    async () => {
+      await switchToWebview(browser)
+      return browser.execute(
+        ({ expectedRoomId, expectedRoomName }) => {
+          const url = new URL(window.location.href)
+          const drawerOpen = url.searchParams.get('drawerOpen') === 'true'
+          const heading = [...document.querySelectorAll('h1,h2,h3,h4,[role="heading"]')].some(
+            (candidate) =>
+              candidate.textContent?.trim() === expectedRoomName &&
+              (candidate as HTMLElement).getClientRects().length > 0,
+          )
+          return url.searchParams.get('room') === expectedRoomId && !drawerOpen && heading
+        },
+        { expectedRoomId: roomId, expectedRoomName: roomName },
+      )
+    },
+    {
+      timeout: 10_000,
+      interval: 250,
+      timeoutMsg: `One native tap after opening the drawer did not select ${roomName}`,
+    },
+  )
+}
+
+async function selectRoomWithOneNativeTap(
+  browser: WdioBrowser,
+  roomId: string,
+  roomName: string,
+  previouslySelectedRoomId: string,
+) {
+  await switchToWebview(browser)
+  const beforeTap = await browser.execute(() => {
+    const url = new URL(window.location.href)
+    return {
+      roomId: url.searchParams.get('room'),
+      drawerOpen: url.searchParams.get('drawerOpen') === 'true',
+    }
+  })
+  if (beforeTap.roomId !== previouslySelectedRoomId || !beforeTap.drawerOpen)
+    throw new Error(
+      `Drawer gesture changed navigation before the intended tap: ${JSON.stringify(beforeTap)}`,
+    )
+  const center = await roomRowScreenCenter(browser, roomId)
+  await tap(browser, center)
+  await waitForSingleTapRoomSelection(browser, roomId, roomName)
+}
+
+async function exerciseDrawerRoomSelection(
+  browser: WdioBrowser,
+  gestureTarget: { roomId: string; roomName: string },
+  toolbarTarget: { roomId: string; roomName: string },
+) {
+  const initial = await drawerState(browser)
+  if (initial.urlOpen) throw new Error('Room drawer was unexpectedly open before selection test')
+
+  const main = await elementScreenRect(browser, 'main')
+  const mainY = main.y + main.height * 0.45
+  await swipe(
+    browser,
+    { x: main.x + Math.max(24, main.width * 0.08), y: mainY },
+    { x: main.x + main.width * 0.55, y: mainY },
+  )
+  await browser.waitUntil(
+    async () => {
+      const state = await drawerState(browser)
+      return state.urlOpen && state.visibleSidebarCount > 0
+    },
+    {
+      timeout: 10_000,
+      interval: 250,
+      timeoutMsg: 'Swipe-right did not open the drawer for the single-tap room test',
+    },
+  )
+  await selectRoomWithOneNativeTap(
+    browser,
+    gestureTarget.roomId,
+    gestureTarget.roomName,
+    toolbarTarget.roomId,
+  )
+
+  await switchToWebview(browser)
+  await byRole(browser, 'button', 'Open room list').click()
+  await browser.waitUntil(
+    async () => {
+      const state = await drawerState(browser)
+      return state.urlOpen && state.visibleSidebarCount > 0
+    },
+    {
+      timeout: 10_000,
+      interval: 250,
+      timeoutMsg: 'Toolbar button did not open the drawer for the control selection',
+    },
+  )
+  await selectRoomWithOneNativeTap(
+    browser,
+    toolbarTarget.roomId,
+    toolbarTarget.roomName,
+    gestureTarget.roomId,
+  )
+}
+
 async function sessionsFromAndroidStorage(browser: WdioBrowser): Promise<StoredSession[]> {
   await switchToWebview(browser)
   return browser.execute(() => {
@@ -1456,6 +1590,13 @@ async function main() {
 
     log('swipe right/left to open and close the room drawer')
     await exerciseDrawerGestures(browser)
+
+    log('select a room with one tap after gesture-opening the drawer')
+    await exerciseDrawerRoomSelection(
+      browser,
+      { roomId, roomName },
+      { roomId: secondRoomId, roomName: secondRoomName },
+    )
 
     log('send an image and open the viewer')
     await sendImageAndOpenViewer(account4Page, browser)

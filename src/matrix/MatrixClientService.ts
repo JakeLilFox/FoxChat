@@ -2256,6 +2256,7 @@ export class MatrixClientService {
     const eventId = event.getId()
     const client = this.clientForEventAuthor(event)
     if (!client || !roomId || !eventId) throw new Error('Cannot edit this message')
+    const txnId = client.makeTxnId()
     const originalRelation = event.getOriginalContent()['m.relates_to'] as
       | { rel_type?: string; 'm.in_reply_to'?: { event_id: string } }
       | undefined
@@ -2271,13 +2272,30 @@ export class MatrixClientService {
     }
     return this.queueSend(
       roomId,
-      () =>
-        client.sendEvent(roomId, EventType.RoomMessage, {
-          msgtype: MsgType.Text,
-          body: `* ${body}`,
-          'm.new_content': newContent,
-          'm.relates_to': { rel_type: RelationType.Replace, event_id: eventId },
-        }),
+      async () => {
+        const room = client.getRoom(roomId)
+        const send = client.sendEvent(
+          roomId,
+          EventType.RoomMessage,
+          {
+            msgtype: MsgType.Text,
+            body: `* ${body}`,
+            'm.new_content': newContent,
+            'm.relates_to': { rel_type: RelationType.Replace, event_id: eventId },
+          },
+          txnId,
+        )
+        // Capture the local echo before /sync can detach the relation event. Matrix compares
+        // replacement timestamps, so a homeserver clock ahead of the device can otherwise make
+        // a later local edit look older until its remote echo arrives.
+        const replacement = room?.getEventForTxnId(txnId)
+        const response = await send
+        if (replacement) {
+          event.makeReplaced(replacement)
+          this.observers.forEach((observer) => observer.onEvent?.(event, room ?? undefined))
+        }
+        return response
+      },
       client,
     )
   }

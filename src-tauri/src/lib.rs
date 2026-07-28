@@ -65,7 +65,10 @@ pub fn run() {
         .plugin(tauri_plugin_remote_push::init())
         .plugin(tauri_plugin_notification::init());
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    let builder = builder
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
     builder
         .invoke_handler(tauri::generate_handler![
             save_matrix_accounts,

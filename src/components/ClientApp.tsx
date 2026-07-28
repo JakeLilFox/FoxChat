@@ -103,6 +103,8 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
     ),
   )
   const [mobile, setMobile] = useState(() => isDrawerOpenFromUrl())
+  const mobileRef = useRef(mobile)
+  mobileRef.current = mobile
   const [info, setInfo] = useState(false)
   const [callViewOpen, setCallViewOpen] = useState(false)
   const [unreadInbox, setUnreadInbox] = useState(unreadFromUrl)
@@ -197,29 +199,40 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
   useEffect(() => {
     let start: { x: number; y: number } | undefined
     const openDrawer = () => {
+      mobileRef.current = true
       setMobile(true)
       setDrawerOpenUrl(true)
     }
     const closeDrawer = () => {
+      mobileRef.current = false
       setMobile(false)
       setDrawerOpenUrl(false)
     }
     const begin = (x: number, y: number, target: EventTarget | null) => {
       if (window.innerWidth > 760) return
       const element = target instanceof Element ? target : undefined
-      if (mobile || element?.closest('main')) start = { x, y }
+      if (mobileRef.current || element?.closest('main')) start = { x, y }
     }
     const finish = (x: number, y: number) => {
-      if (!start) return
+      if (!start) return false
       const dx = x - start.x
       const dy = Math.abs(y - start.y)
       start = undefined
-      if (dy >= 55) return
-      if (mobile && dx < -70) closeDrawer()
-      else if (!mobile && dx > 70) openDrawer()
+      if (dy >= 55) return false
+      if (mobileRef.current && dx < -70) {
+        closeDrawer()
+        return true
+      }
+      if (!mobileRef.current && dx > 70) {
+        openDrawer()
+        return true
+      }
+      return false
     }
     const down = (event: PointerEvent) => begin(event.clientX, event.clientY, event.target)
-    const up = (event: PointerEvent) => finish(event.clientX, event.clientY)
+    const up = (event: PointerEvent) => {
+      if (finish(event.clientX, event.clientY)) event.preventDefault()
+    }
     const touchStart = (event: TouchEvent) => {
       if (event.touches.length !== 1) return
       const touch = event.touches[0]
@@ -227,7 +240,7 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
     }
     const touchEnd = (event: TouchEvent) => {
       const touch = event.changedTouches[0]
-      if (touch) finish(touch.clientX, touch.clientY)
+      if (touch && finish(touch.clientX, touch.clientY)) event.preventDefault()
     }
     const cancel = () => {
       start = undefined
@@ -237,10 +250,10 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
       if (event.pointerType !== 'touch') cancel()
     }
     document.addEventListener('pointerdown', down, { passive: true })
-    document.addEventListener('pointerup', up, { passive: true })
+    document.addEventListener('pointerup', up, { passive: false })
     document.addEventListener('pointercancel', pointerCancel, { passive: true })
     document.addEventListener('touchstart', touchStart, { passive: true })
-    document.addEventListener('touchend', touchEnd, { passive: true })
+    document.addEventListener('touchend', touchEnd, { passive: false })
     document.addEventListener('touchcancel', cancel, { passive: true })
     window.addEventListener('foxchat-open-drawer', openDrawer)
     return () => {
@@ -252,7 +265,7 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
       document.removeEventListener('touchcancel', cancel)
       window.removeEventListener('foxchat-open-drawer', openDrawer)
     }
-  }, [mobile])
+  }, [])
   useEffect(() => {
     let pendingRoomTimer: number | undefined
     const back = () => {

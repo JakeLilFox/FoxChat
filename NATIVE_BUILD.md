@@ -12,6 +12,11 @@ cargo install tauri-cli --version "^2.0.0" --locked
 
 Desktop builds require Rust and the operating system's Tauri dependencies. On Windows this means the MSVC Rust toolchain, Microsoft C++ Build Tools, and WebView2.
 
+Release builds also require the updater signing key. Keep `tauri-signing.key`
+outside version control and set `TAURI_SIGNING_PRIVATE_KEY_PATH` to its path
+before building. The matching public key is embedded in `tauri.conf.json`.
+Never replace or lose this key after shipping an updater-enabled build.
+
 Android additionally requires Android Studio, its SDK/NDK/build tools, `JAVA_HOME`, `ANDROID_HOME`, `NDK_HOME`, and the Rust Android targets.
 
 ## Commands
