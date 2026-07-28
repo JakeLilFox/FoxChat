@@ -66,7 +66,7 @@ import {
   writeRoomUrl,
 } from '../../lib/urlState'
 import { VoiceRecorder } from '../../lib/voiceRecording'
-import { isNativeApp, isAndroidApp } from '../../platform/nativeBackground'
+import { isAndroidApp } from '../../platform/nativeBackground'
 import {
   ComposeTray,
   Composer,
@@ -1980,7 +1980,7 @@ function TimelineView({
           key={roomIdentity}
           ref={messagesRef}
           $background={chatBackgroundUrl}
-          $fixedBackground={isNativeApp()}
+          $fixedBackground={isAndroidApp()}
           onScroll={onScroll}
           onWheel={() => {
             timelineUserInteracted.current = true

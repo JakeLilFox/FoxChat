@@ -964,8 +964,11 @@ async function createEncryptedRoomAndInviteInBrowser(
   const roomId = new URL(page.url()).searchParams.get('room')
   if (!roomId) throw new Error(`Could not read room ID from browser URL: ${page.url()}`)
 
-  await page.getByRole('button', { name: 'Room information' }).click()
-  await page.getByText('Invite', { exact: true }).click()
+  const detailsTitle = page.getByText('Channel details', { exact: true })
+  if (!(await detailsTitle.isVisible()))
+    await page.getByRole('button', { name: 'Room information' }).click()
+  await detailsTitle.waitFor({ state: 'visible', timeout: 10_000 })
+  await page.getByRole('button', { name: 'Invite', exact: true }).click()
   const invite = page.getByRole('dialog', { name: 'Invite to room' })
   await invite.waitFor({ state: 'visible', timeout: 10_000 })
   await invite.getByLabel('Matrix user ID').fill(inviteeUserId)

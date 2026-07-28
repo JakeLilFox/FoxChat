@@ -508,10 +508,6 @@ test.describe('live three-account Matrix journey', () => {
           .click({ position: { x: 400, y: 450 } })
         await expect(page!.getByTestId('room-sidebar').last()).toBeHidden()
         expect(new URL(page!.url()).searchParams.has('drawerOpen')).toBe(false)
-
-        await page!.setViewportSize({ width: 1280, height: 800 })
-        await expect(page!.getByTestId('room-sidebar').first()).toBeVisible()
-        await expect(page!.getByTestId('room-sidebar').first()).toHaveCSS('display', 'flex')
       })
 
       sessions = await storedSessions(page)

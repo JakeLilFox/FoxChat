@@ -27,7 +27,13 @@ export const GlobalStyle = createGlobalStyle`*{box-sizing:border-box}:root{--fox
 .md-mention{border-radius:4px;padding:0 3px;background:${(p) => p.theme.accentSoft};color:${(p) => p.theme.accent};font-weight:600;cursor:pointer}
 .md-room-mention{border-radius:4px;padding:0 3px;background:${(p) => p.theme.accentSoft};color:${(p) => p.theme.accent};font-weight:600;cursor:pointer}
 .md-spoiler{border-radius:4px;padding:0 3px;background:${(p) => p.theme.text};color:transparent;cursor:pointer;transition:background .12s ease,color .12s ease}
-.md-spoiler.revealed{background:${(p) => p.theme.input};color:inherit}`
+.md-spoiler.revealed{background:${(p) => p.theme.input};color:inherit}
+*::-webkit-scrollbar{width:9px;height:9px}
+*::-webkit-scrollbar-track,*::-webkit-scrollbar-corner{background:transparent}
+*::-webkit-scrollbar-button{display:none;width:0;height:0}
+*::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:transparent;background-clip:padding-box}
+*:hover::-webkit-scrollbar-thumb,*.foxchat-scroll-active::-webkit-scrollbar-thumb{background-color:color-mix(in srgb,${(p) => p.theme.muted} 55%,transparent)}
+*:hover::-webkit-scrollbar-thumb:hover{background-color:color-mix(in srgb,${(p) => p.theme.muted} 78%,transparent)}`
 export const Shell = styled.div<{ $detailsOpen?: boolean; $mobileLayout?: boolean }>`
   position: relative;
   isolation: isolate;
@@ -63,7 +69,7 @@ export const Shell = styled.div<{ $detailsOpen?: boolean; $mobileLayout?: boolea
     }
   }
 `
-export const Sidebar = styled.aside`
+export const Sidebar = styled.aside<{ $mobile?: boolean }>`
   border-right: 1px solid ${(p) => p.theme.border};
   background: ${(p) => p.theme.panel};
   color: ${(p) => p.theme.text};
@@ -73,6 +79,9 @@ export const Sidebar = styled.aside`
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  @media (max-width: 760px) {
+    display: ${(p) => (p.$mobile ? 'flex' : 'none')};
+  }
 `
 export const SideHeader = styled.div`
   height: 76px;

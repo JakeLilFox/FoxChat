@@ -2,6 +2,7 @@ import { ClientApp } from './ClientApp'
 import { Login } from './Login'
 import { SharedAttachmentHost } from './SharedAttachmentHost'
 import { type AuthState, type ThemeMode } from '../lib/constants'
+import { trackActiveScrollbars } from '../lib/scrollbars'
 import { EmptyState, GlobalStyle, themes } from '../styles'
 import { useEffect, useState } from 'react'
 import { ConfigProvider, Spin, theme, App as AntApp } from 'antd'
@@ -25,6 +26,7 @@ export function Root() {
   useEffect(() => {
     syncNativeBackground(mode)
   }, [mode])
+  useEffect(() => trackActiveScrollbars(document), [])
   useEffect(() => {
     void matrixService.listenForNotificationDecryptRequests()
     void startAutomationApiIntegration()
