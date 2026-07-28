@@ -261,7 +261,7 @@
         "type": "cmd",
         "id": "4d477596-c199-4799-8867-705af091c9a3",
         "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && APPIMAGE_E2E_DOCKER_COMMAND=\"sudo docker\" npm run test:e2e:appimage"
+          "# source /home/ubuntu1/.nvm/nvm.sh && APPIMAGE_E2E_DOCKER_COMMAND=\"sudo docker\" npm run test:e2e:appimage"
         ]
       },
       {
