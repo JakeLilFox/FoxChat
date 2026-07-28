@@ -291,9 +291,33 @@ async function attachPng() {
   )
 }
 
+async function selectSettingsTab(name) {
+  let tab = await findText('[role="tab"]', name)
+  if (!tab) {
+    await clickCss('[aria-label="Open settings"]')
+    tab = await waitFor(`${name} settings tab`, () => findText('[role="tab"]', name))
+  }
+  await command('POST', sessionPath('/execute/sync'), {
+    script: 'arguments[0].click()',
+    args: [{ [elementKey]: tab }],
+  })
+  await waitFor(`${name} settings panel`, () =>
+    command('POST', sessionPath('/execute/sync'), {
+      script: `
+        const clean = value => String(value || '').replace(/\\s+/g, ' ').trim()
+        return [...document.querySelectorAll('[role="tab"]')].some(element =>
+          element.getClientRects().length &&
+          clean(element.textContent) === arguments[0] &&
+          element.getAttribute('aria-selected') === 'true'
+        )
+      `,
+      args: [name],
+    }),
+  )
+}
+
 async function restoreRecovery() {
-  await clickCss('[aria-label="Open settings"]')
-  await clickText('[role="tab"]', 'Security')
+  await selectSettingsTab('Security')
   await clickText('button', 'Restore encrypted history')
   await fill('input[placeholder*="xxxx"], input[placeholder*="Recovery"], textarea', recoveryKey)
   await clickText('button', 'Restore keys')
@@ -324,8 +348,7 @@ async function clickExternalLink() {
 }
 
 async function signOut() {
-  await clickCss('[aria-label="Open settings"]')
-  await clickText('[role="tab"]', 'Account')
+  await selectSettingsTab('Account')
   await clickText('button', 'Sign out', false)
   await waitFor('login after sign out', () => findCss('[data-testid="login-page"]'), 60_000)
   console.log(`PASS ${platformName}: signed out and revoked the desktop session`)
