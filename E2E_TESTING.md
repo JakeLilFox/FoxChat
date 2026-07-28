@@ -41,6 +41,25 @@ npm run test:unit
 npm run test:e2e:ui
 ```
 
+## AppImage smoke test
+
+The AppImage smoke test runs the already-built Linux desktop artifact inside
+an Arch Linux container. It copies that exact AppImage into the container,
+opens it under Xvfb, verifies that the FoxChat login view renders, signs in
+with account 1, and verifies that the room drawer appears.
+
+It does not build an AppImage. Build or obtain the artifact first, then run:
+
+```sh
+npm run test:e2e:appimage
+```
+
+By default, the runner looks in
+`src-tauri/target/release/bundle/appimage/`. Set `APPIMAGE_E2E_PATH` to test a
+specific existing artifact. The account 1 homeserver, user, and password are
+loaded from `test.env`. Screenshots and the native-driver log are written to
+`test-results/appimage/`.
+
 For live Matrix testing, copy `test.env.example` to `test.env` and fill it in.
 A placeholder `test.env` is created in the workspace and is ignored by Git.
 Enable both safety switches only for dedicated accounts:
