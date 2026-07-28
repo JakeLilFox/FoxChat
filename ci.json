@@ -252,20 +252,6 @@
       },
       {
         "type": "cmd",
-        "id": "fa462908-b0bf-4ef9-95a8-815a3ef37ee3",
-        "cmd": [
-          "for i in $(seq 1 60); do driver=$(sudo docker info --format '{{.Driver}}' 2>/dev/null) && [ \"$driver\" = \"vfs\" ] && exit 0; sleep 1; done; echo 'Docker did not start with the vfs storage driver within 60 seconds' >&2; sudo docker info 2>&1 || true; cat /var/log/dockerd.log 2>/dev/null || true; exit 1"
-        ]
-      },
-      {
-        "type": "cmd",
-        "id": "4d477596-c199-4799-8867-705af091c9a3",
-        "cmd": [
-          "# source /home/ubuntu1/.nvm/nvm.sh && APPIMAGE_E2E_DOCKER_COMMAND=\"sudo docker\" npm run test:e2e:appimage"
-        ]
-      },
-      {
-        "type": "cmd",
         "id": "70a06e06-29ef-49ed-9164-f89df8048aa2",
         "cmd": [
           "cargo build --manifest-path bridge/Cargo.toml --release && mkdir -p bridge/dist && cp bridge/target/release/foxchat-bridge bridge/dist/FoxChatBridge-linux-x86_64"
