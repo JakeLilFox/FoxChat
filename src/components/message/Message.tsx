@@ -60,7 +60,7 @@ import {
   VideoExpandButton,
   devJson,
 } from '../../styles'
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Avatar,
   Button,
@@ -189,19 +189,18 @@ export const Message = memo(function Message({
   const c = event.getContent()
   const galleryEvents = gallery?.length && gallery.length > 1 ? gallery : undefined
   const galleryKey = galleryEvents?.map((item) => item.getId() ?? item.getTxnId()).join('|') ?? ''
-  const [galleryImages, setGalleryImages] = useState<Map<number, ViewerImage>>(() => new Map())
-  useEffect(() => setGalleryImages(new Map()), [galleryKey])
-  const updateGalleryImage = useCallback((index: number, image?: ViewerImage) => {
-    setGalleryImages((current) => {
-      const existing = current.get(index)
-      if (existing?.url === image?.url && existing?.alt === image?.alt) return current
-      if (!image && !existing) return current
-      const next = new Map(current)
-      if (image) next.set(index, image)
-      else next.delete(index)
-      return next
-    })
-  }, [])
+  const galleryRegistry = useMemo(
+    () => ({ key: galleryKey, images: new Map<number, ViewerImage>() }),
+    [galleryKey],
+  )
+  const galleryImages = galleryRegistry.images
+  const updateGalleryImage = useCallback(
+    (index: number, image?: ViewerImage) => {
+      if (image) galleryImages.set(index, image)
+      else galleryImages.delete(index)
+    },
+    [galleryImages],
+  )
   const openGalleryImage = (index: number, image: ViewerImage) => {
     const available = new Map(galleryImages)
     available.set(index, image)
