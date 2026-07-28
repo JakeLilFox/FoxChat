@@ -254,14 +254,14 @@
         "type": "cmd",
         "id": "171f1985-9ff5-49a8-a65f-b16c8e5841ae",
         "cmd": [
-          "screen -dmS docker sudo dockerd --storage-driver=vfs"
+          "screen -dmS docker sudo dockerd --storage-driver=vfs --feature containerd-snapshotter=false"
         ]
       },
       {
         "type": "cmd",
         "id": "fa462908-b0bf-4ef9-95a8-815a3ef37ee3",
         "cmd": [
-          "for i in $(seq 1 60); do sudo docker info >/dev/null 2>&1 && exit 0; sleep 1; done; echo 'Docker did not start within 60 seconds' >&2; exit 1"
+          "for i in $(seq 1 60); do driver=$(sudo docker info --format '{{.Driver}}' 2>/dev/null) && [ \"$driver\" = \"vfs\" ] && exit 0; sleep 1; done; echo 'Docker did not start with the vfs storage driver within 60 seconds' >&2; sudo docker info 2>&1 || true; exit 1"
         ]
       },
       {
