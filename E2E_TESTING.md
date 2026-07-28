@@ -41,12 +41,26 @@ npm run test:unit
 npm run test:e2e:ui
 ```
 
-## AppImage smoke test
+## AppImage desktop E2E
 
-The AppImage smoke test runs the already-built Linux desktop artifact inside
-an Arch Linux container. It copies that exact AppImage into the container,
-opens it under Xvfb, verifies that the FoxChat login view renders, signs in
-with account 1, and verifies that the room drawer appears.
+The AppImage test runs the already-built Linux desktop artifact through
+`tauri-driver` and the native WebKit WebDriver. The full journey opens the
+real AppImage, signs in, creates and opens a private fixture room, sends text,
+uploads a PNG, verifies both Matrix events on the homeserver, checks that an
+external link is handed to the OS browser opener, and signs out. A separate
+recovery journey restores encrypted history with the account recovery key.
+
+The release CI runs three isolated journeys:
+
+- Ubuntu 24.04 recovery with account 1.
+- Ubuntu 24.04 functional E2E with account 2.
+- Arch Linux container functional E2E with account 3.
+
+The Arch image pins Mesa 24.0.7 and its matching LLVM 17 runtime. Current
+Arch WebKitGTK otherwise aborts under headless CI with `EGL_BAD_PARAMETER`.
+The CI Dockerfile reuses the Linux `tauri-driver` already built on the worker
+and uses Docker's legacy builder for compatibility with the worker's VFS
+storage driver.
 
 It does not build an AppImage. Build or obtain the artifact first, then run:
 
@@ -56,9 +70,22 @@ npm run test:e2e:appimage
 
 By default, the runner looks in
 `src-tauri/target/release/bundle/appimage/`. Set `APPIMAGE_E2E_PATH` to test a
-specific existing artifact. The account 1 homeserver, user, and password are
-loaded from `test.env`. Screenshots and the native-driver log are written to
-`test-results/appimage/`.
+specific existing artifact. `APPIMAGE_E2E_ACCOUNT` selects the account from
+`test.env` and defaults to account 1. Screenshots, the captured external URL,
+and the native-driver log are written to `test-results/appimage/`.
+
+To run the same harness directly on an Ubuntu host that already has
+`tauri-driver`, `WebKitWebDriver`, Xvfb, xauth, and DBus:
+
+```sh
+APPIMAGE_E2E_ACCOUNT=2 \
+APPIMAGE_E2E_PLATFORM=ubuntu-local \
+APPIMAGE_E2E_SKIP_RECOVERY=1 \
+npm run test:e2e:appimage:host
+```
+
+Set `APPIMAGE_E2E_RECOVERY_ONLY=1` to run only login, recovery-key restore,
+and sign-out. Do not combine it with `APPIMAGE_E2E_SKIP_RECOVERY=1`.
 
 For live Matrix testing, copy `test.env.example` to `test.env` and fill it in.
 A placeholder `test.env` is created in the workspace and is ignored by Git.

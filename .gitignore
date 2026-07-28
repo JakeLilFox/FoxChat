@@ -27,6 +27,7 @@ tauri-signing.key.pub
 test.env
 playwright-report/
 test-results/
+tests/appimage/.ci-tools/
 .playwright/
 ci_apk.apk
 andriod.env

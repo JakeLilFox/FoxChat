@@ -252,6 +252,44 @@
       },
       {
         "type": "cmd",
+        "id": "0a47062d-8396-4bb8-8fcc-ef9670ac8d43",
+        "cmd": [
+          "sudo apt-get update && sudo apt-get install -y --no-install-recommends webkit2gtk-driver xvfb xauth dbus-x11 && if ! command -v tauri-driver >/dev/null 2>&1; then cargo install tauri-driver --locked; fi"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "449a8c9c-e315-4efe-b832-abf3fe252499",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_ACCOUNT=1 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04-recovery && export APPIMAGE_E2E_RECOVERY_ONLY=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu-recovery && npm run test:e2e:appimage:host"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "2919d04d-e8c9-449b-9e11-41f23533064a",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_ACCOUNT=2 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04 && export APPIMAGE_E2E_SKIP_RECOVERY=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu && npm run test:e2e:appimage:host"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "7de0ee41-bfeb-4217-a53c-fabcadbe6c35",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export DOCKER_BUILDKIT=0 && export APPIMAGE_E2E_DOCKERFILE=tests/appimage/Dockerfile.ci && export APPIMAGE_E2E_DOCKER_NETWORK=host && export APPIMAGE_E2E_TAURI_DRIVER=\"$(command -v tauri-driver)\" && export APPIMAGE_E2E_ACCOUNT=3 && export APPIMAGE_E2E_PLATFORM=arch-linux && export APPIMAGE_E2E_SKIP_RECOVERY=1 && if [ -e /dev/dri/card0 ] && [ -e /dev/dri/renderD128 ]; then export APPIMAGE_E2E_DRI_DEVICES=/dev/dri/card0,/dev/dri/renderD128; fi && npm run test:e2e:appimage"
+        ]
+      },
+      {
+        "type": "asset",
+        "id": "e8359dc3-f7ae-4fb9-b3f7-05306d5d82d5",
+        "files": [
+          "test-results/appimage-ubuntu-recovery/",
+          "test-results/appimage-ubuntu/",
+          "test-results/appimage/"
+        ],
+        "prefix": "desktop-e2e"
+      },
+      {
+        "type": "cmd",
         "id": "70a06e06-29ef-49ed-9164-f89df8048aa2",
         "cmd": [
           "cargo build --manifest-path bridge/Cargo.toml --release && mkdir -p bridge/dist && cp bridge/target/release/foxchat-bridge bridge/dist/FoxChatBridge-linux-x86_64"

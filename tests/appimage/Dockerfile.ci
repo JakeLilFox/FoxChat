@@ -1,8 +1,3 @@
-FROM archlinux:base-devel AS tools
-
-RUN pacman -Syu --noconfirm --needed cargo
-RUN cargo install tauri-driver --locked --root /opt/tauri-driver
-
 FROM ubuntu:24.04 AS webdriver
 
 RUN apt-get update \
@@ -42,12 +37,15 @@ RUN pacman -Syu --noconfirm --needed \
 
 ENV LD_LIBRARY_PATH=/opt/llvm17/usr/lib
 
-COPY --from=tools /opt/tauri-driver/bin/tauri-driver /usr/local/bin/tauri-driver
+COPY tests/appimage/.ci-tools/bin/tauri-driver /usr/local/bin/tauri-driver
 COPY --from=webdriver /opt/webkit-webdriver /opt/webkit-webdriver
 COPY tests/appimage/webkit-webdriver.sh /usr/local/bin/WebKitWebDriver
 COPY scripts/appimage-smoke.mjs /opt/foxchat-test/appimage-smoke.mjs
 COPY tests/appimage/run.sh /opt/foxchat-test/run.sh
 
-RUN chmod +x /opt/foxchat-test/run.sh /usr/local/bin/WebKitWebDriver
+RUN chmod +x \
+      /opt/foxchat-test/run.sh \
+      /usr/local/bin/tauri-driver \
+      /usr/local/bin/WebKitWebDriver
 
 ENTRYPOINT ["/opt/foxchat-test/run.sh"]
