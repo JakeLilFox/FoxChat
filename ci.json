@@ -246,7 +246,7 @@
         "type": "cmd",
         "id": "c073572c-3772-4c8c-aa36-f3370d793649",
         "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && test -s tauri-signing.key && export TAURI_SIGNING_PRIVATE_KEY_PATH=\"$PWD/tauri-signing.key\" && node scripts/desktop-release.mjs prepare \"${version}\" && export VITE_BUILD_VERSION=${version} && npm run desktop:build"
+          "source /home/ubuntu1/.nvm/nvm.sh && test -s tauri-signing.key && export TAURI_SIGNING_PRIVATE_KEY=\"tauri-signing.key\" && node scripts/desktop-release.mjs prepare \"${version}\" && export VITE_BUILD_VERSION=${version} && npm run desktop:build"
         ]
       },
       {
