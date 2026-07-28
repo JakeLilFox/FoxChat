@@ -10,6 +10,7 @@ import { ThemeProvider } from 'styled-components'
 import { matrixService } from '../matrix/MatrixClientService'
 import { syncNativeBackground } from '../platform/nativeBackground'
 import { startAutomationApiIntegration } from '../platform/automationApi'
+import { listenForDesktopExternalLinks } from '../platform/externalLinks'
 
 export function Root() {
   const [mode, setMode] = useState<ThemeMode>(
@@ -27,6 +28,7 @@ export function Root() {
     syncNativeBackground(mode)
   }, [mode])
   useEffect(() => trackActiveScrollbars(document), [])
+  useEffect(() => listenForDesktopExternalLinks(), [])
   useEffect(() => {
     void matrixService.listenForNotificationDecryptRequests()
     void startAutomationApiIntegration()

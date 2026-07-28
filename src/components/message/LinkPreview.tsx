@@ -3,6 +3,8 @@ import { LinkPreviewCard } from '../../styles'
 import { useEffect, useState } from 'react'
 import { MatrixClient } from 'matrix-js-sdk'
 import { showImageViewer } from '../../lib/media'
+import { isDesktopApp } from '../../platform/desktopUpdates'
+import { openExternalUrl } from '../../platform/externalLinks'
 
 const PREVIEW_CACHE_KEY = 'foxchat.linkPreviewMetadata.v1'
 const PREVIEW_CACHE_LIMIT = 250
@@ -149,7 +151,14 @@ export function LinkPreview({
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      onClick={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation()
+        if (!isDesktopApp()) return
+        event.preventDefault()
+        void openExternalUrl(url).catch((error) => {
+          console.error('FoxChat could not open the external link', error)
+        })
+      }}
       $withImage={!compact && !!(image || video)}
     >
       <span className="previewText">

@@ -53,6 +53,7 @@ import {
   type MatrixSecurityStatus,
 } from '../matrix/MatrixClientService'
 import { deviceDeletionAccountManagementUrl } from '../lib/accountManagement'
+import { openExternalUrl } from '../platform/externalLinks'
 
 export function SettingsDialog({
   open,
@@ -354,12 +355,14 @@ export function SettingsDialog({
   }
   const beginRemoveDevice = async (device: MatrixDeviceSession) => {
     if (deviceDeletionManagementUri) {
-      window.open(
-        deviceDeletionAccountManagementUrl(deviceDeletionManagementUri, device.deviceId),
-        '_blank',
-        'noopener,noreferrer',
-      )
-      message.info('Finish signing out this device in your account manager')
+      try {
+        await openExternalUrl(
+          deviceDeletionAccountManagementUrl(deviceDeletionManagementUri, device.deviceId),
+        )
+        message.info('Finish signing out this device in your account manager')
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : 'Could not open account manager')
+      }
       return
     }
     try {

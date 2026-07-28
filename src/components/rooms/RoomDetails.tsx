@@ -79,6 +79,7 @@ export function RoomDetails({ room, drawer = false }: { room?: Room; drawer?: bo
       <div
         className="action"
         role="button"
+        aria-label="Invite"
         tabIndex={0}
         onClick={() =>
           window.dispatchEvent(
