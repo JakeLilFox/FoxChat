@@ -3,6 +3,7 @@ import {
   ContentHelpers,
   createClient,
   DeviceVerification,
+  Direction,
   EventStatus,
   EventType,
   IndexedDBCryptoStore,
@@ -50,6 +51,7 @@ import { isHiddenTimelineActivity, isVisibleMessageEvent } from '../lib/eventHel
 import { isServerEventId } from '../lib/matrixIdentifiers'
 import { applyPermissionLevels } from '../lib/powerLevelPaths'
 import { DEVICE_DELETE_ACTION } from '../lib/accountManagement'
+import { GALLERY_EVENT_FIELD } from '../lib/gallery'
 
 declare global {
   interface Window {
@@ -158,6 +160,8 @@ const AUTO_READ_ALL_ACCOUNTS_KEY = 'foxchat.matrix.autoReadAllAccounts'
 export const AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT = 'foxchat-auto-read-all-accounts-changed'
 const PRESENCE_MODES_KEY = 'foxchat.matrix.presenceModes'
 const LOCAL_ROOM_NAMES_KEY = 'foxchat.matrix.localRoomNames'
+const REACTION_PARENT_CACHE_KEY = 'foxchat.matrix.reactionParents'
+const REACTION_PARENT_CACHE_LIMIT = 2_000
 const PRESENCE_IDLE_MS = 5 * 60 * 1000
 const normalizedPowerLevel = (value: unknown) =>
   value === null
@@ -221,6 +225,7 @@ export class MatrixClientService {
     Map<string, { eventId: string; timestamp: number }>
   >()
   private replyEventCache = new Map<string, Promise<MatrixEvent | undefined>>()
+  private reactionLoads = new Map<string, Promise<void>>()
   private sendQueues = new Map<string, Promise<void>>()
   private encryptionMembersPrepared = new WeakMap<MatrixClient, Set<string>>()
   private secondaryClients = new Map<string, MatrixClientService>()
@@ -854,6 +859,12 @@ export class MatrixClientService {
       if (room && event.isDecryptionFailure()) this.scheduleDecryptionRetry(event, room)
       this.observers.forEach((x) => x.onEvent?.(event, room))
     })
+    const publishRedaction = (event: MatrixEvent, room: Room) => {
+      this.trackEventOwner(client, event, room)
+      this.observers.forEach((observer) => observer.onEvent?.(event, room))
+    }
+    client.on(RoomEvent.Redaction, publishRedaction)
+    client.on(RoomEvent.RedactionCancelled, publishRedaction)
     client.on(RoomEvent.Receipt, (event, room) => {
       this.trackEventOwner(client, event, room)
       this.observers.forEach((x) => x.onEvent?.(event, room))
@@ -1263,12 +1274,22 @@ export class MatrixClientService {
   private trackRoomOwner(client: MatrixClient, room: Room) {
     this.applyLocalRoomName(room)
     this.roomOwners.set(room, client)
-    for (const event of room.getLiveTimeline().getEvents()) this.eventOwners.set(event, client)
+    for (const event of room.getLiveTimeline().getEvents()) {
+      this.eventOwners.set(event, client)
+      // IndexedDB restores relation events into the timeline, but its in-memory
+      // aggregation can still be empty until those events appear in /sync again.
+      room.relations.aggregateChildEvent(event)
+    }
   }
 
   private trackEventOwner(client: MatrixClient, event: MatrixEvent, room?: Room) {
     this.eventOwners.set(event, client)
     if (room) this.roomOwners.set(room, client)
+    if (event.getType() === EventType.Reaction) {
+      const parentEventId = event.getRelation()?.event_id
+      const roomId = event.getRoomId() ?? room?.roomId
+      if (roomId && parentEventId) this.rememberReactionParent(roomId, parentEventId)
+    }
   }
 
   clientForRoomInstance(room: Room) {
@@ -2225,13 +2246,109 @@ export class MatrixClientService {
     )
   }
 
+  private reactionParentKey(roomId: string, eventId: string) {
+    return `${roomId}\n${eventId}`
+  }
+
+  private reactionParentKeys() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(REACTION_PARENT_CACHE_KEY) ?? '[]')
+      return new Set(
+        Array.isArray(parsed)
+          ? parsed.filter((value): value is string => typeof value === 'string')
+          : [],
+      )
+    } catch {
+      return new Set<string>()
+    }
+  }
+
+  private storeReactionParentKeys(keys: Set<string>) {
+    try {
+      localStorage.setItem(
+        REACTION_PARENT_CACHE_KEY,
+        JSON.stringify([...keys].slice(-REACTION_PARENT_CACHE_LIMIT)),
+      )
+    } catch {}
+  }
+
+  private rememberReactionParent(roomId: string, eventId: string) {
+    const key = this.reactionParentKey(roomId, eventId)
+    const keys = this.reactionParentKeys()
+    keys.delete(key)
+    keys.add(key)
+    this.storeReactionParentKeys(keys)
+  }
+
+  private forgetReactionParent(roomId: string, eventId: string) {
+    const keys = this.reactionParentKeys()
+    if (!keys.delete(this.reactionParentKey(roomId, eventId))) return
+    this.storeReactionParentKeys(keys)
+  }
+
   async sendReaction(event: MatrixEvent, key: string) {
     const roomId = event.getRoomId()
     const eventId = event.getId()
     if (!roomId || !eventId) throw new Error('Cannot react to an unsent message')
-    return this.clientForRoom(roomId)?.sendEvent(roomId, EventType.Reaction, {
+    const client = this.clientForRoom(roomId)
+    if (!client) throw new Error('Client is not started')
+    const response = await client.sendEvent(roomId, EventType.Reaction, {
       'm.relates_to': { rel_type: RelationType.Annotation, event_id: eventId, key },
     })
+    this.rememberReactionParent(roomId, eventId)
+    return response
+  }
+
+  mayHaveReactions(event: MatrixEvent) {
+    const roomId = event.getRoomId()
+    const eventId = event.getId()
+    if (!roomId || !eventId) return false
+    return (
+      event.getServerAggregatedRelation(RelationType.Annotation) !== undefined ||
+      this.reactionParentKeys().has(this.reactionParentKey(roomId, eventId))
+    )
+  }
+
+  loadReactions(event: MatrixEvent) {
+    const roomId = event.getRoomId()
+    const eventId = event.getId()
+    if (!roomId || !eventId) return Promise.resolve()
+    const client = this.clientForEvent(event) ?? this.clientForRoom(roomId)
+    if (!client) return Promise.resolve()
+    const cacheKey = this.reactionParentKey(roomId, eventId)
+    const existing = this.reactionLoads.get(cacheKey)
+    if (existing) return existing
+    const load = (async () => {
+      const events: MatrixEvent[] = []
+      const seenTokens = new Set<string>()
+      let from: string | undefined
+      do {
+        const page = await client.relations(
+          roomId,
+          eventId,
+          RelationType.Annotation,
+          EventType.Reaction,
+          { dir: Direction.Backward, from, limit: 100 },
+        )
+        events.push(...page.events)
+        from = page.nextBatch && !seenTokens.has(page.nextBatch) ? page.nextBatch : undefined
+        if (from) seenTokens.add(from)
+      } while (from)
+
+      const room = client.getRoom(roomId)
+      if (!room) return
+      for (const reaction of events) {
+        this.trackEventOwner(client, reaction, room)
+        room.relations.aggregateChildEvent(reaction)
+      }
+      if (events.length === 0) this.forgetReactionParent(roomId, eventId)
+      this.observers.forEach((observer) => observer.onEvent?.(event, room))
+    })().catch((error) => {
+      this.reactionLoads.delete(cacheKey)
+      throw error
+    })
+    this.reactionLoads.set(cacheKey, load)
+    return load
   }
 
   async sendReply(roomId: string, body: string, event: MatrixEvent, accountId?: string) {
@@ -2325,9 +2442,21 @@ export class MatrixClientService {
   }
 
   async redactMessage(event: MatrixEvent) {
-    if (!event.getRoomId() || !event.getId()) throw new Error('Cannot remove this message')
-    const client = this.clientForEventAuthor(event) ?? this.clientForRoom(event.getRoomId()!)
-    return client?.redactEvent(event.getRoomId()!, event.getId()!)
+    const roomId = event.getRoomId()
+    const eventId = event.getId()
+    if (!roomId || !eventId) throw new Error('Cannot remove this message')
+    const client = this.clientForEventAuthor(event) ?? this.clientForRoom(roomId)
+    if (!client) throw new Error('Cannot remove this message')
+    const room = client.getRoom(roomId)
+    const relation = event.getRelation()
+    const response = await client.redactEvent(roomId, eventId)
+    if (room && relation?.event_id && relation.rel_type) {
+      await room.relations
+        .getChildEventsForEvent(relation.event_id, relation.rel_type, event.getType())
+        ?.removeEvent(event)
+    }
+    this.observers.forEach((observer) => observer.onEvent?.(event, room ?? undefined))
+    return response
   }
 
   async setPinned(event: MatrixEvent, pinned: boolean) {
@@ -2805,6 +2934,7 @@ export class MatrixClientService {
     abortController?: AbortController,
     spoiler = false,
     accountId?: string,
+    galleryId?: string,
   ) {
     const client = this.clientForRoomAccount(roomId, accountId)
     if (!client) throw new Error('Client is not started')
@@ -2830,6 +2960,7 @@ export class MatrixClientService {
               url: upload.content_uri,
               info,
               ...(spoiler ? { 'page.codeberg.everypizza.msc4193.spoiler': true } : {}),
+              ...(galleryId ? { [GALLERY_EVENT_FIELD]: galleryId } : {}),
             },
             txnId,
           ),

@@ -8,5 +8,10 @@ export {
   takeSharedFiles,
   type NativeSharedFile,
 } from './sharedFiles'
-export { showImageViewer, type ViewerImage } from './imageViewer'
+export {
+  showImageGallery,
+  showImageViewer,
+  type ViewerGallery,
+  type ViewerImage,
+} from './imageViewer'
 export { showVideoViewer, type ViewerVideo } from './videoViewer'

@@ -1,15 +1,23 @@
 import { type ViewerImage } from '../../../lib/media'
 import { ImageViewerLayer, ViewerContextMenu } from '../../../styles'
-import { type TouchList, useRef, useState } from 'react'
+import { type TouchList, useEffect, useRef, useState } from 'react'
 import { App as AntApp } from 'antd'
-import { CloseOutlined } from '@ant-design/icons'
+import { CloseOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons'
+
+const GALLERY_SWIPE_DISTANCE = 60
 
 export function ImageViewer({
   image,
+  index,
+  total,
+  onNavigate,
   onClose,
   onMultiTouchChange,
 }: {
   image: ViewerImage
+  index: number
+  total: number
+  onNavigate: (index: number) => void
   onClose: () => void
   onMultiTouchChange: (active: boolean) => void
 }) {
@@ -80,6 +88,31 @@ export function ImageViewer({
     if (transformed()) reset()
     else dismiss()
   }
+  const navigate = (offset: number) => {
+    const next = Math.min(total - 1, Math.max(0, index + offset))
+    reset()
+    if (next !== index) onNavigate(next)
+    suppressGestureClick()
+  }
+  useEffect(() => {
+    reset()
+  }, [image.url])
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft' && index > 0) {
+        event.preventDefault()
+        navigate(-1)
+      } else if (event.key === 'ArrowRight' && index < total - 1) {
+        event.preventDefault()
+        navigate(1)
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        dismiss()
+      }
+    }
+    window.addEventListener('keydown', keydown)
+    return () => window.removeEventListener('keydown', keydown)
+  })
   const begin = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     if (event.pointerType === 'touch') {
@@ -152,8 +185,16 @@ export function ImageViewer({
   }
   const end = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === 'touch') event.preventDefault()
-    const wasTouchTap =
-      event.pointerType === 'touch' && !gesture.current.moved && pointers.current.size === 1
+    const start = gesture.current
+    const dx = event.clientX - (start.startX ?? event.clientX)
+    const dy = event.clientY - (start.startY ?? event.clientY)
+    const gallerySwipe =
+      event.pointerType === 'touch' &&
+      start.scale <= 1.01 &&
+      total > 1 &&
+      Math.abs(dx) >= GALLERY_SWIPE_DISTANCE &&
+      Math.abs(dx) > Math.abs(dy) * 1.2
+    const wasTouchTap = event.pointerType === 'touch' && !start.moved && pointers.current.size === 1
     pointers.current.delete(event.pointerId)
     if (pointers.current.size === 1) {
       const point = [...pointers.current.values()][0]
@@ -168,11 +209,12 @@ export function ImageViewer({
     if (!pointers.current.size) {
       pointerTouchActive.current = false
       onMultiTouchChange(false)
-      if (wasTouchTap) {
+      if (gallerySwipe) navigate(dx < 0 ? 1 : -1)
+      else if (wasTouchTap) {
         activate()
         // Suppress the matching compatibility click.
         suppressGestureClick()
-      }
+      } else if (start.scale <= 1.01) reset()
       releaseGestureClickSuppression()
     }
   }
@@ -276,12 +318,22 @@ export function ImageViewer({
       }
       return
     }
+    const touch = event.changedTouches[0]
+    const dx = touch ? touch.clientX - start.startX : 0
+    const dy = touch ? touch.clientY - start.startY : 0
+    const gallerySwipe =
+      !start.multi &&
+      start.scale <= 1.01 &&
+      total > 1 &&
+      Math.abs(dx) >= GALLERY_SWIPE_DISTANCE &&
+      Math.abs(dx) > Math.abs(dy) * 1.2
     touchGesture.current = undefined
     onMultiTouchChange(false)
-    if (!start.moved && !start.multi) {
+    if (gallerySwipe) navigate(dx < 0 ? 1 : -1)
+    else if (!start.moved && !start.multi) {
       activate()
       suppressGestureClick()
-    }
+    } else if (start.scale <= 1.01) reset()
     releaseGestureClickSuppression()
   }
   const sourceBlob = async () => {
@@ -383,6 +435,34 @@ export function ImageViewer({
           transform: `translate(-50%,-50%) translate(${view.x}px,${view.y}px) scale(${view.scale})`,
         }}
       />
+      {total > 1 && (
+        <>
+          <button
+            className="viewerNav viewerPrevious"
+            aria-label="Previous image"
+            disabled={index === 0}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation()
+              navigate(-1)
+            }}
+          >
+            <LeftOutlined />
+          </button>
+          <button
+            className="viewerNav viewerNext"
+            aria-label="Next image"
+            disabled={index === total - 1}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation()
+              navigate(1)
+            }}
+          >
+            <RightOutlined />
+          </button>
+        </>
+      )}
       <button
         className="viewerClose"
         aria-label="Close image"
@@ -394,6 +474,7 @@ export function ImageViewer({
       >
         <CloseOutlined />
       </button>
+      {total > 1 && <div className="viewerCounter">{`${index + 1} / ${total}`}</div>}
       <div className="viewerHint">
         Pinch or scroll to zoom · drag to move · tap to reset or close
       </div>

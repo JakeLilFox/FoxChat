@@ -1,28 +1,28 @@
 import { ImageViewer } from './ImageViewer'
-import { type ViewerImage } from '../../../lib/media'
+import { type ViewerGallery } from '../../../lib/media'
 import { useEffect, useRef, useState } from 'react'
 
 export function ImageViewerHost() {
-  const [image, setImage] = useState<ViewerImage>()
-  const imageRef = useRef<ViewerImage | undefined>(undefined)
+  const [gallery, setGallery] = useState<ViewerGallery>()
+  const galleryRef = useRef<ViewerGallery | undefined>(undefined)
   const multiTouchRef = useRef(false)
   useEffect(() => {
-    imageRef.current = image
-  }, [image])
+    galleryRef.current = gallery
+  }, [gallery])
   useEffect(() => {
     const open = (event: Event) => {
-      const next = (event as CustomEvent<ViewerImage>).detail
-      if (!imageRef.current) history.pushState({ ...history.state, foxchatImageViewer: true }, '')
-      setImage(next)
+      const next = (event as CustomEvent<ViewerGallery>).detail
+      if (!galleryRef.current) history.pushState({ ...history.state, foxchatImageViewer: true }, '')
+      setGallery(next)
     }
     const back = () => {
-      if (!imageRef.current) return
+      if (!galleryRef.current) return
       if (multiTouchRef.current) {
         // Ignore Android history events during pinch gestures.
         history.pushState({ ...history.state, foxchatImageViewer: true }, '')
         return
       }
-      setImage(undefined)
+      setGallery(undefined)
     }
     window.addEventListener('foxchat-image-viewer', open)
     window.addEventListener('popstate', back)
@@ -33,11 +33,15 @@ export function ImageViewerHost() {
   }, [])
   const close = () => {
     if (history.state?.foxchatImageViewer) history.back()
-    else setImage(undefined)
+    else setGallery(undefined)
   }
-  return image ? (
+  const image = gallery?.images[gallery.index]
+  return gallery && image ? (
     <ImageViewer
       image={image}
+      index={gallery.index}
+      total={gallery.images.length}
+      onNavigate={(index) => setGallery((current) => (current ? { ...current, index } : current))}
       onClose={close}
       onMultiTouchChange={(active) => {
         multiTouchRef.current = active

@@ -36,6 +36,7 @@ import {
   roomTopic,
 } from '../../lib/eventHelpers'
 import { formatFileSize } from '../../lib/format'
+import { assignGalleryIds, galleryTimelineItems } from '../../lib/gallery'
 import { useMediaUrl } from '../../lib/hooks'
 import {
   anonymizedFile,
@@ -532,6 +533,7 @@ function TimelineView({
         (timelineAppearance.avatar && isAvatarChange(event)),
     )
   }, [timelineEvents, allEvents.length, visibleMessages, windowEnd, timelineAppearance])
+  const renderedEvents = useMemo(() => galleryTimelineItems(events), [events])
   const newestId = allEvents.at(-1)?.getId()
   useEffect(() => {
     if (!room) return
@@ -1482,6 +1484,7 @@ function TimelineView({
   const send = () => {
     const body = draftRef.current.trim()
     const images = [...pendingImagesRef.current]
+    const galleryIds = assignGalleryIds(images, (file) => file.type.startsWith('image/'))
     if (!body && !images.length) return
     if (!canSendMessages) {
       message.error('No joined account can send messages in this room')
@@ -1598,6 +1601,7 @@ function TimelineView({
               abortController,
               spoilers.has(image),
               sendAccountId,
+              galleryIds.get(image),
             )
             render((x) => x + 1)
           } catch (e) {
@@ -2046,9 +2050,12 @@ function TimelineView({
               ))}
             </TimelineLoadingSkeleton>
           ) : (
-            events.map((e) => (
+            renderedEvents.map(({ event: e, gallery }) => (
               <div key={e.getTxnId() ?? e.getId() ?? `${e.getTs()}`} data-event-id={e.getId()}>
-                {e.getId() === unreadStart && <Unread>Unread messages</Unread>}
+                {(e.getId() === unreadStart ||
+                  gallery?.some((galleryEvent) => galleryEvent.getId() === unreadStart)) && (
+                  <Unread>Unread messages</Unread>
+                )}
                 {isMembershipChange(e) ? (
                   <MembershipStatus event={e} />
                 ) : isCallMembershipChange(e) ? (
@@ -2060,7 +2067,11 @@ function TimelineView({
                     showAvatar={timelineAppearance.avatar}
                   />
                 ) : (
-                  <Message event={e} revision={`${matrixRevision}:${renderTick}`} />
+                  <Message
+                    event={e}
+                    gallery={gallery}
+                    revision={`${matrixRevision}:${renderTick}`}
+                  />
                 )}
               </div>
             ))

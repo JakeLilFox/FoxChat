@@ -1035,6 +1035,8 @@ export const ReactionPicker = styled.div`
   }
 `
 export const ReactionChips = styled.div<{ $mine: boolean }>`
+  position: relative;
+  z-index: 5;
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
@@ -1707,6 +1709,67 @@ export const Media = styled.div`
     text-decoration: none;
   }
 `
+export const MessageGalleryGrid = styled.div<{ $count: number }>`
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  width: min(520px, 68vw);
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+  .galleryTile {
+    position: relative;
+    min-width: 0;
+    aspect-ratio: 1;
+    overflow: hidden;
+    border: 0;
+    padding: 0;
+    background: ${(p) => p.theme.input};
+  }
+  .galleryTile:nth-child(5):last-child {
+    grid-column: 1 / -1;
+    aspect-ratio: 2 / 1;
+  }
+  .galleryTile > button:not(.spoilerReveal) {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: zoom-in;
+  }
+  .galleryTile img {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    object-fit: cover;
+    border-radius: 0;
+  }
+  .galleryTile .spoilerReveal {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    background: rgba(22, 23, 29, 0.68);
+    color: white;
+    cursor: pointer;
+    font-weight: 700;
+    backdrop-filter: blur(18px);
+  }
+  ${(p) =>
+    p.$count === 3
+      ? `
+    .galleryTile:first-child {
+      grid-row: span 2;
+      aspect-ratio: auto;
+    }
+  `
+      : ''}
+  @media (max-width: 600px) {
+    width: min(100%, 76vw);
+  }
+`
 export const LinkPreviewCard = styled.a<{ $withImage?: boolean }>`
   display: grid;
   grid-template-columns: minmax(0, 1fr) 92px;
@@ -2195,6 +2258,50 @@ export const ImageViewerLayer = styled.div`
     white-space: nowrap;
     animation: viewerFadeIn 0.3s 0.08s ease-out both;
   }
+  .viewerCounter {
+    position: absolute;
+    left: 50%;
+    top: 18px;
+    transform: translateX(-50%);
+    padding: 6px 11px;
+    border-radius: 18px;
+    background: rgba(0, 0, 0, 0.55);
+    color: white;
+    font-size: 12px;
+    font-weight: 700;
+    pointer-events: none;
+  }
+  .viewerNav {
+    position: absolute;
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    color: white;
+    font-size: 18px;
+    cursor: pointer;
+    transition:
+      background 0.16s ease,
+      opacity 0.16s ease;
+  }
+  .viewerPrevious {
+    left: 18px;
+  }
+  .viewerNext {
+    right: 18px;
+  }
+  .viewerNav:hover:not(:disabled) {
+    background: rgba(35, 35, 42, 0.85);
+  }
+  .viewerNav:disabled {
+    opacity: 0.25;
+    cursor: default;
+  }
   .viewerClose {
     position: absolute;
     right: 18px;
@@ -2216,6 +2323,23 @@ export const ImageViewerLayer = styled.div`
   .viewerClose:hover {
     background: rgba(35, 35, 42, 0.85);
     transform: scale(1.06);
+  }
+  @media (max-width: 600px) {
+    .viewerNav {
+      width: 40px;
+      height: 40px;
+    }
+    .viewerPrevious {
+      left: 10px;
+    }
+    .viewerNext {
+      right: 10px;
+    }
+    .viewerHint {
+      max-width: calc(100vw - 24px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   }
   @media (prefers-reduced-motion: reduce) {
     animation: none;

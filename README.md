@@ -4,6 +4,9 @@ FoxChat is a Matrix client built with React, TypeScript, and Tauri. It runs as
 a website, a desktop app (Windows/macOS/Linux), and an Android app, all from
 one codebase.
 
+Use FoxChat on the web or download the latest desktop binaries and Android
+APK from the [FoxChat homepage](https://foxchat.jakefox.de).
+
 It started as a personal project focused on multi-account use, so you can be
 logged into several Matrix accounts at once and see their rooms in one
 sidebar, and on doing the details well: encryption, calls, and notifications

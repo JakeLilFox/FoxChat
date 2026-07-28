@@ -823,6 +823,81 @@ export default function ApiSpecs() {
             <article className="specCard">
               <div className="specHeading">
                 <div>
+                  <code>foxchat.gallery</code>
+                  <h3>Image galleries</h3>
+                </div>
+                <dl className="specMeta">
+                  <div>
+                    <dt>Scope</dt>
+                    <dd>Message content</dd>
+                  </div>
+                  <div>
+                    <dt>Value</dt>
+                    <dd>UUID string</dd>
+                  </div>
+                </dl>
+              </div>
+              <p>
+                Every gallery image is sent as its own standard <code>m.room.message</code> event
+                with <code>msgtype: "m.image"</code>. Images from the same sender that carry the
+                same <code>foxchat.gallery</code> UUID are displayed together by FoxChat.
+              </p>
+              <CodeBlock label="Two separate m.room.message content objects">
+                {`[
+  {
+    "msgtype": "m.image",
+    "body": "first.jpg",
+    "url": "mxc://example.org/first",
+    "info": {
+      "mimetype": "image/jpeg",
+      "size": 241320
+    },
+    "foxchat.gallery": "8e44f189-f714-4eab-a01a-a753f6ef7c9c"
+  },
+  {
+    "msgtype": "m.image",
+    "body": "second.jpg",
+    "url": "mxc://example.org/second",
+    "info": {
+      "mimetype": "image/jpeg",
+      "size": 198402
+    },
+    "foxchat.gallery": "8e44f189-f714-4eab-a01a-a753f6ef7c9c"
+  }
+]`}
+              </CodeBlock>
+              <ReferenceTable
+                columns={['Rule', 'Behavior']}
+                rows={[
+                  ['Event model', 'One normal Matrix image event is sent for every image.'],
+                  ['Maximum size', 'A gallery UUID groups at most five image events.'],
+                  [
+                    'Overflow',
+                    'Additional images receive a new UUID in consecutive batches of five.',
+                  ],
+                  [
+                    'Single image',
+                    'A standalone image has no gallery field; an overflow batch of one keeps its new UUID.',
+                  ],
+                  [
+                    'Viewer navigation',
+                    'Arrows and horizontal swipes move within the gallery while the image is at 1× zoom.',
+                  ],
+                  [
+                    'Zoomed image',
+                    'Horizontal gestures pan the enlarged image instead of changing images.',
+                  ],
+                ]}
+              />
+              <p className="specNote">
+                Clients that do not understand <code>foxchat.gallery</code> ignore the field and
+                display each event as an ordinary image message.
+              </p>
+            </article>
+
+            <article className="specCard">
+              <div className="specHeading">
+                <div>
                   <code>chat.foxchat.appearance</code>
                   <h3>Chat background</h3>
                 </div>

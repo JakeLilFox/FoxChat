@@ -12,6 +12,7 @@ import type { Browser as WdioBrowser, ChainablePromiseElement } from 'webdriveri
 import { adbBin, stopEmulator } from './lib/avd.mjs'
 import { androidHome as resolveAndroidHome } from './lib/sdk.mjs'
 import {
+  adb,
   clearAppData,
   closeBackgroundApp,
   dumpsysActivitySummary,
@@ -525,17 +526,31 @@ async function waitForStoredAndroidAccounts(
   })
 }
 
-async function allowAndroidNotificationPermission(browser: WdioBrowser) {
+async function allowAndroidNotificationPermission(browser: WdioBrowser, packageName: string) {
   await switchToNative(browser)
   const allow = browser.$('id=com.android.permissioncontroller:id/permission_allow_button')
   const appeared = await allow
     .waitForDisplayed({ timeout: 15_000 })
     .then(() => true)
     .catch(() => false)
-  if (!appeared)
+  if (!appeared) {
+    const permission = adb([
+      'shell',
+      'pm',
+      'check-permission',
+      '--user',
+      '0',
+      'android.permission.POST_NOTIFICATIONS',
+      packageName,
+    ]).trim()
+    if (permission === 'granted') {
+      await switchToWebview(browser)
+      return
+    }
     throw new Error(
-      'Android did not request the "Allow FoxChat to send you notifications" permission after login',
+      `Android did not request the "Allow FoxChat to send you notifications" permission after login and POST_NOTIFICATIONS is ${permission || 'not granted'}`,
     )
+  }
   await allow.click()
   await allow.waitForDisplayed({ timeout: 10_000, reverse: true })
   await switchToWebview(browser)
@@ -1180,19 +1195,6 @@ async function primeEncryptedSession(
   )
 }
 
-async function findLastImageMessage(browser: WdioBrowser): Promise<ChainablePromiseElement> {
-  const deadline = Date.now() + 30_000
-  while (Date.now() < deadline) {
-    const rows = await browser.$$('[data-event-id^="$"]')
-    for (const row of [...rows].reverse()) {
-      const img = row.$('img[loading="lazy"]')
-      if (await img.isExisting()) return img
-    }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 1000))
-  }
-  throw new Error('No image message appeared in the timeline within 30s')
-}
-
 async function waitForDecryptedNotificationWithDiagnostics(
   browser: WdioBrowser,
   packageName: string,
@@ -1240,30 +1242,119 @@ async function waitForDecryptedNotificationWithDiagnostics(
   }
 }
 
-async function sendImageAndOpenViewer(page: Page, browser: WdioBrowser) {
-  const localFixture = resolve(__dirname, '..', '..', 'foxlogo.png')
-  await page.locator('input[type="file"]').setInputFiles(localFixture)
+async function sendImageGalleryAndOpenViewer(page: Page, browser: WdioBrowser) {
+  const fixtures = [
+    resolve(__dirname, '..', '..', 'foxlogo.png'),
+    resolve(__dirname, '..', '..', 'public', 'favicon.png'),
+  ]
+  await page.locator('input[type="file"]').setInputFiles(fixtures)
+  await page.getByText('foxlogo.png', { exact: true }).waitFor({
+    state: 'visible',
+    timeout: 15_000,
+  })
+  await page.getByText('favicon.png', { exact: true }).waitFor({
+    state: 'visible',
+    timeout: 15_000,
+  })
+  await page.getByRole('button', { name: 'Send message' }).click()
+  await page.getByTestId('message-gallery').last().waitFor({
+    state: 'visible',
+    timeout: 60_000,
+  })
+
+  await switchToWebview(browser)
+  const gallery = testId(browser, 'message-gallery')
+  await gallery.waitForDisplayed({ timeout: 60_000 })
+  await byRole(browser, 'button', 'Open image 1 of 2').click()
+  await byRole(browser, 'dialog', 'Image viewer').waitForDisplayed({ timeout: 10_000 })
+}
+
+async function sendSingleImageAndOpenViewer(page: Page, browser: WdioBrowser) {
+  const fixture = resolve(__dirname, '..', '..', 'foxlogo.png')
+  await page.locator('input[type="file"]').setInputFiles(fixture)
   await page.getByText('foxlogo.png', { exact: true }).waitFor({
     state: 'visible',
     timeout: 15_000,
   })
   await page.getByRole('button', { name: 'Send message' }).click()
-  await page
-    .locator('[data-event-id^="$"] img[loading="lazy"]')
-    .last()
-    .waitFor({ state: 'visible', timeout: 60_000 })
+  await page.getByTestId('message-image').last().waitFor({
+    state: 'visible',
+    timeout: 60_000,
+  })
 
   await switchToWebview(browser)
-  const image = await findLastImageMessage(browser)
+  const standalone = testId(browser, 'message-image')
+  await standalone.waitForDisplayed({ timeout: 60_000 })
+  if (await testId(browser, 'message-gallery').isExisting())
+    throw new Error('A single image was rendered as a gallery')
+  const image = standalone.$('.//img')
+  await image.waitForDisplayed({ timeout: 10_000 })
   await image.click()
   await byRole(browser, 'dialog', 'Image viewer').waitForDisplayed({ timeout: 10_000 })
+  if (
+    (await byRole(browser, 'button', 'Previous image').isExisting()) ||
+    (await byRole(browser, 'button', 'Next image').isExisting())
+  )
+    throw new Error('A standalone image viewer unexpectedly exposed gallery navigation')
+  await byRole(browser, 'button', 'Close image').click()
+  await byRole(browser, 'dialog', 'Image viewer').waitForDisplayed({
+    timeout: 10_000,
+    reverse: true,
+  })
 }
 
 async function exerciseImageViewerGestures(browser: WdioBrowser) {
   await switchToWebview(browser)
-  const rect = await elementScreenRect(browser, 'img.viewerImage')
+  let rect = await elementScreenRect(browser, 'img.viewerImage')
+  await switchToWebview(browser)
   const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
   const short = Math.min(rect.width, rect.height)
+
+  const viewerAlt = () =>
+    browser.execute(() => document.querySelector<HTMLImageElement>('img.viewerImage')?.alt ?? null)
+  const firstAlt = await viewerAlt()
+  if (!firstAlt) throw new Error('Gallery viewer did not expose the first image label')
+
+  log('navigate the gallery with arrow buttons')
+  await byRole(browser, 'button', 'Next image').click()
+  await browser.waitUntil(async () => (await viewerAlt()) !== firstAlt, {
+    timeout: 10_000,
+    interval: 200,
+    timeoutMsg: 'Next-image arrow did not change the gallery image',
+  })
+  await byRole(browser, 'button', 'Previous image').click()
+  await browser.waitUntil(async () => (await viewerAlt()) === firstAlt, {
+    timeout: 10_000,
+    interval: 200,
+    timeoutMsg: 'Previous-image arrow did not return to the first gallery image',
+  })
+
+  log('swipe left and right between gallery images while unzoomed')
+  await switchToNative(browser)
+  await swipe(
+    browser,
+    { x: center.x + Math.min(110, rect.width * 0.25), y: center.y },
+    { x: center.x - Math.min(110, rect.width * 0.25), y: center.y },
+  )
+  await switchToWebview(browser)
+  await browser.waitUntil(async () => (await viewerAlt()) !== firstAlt, {
+    timeout: 10_000,
+    interval: 200,
+    timeoutMsg: 'Left swipe did not advance the gallery image',
+  })
+  rect = await elementScreenRect(browser, 'img.viewerImage')
+  await switchToNative(browser)
+  await swipe(
+    browser,
+    { x: center.x - Math.min(110, rect.width * 0.25), y: center.y },
+    { x: center.x + Math.min(110, rect.width * 0.25), y: center.y },
+  )
+  await switchToWebview(browser)
+  await browser.waitUntil(async () => (await viewerAlt()) === firstAlt, {
+    timeout: 10_000,
+    interval: 200,
+    timeoutMsg: 'Right swipe did not return to the first gallery image',
+  })
 
   log('pinch out to zoom in')
   await switchToWebview(browser)
@@ -1439,7 +1530,7 @@ async function main() {
 
     log('normal login as account 1')
     await loginAndroid(browser, cfg.account1)
-    await allowAndroidNotificationPermission(browser)
+    await allowAndroidNotificationPermission(browser, cfg.packageName)
     const primaryAndroidSessions = await sessionsFromAndroidStorage(browser)
     sessions.push(...primaryAndroidSessions)
     let primaryAndroidSession = primaryAndroidSessions.find(
@@ -1598,8 +1689,11 @@ async function main() {
       { roomId: secondRoomId, roomName: secondRoomName },
     )
 
-    log('send an image and open the viewer')
-    await sendImageAndOpenViewer(account4Page, browser)
+    log('send and view a standalone image')
+    await sendSingleImageAndOpenViewer(account4Page, browser)
+
+    log('send an image gallery and open the viewer')
+    await sendImageGalleryAndOpenViewer(account4Page, browser)
     await exerciseImageViewerGestures(browser)
 
     console.log('\nAndroid push notification journey completed successfully.')

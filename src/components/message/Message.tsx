@@ -20,7 +20,7 @@ import { recentStorage, rememberRecent, useRecents } from '../../lib/emojiData'
 import { eventBody } from '../../lib/eventHelpers'
 import { formatFileSize } from '../../lib/format'
 import { useMediaUrl } from '../../lib/hooks'
-import { showImageViewer } from '../../lib/media'
+import { showImageGallery, showImageViewer, type ViewerImage } from '../../lib/media'
 import { firstPreviewUrl } from '../../lib/messageText'
 import { roomRank } from '../../lib/roleHelpers'
 import { fittedMediaSize, messagePosition } from '../../lib/timelineHelpers'
@@ -42,6 +42,7 @@ import {
   FileCard,
   Media,
   MediaFrame,
+  MessageGalleryGrid,
   MessageMenuBackdrop,
   MessageReactionAction,
   MessageReplyAction,
@@ -59,7 +60,7 @@ import {
   VideoExpandButton,
   devJson,
 } from '../../styles'
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import {
   Avatar,
   Button,
@@ -89,16 +90,80 @@ import {
   RollbackOutlined,
   SmileOutlined,
 } from '@ant-design/icons'
-import { EventStatus, EventType, M_POLL_START, MatrixEvent, RelationType } from 'matrix-js-sdk'
+import {
+  EventStatus,
+  EventType,
+  M_POLL_START,
+  type MatrixClient,
+  MatrixEvent,
+  RelationType,
+} from 'matrix-js-sdk'
 import { matrixService } from '../../matrix/MatrixClientService'
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '😮', '😢']
 // Ignore the click that follows a mobile menu dismissal.
 let suppressMessageMenuOpenUntil = 0
-export const Message = memo(function Message({
+
+function MessageGalleryTile({
   event,
+  client,
+  index,
+  total,
+  onReady,
+  onOpen,
 }: {
   event: MatrixEvent
+  client?: MatrixClient
+  index: number
+  total: number
+  onReady: (index: number, image?: ViewerImage) => void
+  onOpen: (index: number, image: ViewerImage) => void
+}) {
+  const content = event.getContent()
+  const url = useMediaUrl(content, client)
+  const label = String(content.body || `Image ${index + 1}`)
+  const spoiler = content['page.codeberg.everypizza.msc4193.spoiler'] === true
+  const [revealed, setRevealed] = useState(false)
+  useEffect(() => {
+    onReady(index, url ? { url, alt: label } : undefined)
+    return () => onReady(index)
+  }, [index, label, onReady, url])
+  return (
+    <div
+      className="galleryTile"
+      data-event-id={index > 0 ? event.getId() : undefined}
+      data-gallery-index={index}
+    >
+      <button
+        type="button"
+        aria-label={`Open image ${index + 1} of ${total}`}
+        disabled={!url || (spoiler && !revealed)}
+        onClick={() => {
+          if (url) onOpen(index, { url, alt: label })
+        }}
+      >
+        {url ? <img src={url} alt={label} loading="lazy" /> : <Spin size="small" />}
+      </button>
+      {spoiler && !revealed && (
+        <button
+          className="spoilerReveal"
+          type="button"
+          aria-label={`Reveal spoiler image ${index + 1}`}
+          onClick={() => setRevealed(true)}
+        >
+          Reveal spoiler
+        </button>
+      )}
+    </div>
+  )
+}
+
+export const Message = memo(function Message({
+  event,
+  gallery,
+}: {
+  event: MatrixEvent
+  gallery?: MatrixEvent[]
   revision?: number | string
 }) {
   const { message, modal } = AntApp.useApp()
@@ -122,6 +187,31 @@ export const Message = memo(function Message({
   const sendFailed = event.status === EventStatus.NOT_SENT || event.status === EventStatus.CANCELLED
   const pending = event.status != null && !sendFailed
   const c = event.getContent()
+  const galleryEvents = gallery?.length && gallery.length > 1 ? gallery : undefined
+  const galleryKey = galleryEvents?.map((item) => item.getId() ?? item.getTxnId()).join('|') ?? ''
+  const [galleryImages, setGalleryImages] = useState<Map<number, ViewerImage>>(() => new Map())
+  useEffect(() => setGalleryImages(new Map()), [galleryKey])
+  const updateGalleryImage = useCallback((index: number, image?: ViewerImage) => {
+    setGalleryImages((current) => {
+      const existing = current.get(index)
+      if (existing?.url === image?.url && existing?.alt === image?.alt) return current
+      if (!image && !existing) return current
+      const next = new Map(current)
+      if (image) next.set(index, image)
+      else next.delete(index)
+      return next
+    })
+  }, [])
+  const openGalleryImage = (index: number, image: ViewerImage) => {
+    const available = new Map(galleryImages)
+    available.set(index, image)
+    const ordered = [...available.entries()].sort(([first], [second]) => first - second)
+    const selected = ordered.findIndex(([eventIndex]) => eventIndex === index)
+    showImageGallery(
+      ordered.map(([, item]) => item),
+      Math.max(0, selected),
+    )
+  }
   const imageSpoiler = c['page.codeberg.everypizza.msc4193.spoiler'] === true
   const [spoilerRevealed, setSpoilerRevealed] = useState(false)
   const sender = event.sender
@@ -136,6 +226,7 @@ export const Message = memo(function Message({
     selection?: string
   }>()
   const [reactionText, setReactionText] = useState('')
+  const [removedReactionKeys, setRemovedReactionKeys] = useState<Set<string>>(() => new Set())
   const [reportOpen, setReportOpen] = useState(false)
   const [reportReason, setReportReason] = useState('')
   const [reporting, setReporting] = useState(false)
@@ -474,6 +565,13 @@ export const Message = memo(function Message({
       )
     : undefined
   const reactions = relationSet?.getSortedAnnotationsByKey() ?? []
+  useEffect(() => {
+    if (reactions.length > 0 || !matrixService.mayHaveReactions(event)) return
+    void matrixService.loadReactions(event).catch((error) => {
+      console.warn('Could not restore message reactions', error)
+    })
+  }, [event, reactions.length])
+  const visibleReactions = reactions.filter(([key]) => !removedReactionKeys.has(key))
   const toggleReaction = async (key: string) => {
     key = key.trim()
     if (!key) return
@@ -483,8 +581,25 @@ export const Message = memo(function Message({
       const existing = own
         ? [...own].reverse().find((reaction) => reaction.getSender() === userId)
         : undefined
-      if (existing) await matrixService.redactMessage(existing)
-      else {
+      if (existing) {
+        setRemovedReactionKeys((current) => new Set(current).add(key))
+        try {
+          await matrixService.redactMessage(existing)
+        } catch (error) {
+          setRemovedReactionKeys((current) => {
+            const next = new Set(current)
+            next.delete(key)
+            return next
+          })
+          throw error
+        }
+      } else {
+        setRemovedReactionKeys((current) => {
+          if (!current.has(key)) return current
+          const next = new Set(current)
+          next.delete(key)
+          return next
+        })
         rememberRecent(recentStorage.reactions, key, (item) => item)
         await matrixService.sendReaction(event, key)
       }
@@ -715,9 +830,28 @@ export const Message = memo(function Message({
         </StickerContent>
       </StickerMessage>
     )
+  else if (type === 'm.image' && galleryEvents)
+    content = (
+      <Media data-testid="message-gallery" data-gallery-size={galleryEvents.length}>
+        <MessageGalleryGrid $count={galleryEvents.length}>
+          {galleryEvents.map((galleryEvent, index) => (
+            <MessageGalleryTile
+              key={galleryEvent.getTxnId() ?? galleryEvent.getId() ?? index}
+              event={galleryEvent}
+              client={matrixService.clientForEvent(galleryEvent)}
+              index={index}
+              total={galleryEvents.length}
+              onReady={updateGalleryImage}
+              onOpen={openGalleryImage}
+            />
+          ))}
+        </MessageGalleryGrid>
+        {caption}
+      </Media>
+    )
   else if (type === 'm.image')
     content = (
-      <Media>
+      <Media data-testid="message-image">
         <MediaFrame
           className={imageSpoiler && !spoilerRevealed ? 'foxchat-spoiler' : undefined}
           style={{
@@ -1052,9 +1186,9 @@ export const Message = memo(function Message({
             ↩
           </MessageReplyAction>
         </Tooltip>
-        {reactions.length > 0 && (
+        {visibleReactions.length > 0 && (
           <ReactionChips $mine={alignRight}>
-            {reactions.map(([key, items]) => {
+            {visibleReactions.map(([key, items]) => {
               const reacted = [...items].some((reaction) => reaction.getSender() === userId)
               const names = [...items]
                 .map(
@@ -1082,6 +1216,10 @@ export const Message = memo(function Message({
                   <button
                     type="button"
                     className={reacted ? 'mine' : ''}
+                    data-testid="reaction-chip"
+                    data-reaction-key={key}
+                    aria-label={`${key} ${items.size}`}
+                    aria-pressed={reacted}
                     onClick={(click) => {
                       click.stopPropagation()
                       void toggleReaction(key)
