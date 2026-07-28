@@ -26,6 +26,7 @@ mkdir -p "${output_directory}"
 export APPIMAGE_E2E_APPLICATION="${installed_appimage}"
 export APPIMAGE_E2E_OUTPUT_DIR="${output_directory}"
 export APPIMAGE_EXTRACT_AND_RUN=1
+export EGL_PLATFORM=x11
 export GDK_BACKEND=x11
 export GALLIUM_DRIVER=llvmpipe
 export LIBGL_ALWAYS_SOFTWARE=1
