@@ -535,6 +535,18 @@ function TimelineView({
   }, [timelineEvents, allEvents.length, visibleMessages, windowEnd, timelineAppearance])
   const renderedEvents = useMemo(() => galleryTimelineItems(events), [events])
   const newestId = allEvents.at(-1)?.getId()
+  useLayoutEffect(() => {
+    if (windowEndOffset !== 0 || scrollAnchor.current?.type !== 'bottom') return
+    const box = messagesRef.current
+    if (!box) return
+    // Revealing the live window can mount its final row after the jump handler has run. Align in
+    // the commit that contains that row instead of relying only on a fixed number of animation
+    // frames, which can leave one message-height below the real bottom under load.
+    box.scrollTop = box.scrollHeight
+    atBottom.current = true
+    followLatest.current = true
+    setShowJumpToLatest(false)
+  }, [contextTimeline, roomIdentity, windowEndOffset])
   useEffect(() => {
     if (!room) return
     const debugWindow = window as typeof window & {
@@ -1456,6 +1468,7 @@ function TimelineView({
     mountPositionRetryCleanup.current()
     positionStabilizerUserCancelled.current = false
     positionStabilizerSuperseded.current = false
+    userScrollIntentUntil.current = 0
     followLatest.current = true
     scrollAnchor.current = { type: 'bottom' }
     setContextTimeline(undefined)
