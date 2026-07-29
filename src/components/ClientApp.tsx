@@ -163,7 +163,7 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
           if (changed.has('*')) return [...matrixService.rooms()]
           const byId = new Map(current.map((room) => [room.roomId, room]))
           for (const roomId of changed) {
-            const next = matrixService.room(roomId)
+            const next = matrixService.joinedRoom(roomId)
             if (next) byId.set(roomId, next)
             else byId.delete(roomId)
           }

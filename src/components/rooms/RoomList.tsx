@@ -127,9 +127,6 @@ export function RoomList({
   const profileAnchor = useRef<HTMLDivElement | null>(null)
   const spaceSwipeStart = useRef<{ x: number; y: number } | undefined>(undefined)
   const activeSpace = matrixService.room(spacePath.at(-1) ?? '')
-  const client = activeSpace
-    ? matrixService.clientForRoom(activeSpace.roomId)
-    : matrixService.matrixClient
   const activeAccountClient = matrixService.activeAccountClient()
   useEffect(() => {
     const refresh = () => refreshPresence((value) => value + 1)
@@ -168,15 +165,11 @@ export function RoomList({
       activeSpace?.currentState
         .getStateEvents(EventType.SpaceChild)
         .filter((event) => Array.isArray(event.getContent().via))
-        .map(
-          (event) =>
-            client?.getRoom(event.getStateKey() ?? '') ??
-            matrixService.room(event.getStateKey() ?? ''),
-        )
+        .map((event) => matrixService.joinedRoom(event.getStateKey() ?? ''))
         .filter((child): child is Room => !!child) ?? []
     if (activeSpace) children.sort((a, b) => compareSpaceChildren(activeSpace, a, b))
     return children
-  }, [activeSpace, client, revision])
+  }, [activeSpace, revision])
   const activeSpaceBannerUrl = useMediaUrl(roomBannerContent(activeSpace))
   const roomMembershipKey = useMemo(
     () =>

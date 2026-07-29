@@ -1363,13 +1363,16 @@ export class MatrixClientService {
     }, membershipScore + events.length)
   }
 
-  private roomForReading(roomId: string) {
+  private roomForReading(roomId: string, joinedOnly = false) {
     const candidates = this.availableAccounts()
       .map((account) => ({
         client: account.client,
         room: account.client.getRoom(roomId),
       }))
-      .filter((candidate): candidate is { client: MatrixClient; room: Room } => !!candidate.room)
+      .filter(
+        (candidate): candidate is { client: MatrixClient; room: Room } =>
+          !!candidate.room && (!joinedOnly || candidate.room.getMyMembership() === 'join'),
+      )
     if (!candidates.length) return undefined
     const scores = candidates.map((candidate) => ({
       ...candidate,
@@ -1455,12 +1458,16 @@ export class MatrixClientService {
     return this.roomForReading(roomId)
   }
 
+  joinedRoom(roomId: string) {
+    return this.roomForReading(roomId, true)
+  }
+
   rooms() {
     const ids = new Set<string>()
-    for (const room of this.client?.getRooms() ?? []) ids.add(room.roomId)
-    for (const service of this.secondaryClients.values())
-      for (const room of service.matrixClient?.getRooms() ?? []) ids.add(room.roomId)
-    return [...ids].map((id) => this.room(id)).filter((room): room is Room => !!room)
+    for (const { client } of this.availableAccounts())
+      for (const room of client.getRooms())
+        if (room.getMyMembership() === 'join') ids.add(room.roomId)
+    return [...ids].map((id) => this.joinedRoom(id)).filter((room): room is Room => !!room)
   }
 
   spaceChildIds() {
@@ -3085,7 +3092,8 @@ export class MatrixClientService {
 
   async setTyping(roomId: string, typing: boolean) {
     const client = this.clientForRoom(roomId)
-    if (client?.getRoom(roomId)) await client.sendTyping(roomId, typing, 5000)
+    if (client?.getRoom(roomId)?.getMyMembership() === 'join')
+      await client.sendTyping(roomId, typing, 5000)
   }
 
   async markRead(event: MatrixEvent, visibleAccountId?: string) {
