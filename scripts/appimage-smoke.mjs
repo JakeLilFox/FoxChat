@@ -319,6 +319,7 @@ async function selectSettingsTab(name) {
 async function restoreRecovery() {
   await selectSettingsTab('Security')
   await clickText('button', 'Restore encrypted history')
+  await debugDump('recovery-modal-state')
   await fill('input[data-testid="recovery-secret-input"]', recoveryKey)
   await clickText('button', 'Restore keys')
   await waitFor('recovery success', async () => !(await bodyContains('Restore keys')), 120_000)
@@ -346,7 +347,20 @@ async function clickExternalLink() {
 async function signOut() {
   await selectSettingsTab('Account')
   await clickText('button', 'Sign out', false)
-  await waitFor('login after sign out', () => findCss('[data-testid="login-page"]'), 120_000)
+  const deadline = Date.now() + 120_000
+  let tick = 0
+  let found
+  while (Date.now() < deadline) {
+    found = await findCss('[data-testid="login-page"]').catch(() => null)
+    if (found) break
+    tick++
+    if (tick % 10 === 0) await debugDump(`signout-progress-${tick}`).catch(() => undefined)
+    await delay(500)
+  }
+  if (!found) {
+    await debugDump('signout-final').catch(() => undefined)
+    throw new Error('Timed out waiting for login after sign out')
+  }
   console.log(`PASS ${platformName}: signed out and revoked the desktop session`)
 }
 
@@ -354,6 +368,34 @@ async function screenshot(name) {
   if (!sessionId) return
   const encoded = await command('GET', sessionPath('/screenshot'))
   await writeFile(resolve(outputDirectory, name), Buffer.from(encoded, 'base64'))
+}
+
+async function debugDump(name) {
+  await screenshot(`${platformName}-${name}.png`).catch(() => undefined)
+  const info = await command('POST', sessionPath('/execute/sync'), {
+    script: `
+      return {
+        url: location.href,
+        title: document.title,
+        fields: [...document.querySelectorAll('input,textarea')].map(el => ({
+          tag: el.tagName,
+          type: el.type,
+          placeholder: el.placeholder,
+          testid: el.getAttribute('data-testid'),
+          visible: !!el.getClientRects().length,
+          outer: el.outerHTML.slice(0, 300),
+        })),
+        dialogTitles: [...document.querySelectorAll('.ant-modal-title')].map(el => ({
+          text: el.textContent,
+          visible: !!el.getClientRects().length,
+        })),
+      }
+    `,
+  }).catch((error) => ({ error: String(error) }))
+  await writeFile(
+    resolve(outputDirectory, `${platformName}-${name}.json`),
+    JSON.stringify(info, null, 2),
+  ).catch(() => undefined)
 }
 
 let fixture
