@@ -11,6 +11,7 @@ import {
   AVD_NAME,
   avdDir,
   avdExists,
+  ensureAdbEnabled,
   ensureAvdHome,
   isKvmAvailable,
   repairAvdPaths,
@@ -112,6 +113,7 @@ async function main() {
     extraArgs: ['-no-snapshot-load'],
   })
   await waitForBoot(home, { logFile })
+  ensureAdbEnabled(home)
   console.log(`Emulator ready (log: ${logFile}).`)
 
   console.log(JSON.stringify({ androidHome: home, avdName: AVD_NAME }, null, 2))

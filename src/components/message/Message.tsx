@@ -120,7 +120,11 @@ function MessageGalleryTile({
   onOpen: (index: number, image: ViewerImage) => void
 }) {
   const content = event.getContent()
-  const url = useMediaUrl(content, client)
+  const url = useMediaUrl(content, client, {
+    category: 'message-image',
+    roomId: event.getRoomId() ?? undefined,
+    timestamp: event.getTs(),
+  })
   const label = String(content.body || `Image ${index + 1}`)
   const spoiler = content['page.codeberg.everypizza.msc4193.spoiler'] === true
   const [revealed, setRevealed] = useState(false)
@@ -215,9 +219,30 @@ export const Message = memo(function Message({
   const [spoilerRevealed, setSpoilerRevealed] = useState(false)
   const sender = event.sender
   const name = sender?.name || event.getSender() || 'Unknown'
-  const mediaUrl = useMediaUrl(c, client)
-  const senderAvatar = useMediaUrl({ url: sender?.getMxcAvatarUrl() }, client)
   const type = event.getType() === 'm.sticker' ? 'm.sticker' : c.msgtype
+  const mediaCacheCategory =
+    type === 'm.sticker'
+      ? 'other-stickers'
+      : type === 'm.image'
+        ? 'message-image'
+        : type === 'm.video' || type === 'm.audio' || type === 'm.file'
+          ? 'message-media'
+          : undefined
+  const mediaUrl = useMediaUrl(
+    c,
+    client,
+    mediaCacheCategory
+      ? {
+          category: mediaCacheCategory,
+          roomId: event.getRoomId() ?? undefined,
+          timestamp: event.getTs(),
+        }
+      : undefined,
+  )
+  const senderAvatar = useMediaUrl({ url: sender?.getMxcAvatarUrl() }, client, {
+    category: 'avatar',
+    roomId: event.getRoomId() ?? undefined,
+  })
   const [menu, setMenu] = useState<{
     x: number
     y: number

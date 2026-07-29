@@ -227,7 +227,7 @@ export function ImagePackEditor({
         {items.map((item) => (
           <div className="packItem" key={item.id}>
             <div className="packImage">
-              <MatrixEmoteImage emote={{ ...item, client }} />
+              <MatrixEmoteImage emote={{ ...item, client, mine: true }} />
             </div>
             <Input
               value={item.name}

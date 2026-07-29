@@ -9,6 +9,8 @@ export type MatrixEmote = {
   info?: ImageInfo
   usage?: string[]
   client?: MatrixClient
+  // personal/favorited pack vs an ambient room/space pack
+  mine?: boolean
 }
 export type MatrixEmotePack = {
   pack?: { display_name?: string }
@@ -19,6 +21,7 @@ export type NamedEmotePack = {
   label: string
   pack: MatrixEmotePack
   client: MatrixClient
+  mine?: boolean
 }
 export type ImagePackAccount<TClient = MatrixClient> = {
   id: string
@@ -93,7 +96,9 @@ export type RoomImagePackLocation = {
   stateKey: string
   pack: MatrixEmotePack
 }
-const choosePackLocation = (candidates: RoomImagePackLocation[]): RoomImagePackLocation | undefined =>
+const choosePackLocation = (
+  candidates: RoomImagePackLocation[],
+): RoomImagePackLocation | undefined =>
   candidates.find(
     (candidate) => candidate.pack.images && Object.keys(candidate.pack.images).length > 0,
   ) ?? candidates.at(-1)
@@ -128,7 +133,9 @@ export const findRoomImagePacks = (room: Room): RoomImagePackLocation[] => {
   return [...byStateKey.values()]
     .map((candidates) => choosePackLocation(candidates)!)
     .filter((location) => packHasContent(location.pack))
-    .sort((a, b) => (a.pack.pack?.display_name ?? '').localeCompare(b.pack.pack?.display_name ?? ''))
+    .sort((a, b) =>
+      (a.pack.pack?.display_name ?? '').localeCompare(b.pack.pack?.display_name ?? ''),
+    )
 }
 export const imagePackRoomsTypes = ['m.image_pack.rooms', 'im.ponies.emote_rooms'] as const
 export const accountImagePackTypes = ['m.image_pack', 'im.ponies.user_emotes'] as const

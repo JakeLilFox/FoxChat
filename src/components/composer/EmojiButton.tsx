@@ -98,6 +98,7 @@ export function EmojiButton({
               ].join(' · '),
               pack,
               client: account.client,
+              mine: true,
             },
           ]
         : []
@@ -186,6 +187,7 @@ export function EmojiButton({
                 label: `Favorite · ${pack.pack?.display_name || known?.name || roomId}`,
                 pack,
                 client: source.client,
+                mine: true,
               }
             })
           const state = await source.client.roomState(roomId)
@@ -209,6 +211,7 @@ export function EmojiButton({
                 label: `Favorite · ${pack.pack?.display_name || roomName}`,
                 pack,
                 client: source.client,
+                mine: true,
               }
             })
         }),
@@ -249,6 +252,7 @@ export function EmojiButton({
                 info: item.info,
                 usage: item.usage,
                 client: source.client,
+                mine: source.mine,
               }
               return [`${name}:${item.url}`, emote]
             }),

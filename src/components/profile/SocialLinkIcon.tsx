@@ -4,7 +4,7 @@ import { type SocialLink, socialKind } from '../../lib/social'
 import { MatrixClient } from 'matrix-js-sdk'
 
 export function SocialLinkIcon({ item, client }: { item: SocialLink; client?: MatrixClient }) {
-  const media = useMediaUrl({ url: item.img }, client)
+  const media = useMediaUrl({ url: item.img }, client, { category: 'other-stickers' })
   const custom = item.img?.startsWith('mxc://') ? media : item.img
   return (
     <span className="socialIcon">

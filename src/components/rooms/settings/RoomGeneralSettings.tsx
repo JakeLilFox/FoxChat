@@ -83,7 +83,10 @@ export function RoomGeneralSettings({ room }: { room: Room }) {
   const [historyVisibility, setHistoryVisibility] = useState(room.getHistoryVisibility())
   const [busy, setBusy] = useState<string>()
   const avatarInput = useRef<HTMLInputElement>(null)
-  const avatarUrl = useMediaUrl({ url: room.getMxcAvatarUrl() ?? undefined })
+  const avatarUrl = useMediaUrl({ url: room.getMxcAvatarUrl() ?? undefined }, undefined, {
+    category: 'avatar',
+    roomId: room.roomId,
+  })
   const server = room.roomId.split(':').slice(1).join(':')
   const knownAliases = [
     ...new Set(

@@ -1804,6 +1804,7 @@ function TimelineView({
                 name={member.name || member.userId}
                 url={member.getMxcAvatarUrl()}
                 size={28}
+                roomId={room.roomId}
               />
             ),
           }))

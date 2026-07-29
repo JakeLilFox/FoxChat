@@ -56,7 +56,10 @@ export function SpaceOverview({
     .find((account) => account.client === client)?.id
   const accountRoom = client?.getRoom(room.roomId) ?? room
   const spaceInvited = accountRoom.getMyMembership() === 'invite'
-  const bannerUrl = useMediaUrl(roomBannerContent(accountRoom), client)
+  const bannerUrl = useMediaUrl(roomBannerContent(accountRoom), client, {
+    category: 'avatar',
+    roomId: room.roomId,
+  })
   useEffect(() => {
     let cancelled = false
     setLoading(true)

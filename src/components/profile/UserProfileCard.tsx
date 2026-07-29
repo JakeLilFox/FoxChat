@@ -48,8 +48,8 @@ export function UserProfileCard({ request }: { request: UserProfileRequest }) {
     typeof profile?.['chat.commet.profile_banner'] === 'string'
       ? profile['chat.commet.profile_banner']
       : undefined
-  const bannerUrl = useMediaUrl({ url: banner })
-  const resolvedAvatarUrl = useMediaUrl({ url: avatarUrl })
+  const bannerUrl = useMediaUrl({ url: banner }, undefined, { category: 'avatar' })
+  const resolvedAvatarUrl = useMediaUrl({ url: avatarUrl }, undefined, { category: 'avatar' })
   const bioValue = profile?.['chat.commet.profile_bio']
   const bio =
     typeof bioValue === 'string'

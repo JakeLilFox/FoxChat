@@ -5,7 +5,11 @@ import { MatrixClient, MatrixEvent } from 'matrix-js-sdk'
 
 export function GalleryImage({ event, client }: { event: MatrixEvent; client?: MatrixClient }) {
   const content = event.getContent()
-  const url = useMediaUrl(content, client)
+  const url = useMediaUrl(content, client, {
+    category: 'message-image',
+    roomId: event.getRoomId() ?? undefined,
+    timestamp: event.getTs(),
+  })
   const label = String(content.body || 'Room image')
   return (
     <button

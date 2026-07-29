@@ -119,6 +119,22 @@ describe('URL-backed navigation state', () => {
     window.removeEventListener('foxchat-room-navigated', navigated)
   })
 
+  it('clears a room when the desktop URL has no pathname', () => {
+    history.replaceState({}, '', '/?room=%21room%3Aexample.org')
+    const pathname = vi.spyOn(URL.prototype, 'pathname', 'get').mockReturnValue('')
+    const pushState = vi.spyOn(history, 'pushState').mockImplementation(() => undefined)
+
+    writeRoomUrl(undefined)
+
+    expect(pushState).toHaveBeenCalledWith(
+      expect.objectContaining({ foxchatRoom: undefined }),
+      '',
+      '/',
+    )
+    pushState.mockRestore()
+    pathname.mockRestore()
+  })
+
   it('accepts only known room modal values', () => {
     setRoomModalUrl('files')
     expect(roomModalFromUrl()).toBe('files')

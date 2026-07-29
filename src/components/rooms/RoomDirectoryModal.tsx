@@ -18,7 +18,10 @@ function DirectoryRow({
   onJoin: () => void
   joining: boolean
 }) {
-  const avatarUrl = useMediaUrl({ url: entry.avatar_url }, client)
+  const avatarUrl = useMediaUrl({ url: entry.avatar_url }, client, {
+    category: 'avatar',
+    roomId: entry.room_id,
+  })
   const title = entry.name || entry.canonical_alias || entry.room_id
   return (
     <div className="item">

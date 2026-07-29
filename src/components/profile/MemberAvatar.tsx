@@ -9,14 +9,16 @@ export function MemberAvatar({
   url,
   size = 32,
   showPresenceTooltip = true,
+  roomId,
 }: {
   userId: string
   name: string
   url?: string
   size?: number
   showPresenceTooltip?: boolean
+  roomId?: string
 }) {
-  const avatarUrl = useMediaUrl({ url })
+  const avatarUrl = useMediaUrl({ url }, undefined, { category: 'avatar', roomId })
   return (
     <PresenceAvatar userId={userId} showTooltip={showPresenceTooltip}>
       <Avatar

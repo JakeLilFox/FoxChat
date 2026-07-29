@@ -9,7 +9,7 @@ export function InlineMatrixEmote({
   alt: string
   title?: string
 }) {
-  const url = useMediaUrl({ url: src })
+  const url = useMediaUrl({ url: src }, undefined, { category: 'other-stickers' })
   return url ? (
     <img
       className="matrix-inline-emote"

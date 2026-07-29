@@ -110,8 +110,8 @@ export function SettingsDialog({
   const short = useMediaQuery('(max-height: 699px)')
   const compact = narrow || (android && short)
   const client = matrixService.matrixClient
-  const profileAvatarUrl = useMediaUrl({ url: profileAvatar })
-  const profileBannerUrl = useMediaUrl({ url: profileBanner })
+  const profileAvatarUrl = useMediaUrl({ url: profileAvatar }, undefined, { category: 'avatar' })
+  const profileBannerUrl = useMediaUrl({ url: profileBanner }, undefined, { category: 'avatar' })
   const backupSetupNeedsUnlock = !!security?.hasSecretStorageKey && !security.secretStorageKeyCached
   const closeBackupSetup = () => {
     if (settingUpBackup || backupRecoveryKey) return

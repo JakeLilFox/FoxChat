@@ -78,6 +78,7 @@ export function RoomParticipants({ room }: { room: Room }) {
                     userId={member.userId}
                     name={displayName}
                     url={member.getMxcAvatarUrl()}
+                    roomId={room.roomId}
                   />
                   <div className="grow" style={{ minWidth: 0 }}>
                     <div className="participantPrimary">

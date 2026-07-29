@@ -339,7 +339,7 @@ export const writeRoomUrl = (roomId: string | undefined, replace = false, spaceI
   history[replace ? 'replaceState' : 'pushState'](
     state,
     '',
-    `${url.pathname}${url.search}${url.hash}`,
+    `${url.pathname || '/'}${url.search}${url.hash}`,
   )
   window.dispatchEvent(new CustomEvent('foxchat-room-navigated', { detail: { roomId, spaceId } }))
 }

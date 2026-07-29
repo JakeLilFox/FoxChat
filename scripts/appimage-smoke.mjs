@@ -319,17 +319,8 @@ async function selectSettingsTab(name) {
 async function restoreRecovery() {
   await selectSettingsTab('Security')
   await clickText('button', 'Restore encrypted history')
-  // A generic placeholder/textarea CSS selector here previously matched other, invisible
-  // textareas elsewhere in the Settings dialog (profile bio, the backup-key display) via
-  // document.querySelector, which has no visibility filter - silently filling the wrong
-  // field and leaving the app's own recoverySecret state empty, so "Restore keys" no-oped
-  // forever with no error at all. The input carries this testid directly (rc-input spreads
-  // unrecognized props straight onto the native <input>, not onto the affix wrapper span).
   await fill('input[data-testid="recovery-secret-input"]', recoveryKey)
   await clickText('button', 'Restore keys')
-  // "Restore encrypted history" is also the trigger button's permanent label in the Security
-  // tab, so it never leaves the page and can't be used as a completion signal. "Restore keys"
-  // is unique to the recovery modal's own OK button and only visible while that modal is open.
   await waitFor('recovery success', async () => !(await bodyContains('Restore keys')), 120_000)
   console.log(`PASS ${platformName}: recovery key restored encrypted history`)
 }
@@ -371,6 +362,26 @@ async function dumpPageState(name) {
     resolve(outputDirectory, `${platformName}-${name}.json`),
     JSON.stringify(state, null, 2),
   ).catch(() => undefined)
+}
+
+async function closeRoomWithEscape() {
+  await command('POST', sessionPath('/actions'), {
+    actions: [
+      {
+        type: 'key',
+        id: 'keyboard',
+        actions: [
+          { type: 'keyDown', value: '\uE00C' },
+          { type: 'keyUp', value: '\uE00C' },
+        ],
+      },
+    ],
+  })
+  await command('DELETE', sessionPath('/actions')).catch(() => undefined)
+  await waitFor('empty room state after Escape', () => findText('h3', 'Select a room'))
+  const url = new URL(await command('GET', sessionPath('/url')))
+  if (url.searchParams.has('room')) throw new Error('Escape left the selected room in the URL')
+  console.log(`PASS ${platformName}: Escape closed the selected room`)
 }
 
 async function signOut() {
@@ -458,6 +469,7 @@ try {
 
     await clickExternalLink()
     await screenshot(`${platformName}-success.png`)
+    await closeRoomWithEscape()
     await signOut()
   }
 } catch (error) {

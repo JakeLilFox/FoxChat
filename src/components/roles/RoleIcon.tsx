@@ -3,7 +3,7 @@ import { type RoomRank } from '../../lib/roleHelpers'
 import { CrownOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 
 export function RoleIcon({ rank, size = 20 }: { rank: RoomRank; size?: number }) {
-  const iconUrl = useMediaUrl({ url: rank.icon })
+  const iconUrl = useMediaUrl({ url: rank.icon }, undefined, { category: 'other-stickers' })
   const style = {
     color: rank.color,
     fontSize: size,

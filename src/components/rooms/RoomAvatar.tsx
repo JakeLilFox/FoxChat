@@ -18,6 +18,7 @@ export function RoomAvatar({ room, size = 43 }: { room: Room; size?: number }) {
       url: accountRoom.getMxcAvatarUrl() ?? directMember?.getMxcAvatarUrl(),
     },
     client,
+    { category: 'avatar', roomId: room.roomId },
   )
   if (isVoiceChannel(accountRoom))
     return (

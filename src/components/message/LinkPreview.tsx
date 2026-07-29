@@ -116,7 +116,7 @@ export function LinkPreview({
       : typeof data?.['twitter:image'] === 'string'
         ? data['twitter:image']
         : undefined
-  const downloadedImage = useMediaUrl({ url: image }, client)
+  const downloadedImage = useMediaUrl({ url: image }, client, { category: 'opengraph' })
   const imageUrl = image && /^https?:\/\//i.test(image) ? image : downloadedImage
   const imageWidth = Number(data?.['og:image:width']) || undefined
   const imageHeight = Number(data?.['og:image:height']) || undefined
@@ -132,7 +132,7 @@ export function LinkPreview({
   const isPlayableVideo =
     !!video &&
     (videoType ? videoType.startsWith('video/') : /\.(mp4|webm|ogg|ogv|mov|m4v)(\?|$)/i.test(video))
-  const downloadedVideo = useMediaUrl({ url: video }, client)
+  const downloadedVideo = useMediaUrl({ url: video }, client, { category: 'opengraph' })
   const videoUrl =
     isPlayableVideo && video ? (/^https?:\/\//i.test(video) ? video : downloadedVideo) : undefined
   const videoWidth = Number(data?.['og:video:width']) || undefined

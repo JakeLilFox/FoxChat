@@ -2,11 +2,22 @@ import { useEffect, useState } from 'react'
 import { MatrixClient } from 'matrix-js-sdk'
 import { Attachment, EncryptedAttachment } from '@matrix-org/matrix-sdk-crypto-wasm'
 import { matrixService } from '../matrix/MatrixClientService'
+import { getCachedMedia, putCachedMedia, type MediaCacheCategory } from './mediaCache'
 
 type MediaDownload = { bytes: ArrayBuffer; mime?: string | null }
 const mediaDownloads = new Map<string, Promise<MediaDownload>>()
 
-export function useMediaUrl(input?: Record<string, any>, preferredClient?: MatrixClient) {
+export type MediaCacheHint = {
+  category: MediaCacheCategory
+  roomId?: string
+  timestamp?: number
+}
+
+export function useMediaUrl(
+  input?: Record<string, any>,
+  preferredClient?: MatrixClient,
+  cacheHint?: MediaCacheHint,
+) {
   const content = input ?? {}
   const encrypted = content.file
   const uri = content.url ?? encrypted?.url ?? content['m.url'] ?? content['m.image']?.url
@@ -72,14 +83,27 @@ export function useMediaUrl(input?: Record<string, any>, preferredClient?: Matri
       void pending.finally(() => mediaDownloads.delete(key)).catch(() => {})
       return pending
     }
+    const cacheCategory = cacheHint?.category
+    const cacheRoomId = cacheHint?.roomId
+    const cacheTimestamp = cacheHint?.timestamp
+    const cacheKey = cacheCategory && uri ? `${cacheCategory}:${uri}` : undefined
     const load = async (attempt: number) => {
       try {
+        if (cacheKey && attempt === 0) {
+          const cached = await getCachedMedia(cacheKey)
+          if (cached) {
+            if (cancelled) return
+            const nextUrl = URL.createObjectURL(cached.blob)
+            if (objectUrl) URL.revokeObjectURL(objectUrl)
+            objectUrl = nextUrl
+            setUrl(nextUrl)
+            return
+          }
+        }
         const { bytes, mime } = await download()
-        const nextUrl = URL.createObjectURL(
-          new Blob([bytes], {
-            type: content.info?.mimetype ?? mime ?? 'application/octet-stream',
-          }),
-        )
+        const mimetype = content.info?.mimetype ?? mime ?? 'application/octet-stream'
+        const blob = new Blob([bytes], { type: mimetype })
+        const nextUrl = URL.createObjectURL(blob)
         if (cancelled) {
           URL.revokeObjectURL(nextUrl)
           return
@@ -87,6 +111,15 @@ export function useMediaUrl(input?: Record<string, any>, preferredClient?: Matri
         if (objectUrl) URL.revokeObjectURL(objectUrl)
         objectUrl = nextUrl
         setUrl(nextUrl)
+        if (cacheKey && cacheCategory)
+          void putCachedMedia({
+            key: cacheKey,
+            category: cacheCategory,
+            blob,
+            mimetype,
+            roomId: cacheRoomId,
+            timestamp: cacheTimestamp,
+          })
       } catch {
         if (cancelled) return
         const nextAttempt = attempt + 1
@@ -101,7 +134,17 @@ export function useMediaUrl(input?: Record<string, any>, preferredClient?: Matri
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [client, authenticated, legacy, encrypted, content.info?.mimetype])
+  }, [
+    client,
+    authenticated,
+    legacy,
+    encrypted,
+    content.info?.mimetype,
+    uri,
+    cacheHint?.category,
+    cacheHint?.roomId,
+    cacheHint?.timestamp,
+  ])
   return url
 }
 

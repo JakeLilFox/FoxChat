@@ -219,6 +219,13 @@ export async function waitForBoot(home, { timeoutMs = 5 * 60_000, logFile } = {}
   )
 }
 
+// MainActivity.kt gates the release WebView's DevTools socket on this being 1
+export function ensureAdbEnabled(home) {
+  spawnSync(adbBin(home), ['shell', 'settings', 'put', 'global', 'adb_enabled', '1'], {
+    env: sdkEnv(home),
+  })
+}
+
 export function stopEmulator(home) {
   spawnSync(adbBin(home), ['emu', 'kill'], { env: sdkEnv(home) })
 }
