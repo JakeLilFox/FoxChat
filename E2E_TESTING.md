@@ -370,3 +370,62 @@ with bounded adb calls and progress is printed every 15 seconds. If Android
 does not boot within five minutes, the command fails with `adb devices`,
 `screen -ls`, and the tail of the emulator log instead of hanging forever in
 `adb wait-for-device`.
+
+## Marketing screenshot capture
+
+`npm run marketing:screenshots` runs a deterministic, real-Matrix marketing
+journey outside the Playwright test runner. It reads the distinct users
+configured in account slots 2–4 from `test.env`, temporarily gives them the
+fictional Alex, Nia, and Jamie profiles, opens independent browser clients,
+creates a shared room, types a natural conversation, uploads an image, adds a
+reaction, and captures:
+
+- a 1440-pixel desktop conversation;
+- the shared-image viewer;
+- a 430-pixel mobile conversation;
+- the same conversation using FoxChat's real dark-mode setting.
+
+The generated files and a credential-free `manifest.json` are written under
+`test-results/marketing-screenshots/<timestamp>/`. The source avatars and
+shared launch artwork are original SVG fixtures in
+`tests/assets/marketing/`, so the capture has no runtime dependency on an
+external image host.
+
+The normal safety switches still apply:
+`MATRIX_E2E_ENABLED=true` and `MATRIX_E2E_ALLOW_ROOM_MUTATION=true` must be set
+in `test.env`. By default the script restores every original profile, leaves
+and forgets the generated room, logs out its temporary devices, and stops the
+dev server it started. This happens after the PNG files are written, so the
+screenshots remain available.
+
+Useful variants:
+
+```sh
+npm run marketing:screenshots -- --dry-run
+npm run marketing:screenshots -- --headed
+npm run marketing:screenshots -- --output=test-results/campaign-july
+npm run marketing:screenshots -- --keep-room --keep-profiles
+```
+
+`--dry-run` validates the three account slots and local assets without
+contacting Matrix or opening a browser. `--keep-room` and `--keep-profiles`
+are explicit opt-ins for retaining the staged data. The equivalent environment
+variables are `MARKETING_DRY_RUN`, `MARKETING_HEADLESS=false`,
+`MARKETING_OUTPUT_DIR`, `MARKETING_KEEP_ROOM`, and
+`MARKETING_KEEP_PROFILES`. `E2E_BASE_URL` and `E2E_SKIP_WEBSERVER` behave the
+same as they do for the Playwright suite.
+
+Before changing a profile, the script writes the original profile values and
+generated room ID to the credential-free, gitignored
+`test-results/marketing-screenshots/active-run.json`. A later invocation
+automatically consumes that marker if the previous process was interrupted.
+`--audit` reports whether the temporary names are currently active.
+`--recover-interrupted` exists for captures made before recovery markers were
+available; it infers the old profiles from membership-only sync history and
+removes rooms matching both the configured marketing room name and topic.
+
+After every normal capture attempt, cleanup also declines every pending invite
+for account slots 2–4 and leaves/forgets every joined room whose name does not
+contain the exact text `Admin Room`. Rooms containing `Admin Room` are
+preserved. An explicit `--keep-room` protects the current generated marketing
+room from this broad cleanup in addition to the normal room cleanup.

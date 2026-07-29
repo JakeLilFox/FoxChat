@@ -17,7 +17,7 @@ import {
   ownMessagesOnRight,
 } from '../../lib/constants'
 import { recentStorage, rememberRecent, useRecents } from '../../lib/emojiData'
-import { eventBody } from '../../lib/eventHelpers'
+import { eventBody, isPreJoinHistoryUnavailable } from '../../lib/eventHelpers'
 import { formatFileSize } from '../../lib/format'
 import { useMediaUrl } from '../../lib/hooks'
 import { showImageGallery, showImageViewer, type ViewerImage } from '../../lib/media'
@@ -744,8 +744,15 @@ export const Message = memo(function Message({
   const visualSize = fittedMediaSize(c.info, 520, 420, 320, 240)
   const stickerLike = type === 'm.sticker'
   const isPollStart = M_POLL_START.matches(event.getType())
+  const historyUnavailable = isPreJoinHistoryUnavailable(event, room, userId)
   let content: React.ReactNode
-  if (event.isDecryptionFailure())
+  if (event.isDecryptionFailure() && historyUnavailable)
+    content = (
+      <DecryptionFailure data-testid="history-unavailable">
+        <span>Message unavailable · sent before you joined this room</span>
+      </DecryptionFailure>
+    )
+  else if (event.isDecryptionFailure())
     content = (
       <DecryptionFailure>
         <span>Unable to decrypt · waiting for message keys</span>

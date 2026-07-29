@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Illustrated avatar of Nia Okafor</title>
+  <defs>
+    <linearGradient id="background" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#78e6c8"/>
+      <stop offset="1" stop-color="#3c7bd6"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <circle cx="175" cy="151" r="68" fill="#2a1d1a"/>
+  <circle cx="253" cy="118" r="76" fill="#2a1d1a"/>
+  <circle cx="335" cy="153" r="68" fill="#2a1d1a"/>
+  <circle cx="256" cy="242" r="116" fill="#8b523d"/>
+  <path d="M143 215c8-107 51-156 116-156 72 0 110 55 112 158-39-20-70-51-91-91-28 47-73 76-137 89Z" fill="#2a1d1a"/>
+  <circle cx="216" cy="249" r="10" fill="#201715"/>
+  <circle cx="298" cy="249" r="10" fill="#201715"/>
+  <path d="M220 306c24 17 49 17 73 0" fill="none" stroke="#5f2928" stroke-linecap="round" stroke-width="12"/>
+  <circle cx="353" cy="260" r="13" fill="#ffcf5a"/>
+  <circle cx="159" cy="260" r="13" fill="#ffcf5a"/>
+  <path d="M92 512c13-106 76-157 164-157s151 51 164 157Z" fill="#172d5a"/>
+  <path d="m216 362 40 50 41-50" fill="#f4d5c5"/>
+</svg>

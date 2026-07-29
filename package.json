@@ -32,6 +32,7 @@
     "test:e2e:cleanup-rooms": "tsx scripts/e2e-cleanup-stale-rooms.mts",
     "test:e2e:android": "tsx scripts/android-e2e/run.mts",
     "test:e2e:report": "playwright show-report",
+    "marketing:screenshots": "node scripts/marketing-screenshots.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

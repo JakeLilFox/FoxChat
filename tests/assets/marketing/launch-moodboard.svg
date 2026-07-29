@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">FoxChat launch moodboard</title>
+  <desc id="desc">A colorful fictional product launch board with notes, shapes, and a chat preview.</desc>
+  <defs>
+    <linearGradient id="canvas" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f5f1ff"/>
+      <stop offset="1" stop-color="#e9f9f5"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#33285c" flood-opacity=".15"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="760" rx="48" fill="url(#canvas)"/>
+  <circle cx="1080" cy="96" r="150" fill="#ffcf69" opacity=".65"/>
+  <circle cx="115" cy="700" r="185" fill="#87dfc6" opacity=".55"/>
+  <text x="80" y="120" fill="#30285b" font-family="Inter,Arial,sans-serif" font-size="56" font-weight="800">Launch week ✦</text>
+  <text x="82" y="165" fill="#6d6685" font-family="Inter,Arial,sans-serif" font-size="24">A calmer place for the whole crew.</text>
+  <g filter="url(#shadow)">
+    <rect x="80" y="220" width="310" height="200" rx="26" fill="#fff"/>
+    <circle cx="135" cy="280" r="24" fill="#7a5ce5"/>
+    <rect x="177" y="258" width="153" height="16" rx="8" fill="#ddd7f4"/>
+    <rect x="177" y="286" width="109" height="12" rx="6" fill="#ebe8f7"/>
+    <rect x="124" y="340" width="220" height="18" rx="9" fill="#574983"/>
+    <rect x="124" y="374" width="166" height="14" rx="7" fill="#c7bfdc"/>
+  </g>
+  <g transform="rotate(4 580 333)" filter="url(#shadow)">
+    <rect x="440" y="220" width="300" height="225" rx="22" fill="#ffdf76"/>
+    <text x="480" y="282" fill="#483e36" font-family="Inter,Arial,sans-serif" font-size="30" font-weight="700">Tiny details</text>
+    <path d="m484 331 19 19 34-42M484 380l19 19 34-42" fill="none" stroke="#5e775c" stroke-linecap="round" stroke-linejoin="round" stroke-width="10"/>
+    <rect x="557" y="324" width="128" height="13" rx="7" fill="#b69b42"/>
+    <rect x="557" y="374" width="96" height="13" rx="7" fill="#b69b42"/>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="790" y="205" width="325" height="360" rx="35" fill="#30285b"/>
+    <rect x="825" y="245" width="255" height="280" rx="24" fill="#fff"/>
+    <circle cx="862" cy="292" r="17" fill="#ff8b9f"/>
+    <rect x="892" y="278" width="126" height="12" rx="6" fill="#dcd7eb"/>
+    <rect x="892" y="301" width="82" height="10" rx="5" fill="#eeeaf6"/>
+    <rect x="850" y="348" width="169" height="55" rx="19" fill="#eee9ff"/>
+    <rect x="886" y="430" width="170" height="55" rx="19" fill="#dff6ee"/>
+  </g>
+  <path d="M230 560c113-67 218-48 319 31 97 75 189 83 278 23" fill="none" stroke="#7357e8" stroke-dasharray="12 18" stroke-linecap="round" stroke-width="8"/>
+  <circle cx="226" cy="560" r="16" fill="#7357e8"/>
+  <path d="m819 585 34 29-42 16Z" fill="#7357e8"/>
+</svg>

@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
 
-import { EventType, MatrixEvent } from 'matrix-js-sdk'
+import { EventType, HistoryVisibility, MatrixEvent, type Room } from 'matrix-js-sdk'
 import { describe, expect, it } from 'vitest'
-import { eventBody, isMembershipChange, isVisibleMessageEvent } from '../../src/lib/eventHelpers'
+import {
+  eventBody,
+  isMembershipChange,
+  isPreJoinHistoryUnavailable,
+  isVisibleMessageEvent,
+} from '../../src/lib/eventHelpers'
 import { formatFileSize } from '../../src/lib/format'
 import { firstPreviewUrl, matrixUserIdFromHref } from '../../src/lib/messageText'
 
@@ -104,5 +109,47 @@ describe('content presentation helpers', () => {
 
     expect(isMembershipChange(joined)).toBe(true)
     expect(isMembershipChange(unchanged)).toBe(false)
+  })
+
+  it('recognizes failed history from before the user joined a joined-history room', () => {
+    const userId = '@me:example.org'
+    const message = event(EventType.RoomMessageEncrypted, {})
+    message.event.origin_server_ts = 1_000
+    const membership = event(EventType.RoomMember, { membership: 'join' })
+    membership.event.origin_server_ts = 2_000
+    const room = {
+      getHistoryVisibility: () => HistoryVisibility.Joined,
+      currentState: {
+        getStateEvents: (type: string, stateKey: string) =>
+          type === EventType.RoomMember && stateKey === userId ? membership : undefined,
+      },
+    } as unknown as Room
+
+    expect(isPreJoinHistoryUnavailable(message, room, userId)).toBe(true)
+  })
+
+  it('does not confuse other missing-key failures with unavailable pre-join history', () => {
+    const userId = '@me:example.org'
+    const beforeJoin = event(EventType.RoomMessageEncrypted, {})
+    beforeJoin.event.origin_server_ts = 1_000
+    const afterJoin = event(EventType.RoomMessageEncrypted, {})
+    afterJoin.event.origin_server_ts = 3_000
+    const membership = event(EventType.RoomMember, { membership: 'join' })
+    membership.event.origin_server_ts = 2_000
+    const room = (visibility: HistoryVisibility) =>
+      ({
+        getHistoryVisibility: () => visibility,
+        currentState: { getStateEvents: () => membership },
+      }) as unknown as Room
+
+    expect(isPreJoinHistoryUnavailable(beforeJoin, room(HistoryVisibility.Shared), userId)).toBe(
+      false,
+    )
+    expect(isPreJoinHistoryUnavailable(afterJoin, room(HistoryVisibility.Joined), userId)).toBe(
+      false,
+    )
+    expect(isPreJoinHistoryUnavailable(beforeJoin, room(HistoryVisibility.Joined), undefined)).toBe(
+      false,
+    )
   })
 })

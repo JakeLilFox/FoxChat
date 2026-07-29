@@ -1,4 +1,4 @@
-import { EventType, M_POLL_START, MatrixEvent, Room } from 'matrix-js-sdk'
+import { EventType, HistoryVisibility, M_POLL_START, MatrixEvent, Room } from 'matrix-js-sdk'
 import { textOf } from './pollHelpers'
 import { type TimelineAppearanceSettings, timelineAppearanceSettings } from './constants'
 
@@ -44,6 +44,25 @@ export const eventBody = (e?: MatrixEvent) => {
 
 export const roomTopic = (room: Room) =>
   String(room.currentState.getStateEvents(EventType.RoomTopic, '')?.getContent().topic ?? '').trim()
+
+export const isPreJoinHistoryUnavailable = (
+  event: MatrixEvent,
+  room: Room | null | undefined,
+  userId: string | undefined | null,
+) => {
+  if (!room || !userId || room.getHistoryVisibility() !== HistoryVisibility.Joined) return false
+  const membershipEvent = room.currentState.getStateEvents(EventType.RoomMember, userId)
+  if (
+    !membershipEvent ||
+    Array.isArray(membershipEvent) ||
+    membershipEvent.getContent().membership !== 'join'
+  )
+    return false
+  const joinedAt = membershipEvent.getTs()
+  const eventAt = event.getTs()
+  return Number.isFinite(joinedAt) && joinedAt > 0 && Number.isFinite(eventAt) && eventAt < joinedAt
+}
+
 export const isVisibleMessageEvent = (event: MatrixEvent) => {
   const relation = event.getOriginalContent()['m.relates_to'] as { rel_type?: string } | undefined
   return (

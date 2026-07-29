@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Illustrated avatar of Alex Rivera</title>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffb86b"/>
+      <stop offset="1" stop-color="#ff6f91"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <circle cx="256" cy="230" r="126" fill="#7a3e2f"/>
+  <circle cx="256" cy="244" r="108" fill="#f2b08c"/>
+  <path d="M148 220c9-99 55-145 127-139 75 6 105 59 100 144-39-7-73-35-89-70-28 37-76 61-138 65Z" fill="#473026"/>
+  <circle cx="218" cy="249" r="10" fill="#33241f"/>
+  <circle cx="296" cy="249" r="10" fill="#33241f"/>
+  <path d="M218 306c25 21 52 21 77 0" fill="none" stroke="#8d433e" stroke-linecap="round" stroke-width="12"/>
+  <path d="M99 512c11-105 72-157 157-157s146 52 157 157Z" fill="#493b8f"/>
+  <path d="m218 360 38 53 39-53" fill="#fff5ea"/>
+</svg>
