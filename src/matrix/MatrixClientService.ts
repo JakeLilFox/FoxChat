@@ -220,6 +220,7 @@ export class MatrixClientService {
   private secretStorageKeys = new Map<string, Uint8Array>()
   private cryptoSyncRunning?: Promise<void>
   private cryptoRetryTimer?: number
+  private cryptoRetryInFlight?: Promise<unknown>
   private lastReadReceipts = new WeakMap<
     MatrixClient,
     Map<string, { eventId: string; timestamp: number }>
@@ -722,9 +723,14 @@ export class MatrixClientService {
     for (const service of this.secondaryClients.values()) await service.stop()
     this.secondaryClients.clear()
     this.roomReadOwners.clear()
-    this.client?.stopClient()
     if (this.cryptoRetryTimer !== undefined) window.clearTimeout(this.cryptoRetryTimer)
     this.cryptoRetryTimer = undefined
+    // A pending decryption-retry batch may already be mid-flight against the crypto store
+    // (scheduleAllRoomDecryptionRetry is fire-and-forget). Let it finish before stopping the
+    // client and reloading - abandoning it mid-write is what can leave the crypto store's
+    // IndexedDB connection in a state the next page load has to wait out.
+    if (this.cryptoRetryInFlight) await this.cryptoRetryInFlight
+    this.client?.stopClient()
     this.client = undefined
     this.secretStorageKeys.clear()
     this.cryptoSyncRunning = undefined
@@ -1565,9 +1571,11 @@ export class MatrixClientService {
     this.cryptoRetryTimer = window.setTimeout(
       () => {
         this.cryptoRetryTimer = undefined
-        void Promise.allSettled(
+        this.cryptoRetryInFlight = Promise.allSettled(
           this.rooms().map((room) => this.retryRoomDecryption(room, resetAttempts)),
-        )
+        ).finally(() => {
+          this.cryptoRetryInFlight = undefined
+        })
       },
       resetAttempts ? 250 : 5000,
     )

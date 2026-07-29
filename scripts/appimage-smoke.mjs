@@ -319,9 +319,17 @@ async function selectSettingsTab(name) {
 async function restoreRecovery() {
   await selectSettingsTab('Security')
   await clickText('button', 'Restore encrypted history')
-  await debugDump('recovery-modal-state')
+  // A generic placeholder/textarea CSS selector here previously matched other, invisible
+  // textareas elsewhere in the Settings dialog (profile bio, the backup-key display) via
+  // document.querySelector, which has no visibility filter - silently filling the wrong
+  // field and leaving the app's own recoverySecret state empty, so "Restore keys" no-oped
+  // forever with no error at all. The input carries this testid directly (rc-input spreads
+  // unrecognized props straight onto the native <input>, not onto the affix wrapper span).
   await fill('input[data-testid="recovery-secret-input"]', recoveryKey)
   await clickText('button', 'Restore keys')
+  // "Restore encrypted history" is also the trigger button's permanent label in the Security
+  // tab, so it never leaves the page and can't be used as a completion signal. "Restore keys"
+  // is unique to the recovery modal's own OK button and only visible while that modal is open.
   await waitFor('recovery success', async () => !(await bodyContains('Restore keys')), 120_000)
   console.log(`PASS ${platformName}: recovery key restored encrypted history`)
 }
@@ -344,21 +352,47 @@ async function clickExternalLink() {
   console.log(`PASS ${platformName}: external link handed to OS browser opener`)
 }
 
+async function dumpPageState(name) {
+  await screenshot(`${platformName}-${name}.png`).catch(() => undefined)
+  const state = await command('POST', sessionPath('/execute/sync'), {
+    script: `
+      return {
+        url: location.href,
+        readyState: document.readyState,
+        title: document.title,
+        hasLoginPage: !!document.querySelector('[data-testid="login-page"]'),
+        hasRoomSidebar: !!document.querySelector('[data-testid="room-sidebar"]'),
+        hasSettingsDialog: !!document.querySelector('.ant-modal-wrap'),
+        bodyTextSnippet: document.body ? document.body.innerText.slice(0, 1500) : null,
+      }
+    `,
+  }).catch((error) => ({ error: String(error) }))
+  await writeFile(
+    resolve(outputDirectory, `${platformName}-${name}.json`),
+    JSON.stringify(state, null, 2),
+  ).catch(() => undefined)
+}
+
 async function signOut() {
   await selectSettingsTab('Account')
   await clickText('button', 'Sign out', false)
-  const deadline = Date.now() + 120_000
-  let tick = 0
+  const started = Date.now()
+  const deadline = started + 120_000
+  const snapshotAtMs = [1_000, 5_000, 15_000, 30_000, 60_000, 90_000]
+  let nextSnapshot = 0
   let found
   while (Date.now() < deadline) {
     found = await findCss('[data-testid="login-page"]').catch(() => null)
     if (found) break
-    tick++
-    if (tick % 10 === 0) await debugDump(`signout-progress-${tick}`).catch(() => undefined)
+    const elapsed = Date.now() - started
+    if (nextSnapshot < snapshotAtMs.length && elapsed >= snapshotAtMs[nextSnapshot]) {
+      await dumpPageState(`signout-t${Math.round(snapshotAtMs[nextSnapshot] / 1000)}s`)
+      nextSnapshot++
+    }
     await delay(500)
   }
   if (!found) {
-    await debugDump('signout-final').catch(() => undefined)
+    await dumpPageState('signout-timeout')
     throw new Error('Timed out waiting for login after sign out')
   }
   console.log(`PASS ${platformName}: signed out and revoked the desktop session`)
@@ -368,34 +402,6 @@ async function screenshot(name) {
   if (!sessionId) return
   const encoded = await command('GET', sessionPath('/screenshot'))
   await writeFile(resolve(outputDirectory, name), Buffer.from(encoded, 'base64'))
-}
-
-async function debugDump(name) {
-  await screenshot(`${platformName}-${name}.png`).catch(() => undefined)
-  const info = await command('POST', sessionPath('/execute/sync'), {
-    script: `
-      return {
-        url: location.href,
-        title: document.title,
-        fields: [...document.querySelectorAll('input,textarea')].map(el => ({
-          tag: el.tagName,
-          type: el.type,
-          placeholder: el.placeholder,
-          testid: el.getAttribute('data-testid'),
-          visible: !!el.getClientRects().length,
-          outer: el.outerHTML.slice(0, 300),
-        })),
-        dialogTitles: [...document.querySelectorAll('.ant-modal-title')].map(el => ({
-          text: el.textContent,
-          visible: !!el.getClientRects().length,
-        })),
-      }
-    `,
-  }).catch((error) => ({ error: String(error) }))
-  await writeFile(
-    resolve(outputDirectory, `${platformName}-${name}.json`),
-    JSON.stringify(info, null, 2),
-  ).catch(() => undefined)
 }
 
 let fixture
