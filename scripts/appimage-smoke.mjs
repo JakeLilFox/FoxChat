@@ -442,7 +442,7 @@ async function closeRoomWithEscape() {
 
 async function signOut() {
   await selectSettingsTab('Account')
-  await clickText('button', 'Sign out', false)
+  await clickText('button', 'Sign out of FoxChat')
   const started = Date.now()
   const deadline = started + 120_000
   const snapshotAtMs = [1_000, 5_000, 15_000, 30_000, 60_000, 90_000]
