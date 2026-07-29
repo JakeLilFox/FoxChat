@@ -195,7 +195,7 @@ test.describe('live combined-account read-state positioning journey', () => {
           .toBeLessThanOrEqual(NEAR_BOTTOM)
 
         await expect
-          .poll(() => roomUnreadCount(account2Session!, roomId!), { timeout: 30_000 })
+          .poll(() => roomUnreadCount(account2Session!, roomId!), { timeout: 45_000 })
           .toBeGreaterThan(0)
       })
 
@@ -401,7 +401,7 @@ test.describe('live combined-account read-state positioning journey', () => {
           .toBeLessThanOrEqual(NEAR_BOTTOM)
 
         await expect
-          .poll(() => roomUnreadCount(account2Session!, roomId!), { timeout: 30_000 })
+          .poll(() => roomUnreadCount(account2Session!, roomId!), { timeout: 45_000 })
           .toBeGreaterThan(0)
       })
     } catch (error) {

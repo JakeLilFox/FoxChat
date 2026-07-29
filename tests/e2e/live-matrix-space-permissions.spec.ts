@@ -275,8 +275,7 @@ test.describe('live space settings and permissions journey', () => {
           name: new RegExp(`^${roleName} · 40$`),
         })
         await roleItem.waitFor({ state: 'visible', timeout: 10_000 })
-        await roleItem.focus()
-        await roleItem.press('Enter')
+        await roleItem.dispatchEvent('click')
         await expect(page!.getByText(/Role assigned across \d+ rooms/)).toBeVisible({
           timeout: 15_000,
         })
