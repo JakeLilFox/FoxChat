@@ -319,7 +319,7 @@ async function selectSettingsTab(name) {
 async function restoreRecovery() {
   await selectSettingsTab('Security')
   await clickText('button', 'Restore encrypted history')
-  await fill('[data-testid="recovery-secret-input"] input', recoveryKey)
+  await fill('input[data-testid="recovery-secret-input"]', recoveryKey)
   await clickText('button', 'Restore keys')
   await waitFor('recovery success', async () => !(await bodyContains('Restore keys')), 120_000)
   console.log(`PASS ${platformName}: recovery key restored encrypted history`)
