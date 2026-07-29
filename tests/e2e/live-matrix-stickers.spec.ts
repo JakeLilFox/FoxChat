@@ -63,7 +63,7 @@ const saveChanges = async (page: Page, scope: Page | Locator) => {
 }
 
 const uploadAndSave = async (page: Page, scope: Page | Locator, name: string) => {
-  const fileInput = scope.locator('input[type="file"]')
+  const fileInput = scope.locator('input[type="file"][accept="image/*"]')
   await fileInput.setInputFiles(FAVICON_PATH)
 
   await expect(scope.getByLabel('Sticker name').last()).toHaveValue('favicon', { timeout: 30_000 })
@@ -421,7 +421,7 @@ test.describe('live sticker pack journey', () => {
         await expect(sharing).toBeEnabled()
         await expect(sharing).toHaveAttribute('aria-checked', 'true')
         await clearImagePack(page!, panel)
-        await panel.locator('input[type="file"]').setInputFiles(FAVICON_PATH)
+        await panel.locator('input[type="file"][accept="image/*"]').setInputFiles(FAVICON_PATH)
         const name = panel.getByLabel('Sticker name').last()
         await expect(name).toHaveValue('favicon', { timeout: 30_000 })
         await name.fill(sharedImageName)
