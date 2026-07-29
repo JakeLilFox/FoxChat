@@ -377,19 +377,27 @@ does not boot within five minutes, the command fails with `adb devices`,
 journey outside the Playwright test runner. It reads the distinct users
 configured in account slots 2–4 from `test.env`, temporarily gives them the
 fictional Alex, Nia, and Jamie profiles, opens independent browser clients,
-creates a shared room, types a natural conversation, uploads an image, adds a
-reaction, and captures:
+creates several shared rooms plus the `Studio North` Space and its channels,
+assigns distinct artwork to the group chats, Space, and Space channels, types
+natural conversations, uploads images, adds a reaction, and captures:
 
 - a 1440-pixel desktop conversation;
 - the shared-image viewer;
 - a 430-pixel mobile conversation;
-- the same conversation using FoxChat's real dark-mode setting.
+- the desktop conversation using FoxChat's real dark-mode setting;
+- the mobile conversation using FoxChat's real dark-mode setting;
+- light and dark Space overviews with a custom banner;
+- light and dark Space-channel conversations with distinct room artwork and
+  photo messages;
+- looping light and dark GIF tours that switch among chats and the Space.
 
 The generated files and a credential-free `manifest.json` are written under
 `test-results/marketing-screenshots/<timestamp>/`. The source avatars and
 shared launch artwork are original SVG fixtures in
-`tests/assets/marketing/`, so the capture has no runtime dependency on an
-external image host.
+`tests/assets/marketing/`. The Space banner and chat photos are local,
+attributed Unsplash License fixtures listed in
+`tests/assets/marketing/ATTRIBUTION.md`, so captures have no runtime dependency
+on an external image host.
 
 The normal safety switches still apply:
 `MATRIX_E2E_ENABLED=true` and `MATRIX_E2E_ALLOW_ROOM_MUTATION=true` must be set
@@ -422,7 +430,10 @@ automatically consumes that marker if the previous process was interrupted.
 `--audit` reports whether the temporary names are currently active.
 `--recover-interrupted` exists for captures made before recovery markers were
 available; it infers the old profiles from membership-only sync history and
-removes rooms matching both the configured marketing room name and topic.
+removes rooms matching both the configured marketing room name and topic. If
+the dedicated test account has no membership history left, this explicit
+recovery mode resets its display name to the Matrix localpart and clears its
+avatar.
 
 After every normal capture attempt, cleanup also declines every pending invite
 for account slots 2–4 and leaves/forgets every joined room whose name does not

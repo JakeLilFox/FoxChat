@@ -92,6 +92,28 @@ const buildStickerZip = async () => {
   return { dir, zipPath }
 }
 
+const TELEGRAM_DOWNLOAD_ROUTE = 'https://sticker.zenzon.net/download?*'
+const TELEGRAM_PACK_URL = 'https://t.me/addstickers/foxchat-e2e-pack'
+const TELEGRAM_PACK_NAME = 'foxchat-e2e-pack'
+const TELEGRAM_IMPORT_TIMEOUT_MS = 5 * 60_000
+
+const importTelegramPack = async (page: Page, scope: Page | Locator) => {
+  await scope.getByRole('button', { name: 'Import from Telegram' }).click()
+  const modal = page.getByRole('dialog', { name: 'Import from Telegram' })
+  await expect(modal).toBeVisible()
+  await modal.getByLabel('Telegram sticker pack link').fill(TELEGRAM_PACK_URL)
+  const download = page.waitForRequest(
+    (request) => request.url().startsWith('https://sticker.zenzon.net/download?'),
+    { timeout: TELEGRAM_IMPORT_TIMEOUT_MS },
+  )
+  await modal.getByRole('button', { name: 'Import', exact: true }).click()
+  await download
+  await expect(modal).toBeHidden({ timeout: TELEGRAM_IMPORT_TIMEOUT_MS })
+  await expect(page.getByText('3 images imported from Telegram').last()).toBeVisible()
+  await expect(scope.getByLabel('Pack name')).toHaveValue(TELEGRAM_PACK_NAME)
+  await expect(scope.getByLabel('Sticker name')).toHaveCount(3)
+}
+
 test.describe('live sticker pack journey', () => {
   test.describe.configure({ mode: 'serial' })
   test.skip(!live.enabled, live.reason)
@@ -627,6 +649,165 @@ test.describe('live sticker pack journey', () => {
         if (roomId) await cleanTestRoom(roomId, sessions)
         if (account1Id) {
           const current = sessions.filter((s) => s.userId === account1Id).at(-1)
+          if (current) await removeOtherDevices(browser, current, account1.password)
+        }
+      } catch (error) {
+        cleanupError = error
+      } finally {
+        await context?.close()
+      }
+      if (!journeyError && cleanupError) journeyError = cleanupError
+    }
+    if (journeyError) throw journeyError
+  })
+
+  test('Telegram import creates and deletes both personal and room sticker packs', async ({
+    browser,
+    baseURL,
+  }, testInfo) => {
+    test.setTimeout(12 * 60_000)
+    const account1 = live.account1!
+    const runId = `${Date.now()}-${testInfo.retry}-${testInfo.workerIndex}`
+    const roomName = `${live.roomPrefix} Telegram Stickers ${runId}`
+
+    let context
+    let page: Page | undefined
+    let roomId: string | undefined
+    let account1Id: string | undefined
+    let session: StoredSession | undefined
+    let scratchDir: string | undefined
+    let journeyError: unknown
+    const telegramRequests: URL[] = []
+
+    try {
+      context = await browser.newContext({ baseURL })
+      page = await context.newPage()
+      const built = await buildStickerZip()
+      scratchDir = built.dir
+      const zip = readFileSync(built.zipPath)
+      await page.route(TELEGRAM_DOWNLOAD_ROUTE, async (route) => {
+        telegramRequests.push(new URL(route.request().url()))
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/zip',
+          headers: {
+            'access-control-allow-origin': '*',
+            'content-disposition': `attachment; filename="${TELEGRAM_PACK_NAME}.zip"`,
+            'x-sticker-count': String(STICKER_ZIP_ASSETS.length),
+          },
+          body: zip,
+        })
+      })
+
+      await test.step('sign in and create a room', async () => {
+        await signIn(page!, account1)
+        session = (await storedSessions(page!)).at(-1)
+        account1Id = session?.userId
+        expect(account1Id).toMatch(/^@[^:]+:.+/)
+
+        await openRoomActions(page!)
+        await page!.getByText('Create a room', { exact: true }).click()
+        const dialog = page!.getByRole('dialog', { name: 'Create a room' })
+        await dialog.getByLabel('Room name').fill(roomName)
+        await dialog.getByRole('button', { name: 'Create room' }).click()
+        await expect(
+          page!.getByTestId('room-header').getByRole('heading', { name: roomName }),
+        ).toBeVisible({ timeout: 60_000 })
+        roomId = new URL(page!.url()).searchParams.get('room') ?? undefined
+        expect(roomId).toMatch(/^!/)
+      })
+
+      await test.step('import, save, and use a personal Telegram sticker pack', async () => {
+        await page!.getByTestId('account-menu').click()
+        await page!
+          .getByTestId('account-menu')
+          .getByRole('button', { name: 'Open settings' })
+          .click()
+        const settings = page!.getByRole('dialog', { name: 'Settings' })
+        await settings.getByRole('tab', { name: 'Stickers & emoji' }).click()
+        const panel = settings.getByRole('tabpanel', { name: 'Stickers & emoji' })
+        await clearImagePack(page!, panel)
+        await importTelegramPack(page!, panel)
+        await saveChanges(page!, panel)
+        await closeDialog(page!)
+
+        await openEmojiPicker(page!)
+        for (const name of ['pfp1', 'pfp2', 'pfp3'])
+          await expect(packButton(page!, name)).toBeVisible({ timeout: 30_000 })
+        await closeEmojiPicker(page!)
+      })
+
+      await test.step('remove the imported personal pack contents after verifying them', async () => {
+        await page!.getByTestId('account-menu').click()
+        await page!
+          .getByTestId('account-menu')
+          .getByRole('button', { name: 'Open settings' })
+          .click()
+        const settings = page!.getByRole('dialog', { name: 'Settings' })
+        await settings.getByRole('tab', { name: 'Stickers & emoji' }).click()
+        const panel = settings.getByRole('tabpanel', { name: 'Stickers & emoji' })
+        await clearImagePack(page!, panel)
+        await closeDialog(page!)
+        await openEmojiPicker(page!)
+        for (const name of ['pfp1', 'pfp2', 'pfp3'])
+          await expect(packButton(page!, name)).toHaveCount(0)
+        await closeEmojiPicker(page!)
+      })
+
+      await test.step('import, save, and use the same Telegram pack as a room pack', async () => {
+        const panel = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        await importTelegramPack(page!, panel)
+        await saveChanges(page!, panel)
+        await closeDialog(page!)
+
+        const reopened = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        await expect(reopened.getByLabel('Pack name')).toHaveValue(TELEGRAM_PACK_NAME)
+        await expect(reopened.getByLabel('Sticker name')).toHaveCount(3)
+        await closeDialog(page!)
+        await openEmojiPicker(page!)
+        for (const name of ['pfp1', 'pfp2', 'pfp3'])
+          await expect(packButton(page!, name)).toBeVisible({ timeout: 30_000 })
+        await closeEmojiPicker(page!)
+      })
+
+      await test.step('delete the room pack after verifying it', async () => {
+        const panel = await openRoomSettings(page!, roomName, 'Stickers & emoji')
+        const packTab = panel.locator('.ant-tabs-tab').filter({ hasText: TELEGRAM_PACK_NAME })
+        await packTab.locator('.ant-tabs-tab-remove').click()
+        const confirmation = page!.getByRole('dialog', { name: 'Remove this pack?' })
+        await confirmation.getByRole('button', { name: 'Remove', exact: true }).click()
+        await expect(confirmation).toBeHidden()
+        await closeDialog(page!)
+
+        expect(await getRoomState(session!, roomId!, 'im.ponies.room_emotes', '')).toEqual({})
+        await openEmojiPicker(page!)
+        for (const name of ['pfp1', 'pfp2', 'pfp3'])
+          await expect(packButton(page!, name)).toHaveCount(0)
+        await closeEmojiPicker(page!)
+      })
+
+      expect(telegramRequests).toHaveLength(2)
+      for (const request of telegramRequests) {
+        expect(request.pathname).toBe('/download')
+        expect(request.searchParams.get('url')).toBe(TELEGRAM_PACK_URL)
+        expect(request.searchParams.has('uri')).toBe(false)
+      }
+    } catch (error) {
+      journeyError = error
+    } finally {
+      let cleanupError: unknown
+      try {
+        if (scratchDir) rmSync(scratchDir, { recursive: true, force: true })
+        if (session)
+          await setAccountData(session, 'im.ponies.user_emotes', {
+            pack: { display_name: 'Personal stickers' },
+            images: {},
+          })
+        const sessions: StoredSession[] = []
+        if (page && !page.isClosed()) sessions.push(...(await storedSessions(page).catch(() => [])))
+        if (roomId) await cleanTestRoom(roomId, sessions)
+        if (account1Id) {
+          const current = sessions.filter((candidate) => candidate.userId === account1Id).at(-1)
           if (current) await removeOtherDevices(browser, current, account1.password)
         }
       } catch (error) {

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import { chromium } from '@playwright/test'
-import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { basename, relative, resolve } from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, extname, relative, resolve, sep } from 'node:path'
 import { config as loadEnv } from 'dotenv'
+import ffmpegPath from 'ffmpeg-static'
 
 const root = process.cwd()
 const envFile = resolve(root, 'test.env')
@@ -66,6 +67,9 @@ const personas = [
   },
 ]
 const sharedImage = resolve(root, 'tests/assets/marketing/launch-moodboard.svg')
+const spaceBanner = resolve(root, 'tests/assets/marketing/space-banner.jpg')
+const workspacePhoto = resolve(root, 'tests/assets/marketing/workspace-coffee.jpg')
+const cityPhoto = resolve(root, 'tests/assets/marketing/city-night.jpg')
 const roomName = envValue('MARKETING_ROOM_NAME') || 'Launch crew'
 const roomTopic =
   envValue('MARKETING_ROOM_TOPIC') || 'Ideas, tiny victories, and everything we need to ship.'
@@ -124,7 +128,13 @@ function validate(accounts) {
     throw new Error(
       'MATRIX_E2E_ALLOW_ROOM_MUTATION=true is required because this script creates a room',
     )
-  for (const asset of [...personas.map((persona) => persona.avatar), sharedImage])
+  for (const asset of [
+    ...personas.map((persona) => persona.avatar),
+    sharedImage,
+    spaceBanner,
+    workspacePhoto,
+    cityPhoto,
+  ])
     if (!existsSync(asset)) throw new Error(`Missing marketing asset: ${safePath(asset)}`)
 }
 
@@ -166,6 +176,7 @@ async function rawLogin(account) {
     )
   const login = await response.json()
   return {
+    account,
     baseUrl,
     accessToken: login.access_token,
     deviceId: login.device_id,
@@ -186,6 +197,17 @@ async function matrixRequest(session, method, path, body, options = {}) {
     },
     body: body === undefined ? undefined : options.contentType ? body : JSON.stringify(body),
   })
+  if (response.status === 401 && session.account && !options.retriedAuthentication) {
+    const replacement = await rawLogin(session.account)
+    session.baseUrl = replacement.baseUrl
+    session.accessToken = replacement.accessToken
+    session.deviceId = replacement.deviceId
+    session.userId = replacement.userId
+    return matrixRequest(session, method, path, body, {
+      ...options,
+      retriedAuthentication: true,
+    })
+  }
   if (!response.ok && !options.allowedStatuses?.includes(response.status))
     throw new Error(
       `Matrix ${method} /_matrix/${path} failed: ${response.status} ${await response.text()}`,
@@ -200,12 +222,18 @@ const clientRequest = (session, method, path, body, options) =>
 
 async function uploadMedia(session, file) {
   const body = readFileSync(file)
+  const contentType =
+    extname(file).toLowerCase() === '.svg'
+      ? 'image/svg+xml'
+      : extname(file).toLowerCase() === '.png'
+        ? 'image/png'
+        : 'image/jpeg'
   const upload = await matrixRequest(
     session,
     'POST',
     `media/v3/upload?filename=${encodeURIComponent(basename(file))}`,
     body,
-    { contentType: 'image/svg+xml' },
+    { contentType },
   )
   if (typeof upload.content_uri !== 'string')
     throw new Error(`Media upload for ${basename(file)} returned no content_uri`)
@@ -251,6 +279,179 @@ async function createRoom(sessions) {
   for (const session of sessions.slice(1))
     await clientRequest(session, 'POST', `/rooms/${encodeURIComponent(created.room_id)}/join`, {})
   return created.room_id
+}
+
+async function createSharedRoom(sessions, name, topic, extra = {}) {
+  const created = await clientRequest(sessions[0], 'POST', '/createRoom', {
+    visibility: 'private',
+    preset: 'private_chat',
+    is_direct: false,
+    name,
+    topic,
+    invite: sessions.slice(1).map((session) => session.userId),
+    ...extra,
+  })
+  if (typeof created.room_id !== 'string') throw new Error(`createRoom returned no ID for ${name}`)
+  for (const session of sessions.slice(1))
+    await clientRequest(session, 'POST', `/rooms/${encodeURIComponent(created.room_id)}/join`, {})
+  return created.room_id
+}
+
+async function sendState(session, roomId, type, stateKey, content) {
+  return clientRequest(
+    session,
+    'PUT',
+    `/rooms/${encodeURIComponent(roomId)}/state/${encodeURIComponent(type)}/${encodeURIComponent(
+      stateKey,
+    )}`,
+    content,
+  )
+}
+
+async function sendRawMessage(session, roomId, content) {
+  const transactionId = `marketing-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const sent = await clientRequest(
+    session,
+    'PUT',
+    `/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${transactionId}`,
+    content,
+  )
+  if (typeof sent.event_id !== 'string') throw new Error('Raw message send returned no event_id')
+  return sent.event_id
+}
+
+const sendRawText = (session, roomId, body) =>
+  sendRawMessage(session, roomId, { msgtype: 'm.text', body })
+
+async function sendRawImage(session, roomId, file, contentUri, caption) {
+  const bytes = readFileSync(file)
+  return sendRawMessage(session, roomId, {
+    msgtype: 'm.image',
+    body: basename(file),
+    url: contentUri,
+    info: {
+      mimetype: extname(file).toLowerCase() === '.svg' ? 'image/svg+xml' : 'image/jpeg',
+      size: bytes.byteLength,
+    },
+    ...(caption ? { 'foxchat.caption': caption } : {}),
+  })
+}
+
+async function createMarketingScene(sessions, launchRoomId) {
+  const [bannerMxc, workspaceMxc, cityMxc, moodboardMxc] = await Promise.all([
+    uploadMedia(sessions[0], spaceBanner),
+    uploadMedia(sessions[0], workspacePhoto),
+    uploadMedia(sessions[0], cityPhoto),
+    uploadMedia(sessions[0], sharedImage),
+  ])
+  const weekendRoomId = await createSharedRoom(
+    sessions,
+    'Weekend escape',
+    'Trail ideas, train times, and the best coffee on the way.',
+  )
+  const spaceId = await createSharedRoom(
+    sessions,
+    'Studio North',
+    'A home for product craft, launch stories, and the people making them.',
+    { creation_content: { type: 'm.space' } },
+  )
+  const designRoomId = await createSharedRoom(
+    sessions,
+    'Design lab',
+    'Fresh explorations, thoughtful critique, and tiny delightful details.',
+  )
+  const photosRoomId = await createSharedRoom(
+    sessions,
+    'Photo drops',
+    'Inspiration from desks, streets, and everywhere in between.',
+  )
+  const via = sessions[0].userId.split(':').slice(1).join(':')
+  for (const [childId, order] of [
+    [designRoomId, 'a'],
+    [photosRoomId, 'b'],
+  ])
+    await Promise.all([
+      sendState(sessions[0], spaceId, 'm.space.child', childId, {
+        via: [via],
+        suggested: true,
+        order,
+      }),
+      sendState(sessions[0], childId, 'm.space.parent', spaceId, {
+        via: [via],
+        canonical: true,
+      }),
+    ])
+  await sendState(sessions[0], spaceId, 'page.codeberg.everypizza.room.banner', '', {
+    url: bannerMxc,
+    name: basename(spaceBanner),
+    info: { mimetype: 'image/jpeg', size: readFileSync(spaceBanner).byteLength },
+  })
+  await Promise.all([
+    sendState(sessions[0], launchRoomId, 'm.room.avatar', '', {
+      url: moodboardMxc,
+      info: { mimetype: 'image/svg+xml', size: readFileSync(sharedImage).byteLength },
+    }),
+    sendState(sessions[0], weekendRoomId, 'm.room.avatar', '', {
+      url: bannerMxc,
+      info: { mimetype: 'image/jpeg', size: readFileSync(spaceBanner).byteLength },
+    }),
+    sendState(sessions[0], spaceId, 'm.room.avatar', '', {
+      url: bannerMxc,
+      info: { mimetype: 'image/jpeg', size: readFileSync(spaceBanner).byteLength },
+    }),
+    sendState(sessions[0], designRoomId, 'm.room.avatar', '', {
+      url: workspaceMxc,
+      info: { mimetype: 'image/jpeg', size: readFileSync(workspacePhoto).byteLength },
+    }),
+    sendState(sessions[0], photosRoomId, 'm.room.avatar', '', {
+      url: cityMxc,
+      info: { mimetype: 'image/jpeg', size: readFileSync(cityPhoto).byteLength },
+    }),
+  ])
+
+  await sendRawText(sessions[0], weekendRoomId, 'What if we take the early train on Saturday?')
+  await sendRawText(
+    sessions[1],
+    weekendRoomId,
+    'Yes — window seats and coffee are non-negotiable ☕',
+  )
+  await sendRawImage(
+    sessions[0],
+    weekendRoomId,
+    cityPhoto,
+    cityMxc,
+    'A little night-walk inspiration for the itinerary.',
+  )
+  await sendRawText(sessions[1], weekendRoomId, 'Adding this exact mood to the plan.')
+
+  await sendRawText(sessions[0], designRoomId, 'The calmer navigation is starting to click.')
+  await sendRawText(sessions[1], designRoomId, 'Especially once every project has a proper home.')
+  await sendRawImage(
+    sessions[0],
+    designRoomId,
+    workspacePhoto,
+    workspaceMxc,
+    'Today’s tiny studio setup.',
+  )
+  await sendRawText(sessions[1], designRoomId, 'Strong coffee, strong release candidate.')
+
+  await sendRawImage(
+    sessions[1],
+    photosRoomId,
+    cityPhoto,
+    cityMxc,
+    'Saving this palette for the next dark theme pass.',
+  )
+  await sendRawText(sessions[0], photosRoomId, 'Those reflections are perfect.')
+
+  return {
+    launchRoomId,
+    weekendRoomId,
+    spaceId,
+    designRoomId,
+    photosRoomId,
+    moodboardMxc,
+  }
 }
 
 async function removeRoom(roomId, sessions) {
@@ -522,18 +723,31 @@ async function recoverLegacyInterruptedRun(accounts) {
         continue
       }
       const candidate = await inferOriginalProfile(sessions[index], personas[index])
-      if (!candidate)
-        throw new Error(
-          `Could not infer account ${accounts[index].slot}'s original profile from its joined rooms`,
+      if (candidate) {
+        await restoreProfile(sessions[index], candidate.profile)
+        console.log(
+          `Account ${accounts[index].slot}: restored the profile found in ${candidate.count} room membership(s).`,
         )
-      await restoreProfile(sessions[index], candidate.profile)
-      console.log(
-        `Account ${accounts[index].slot}: restored the profile found in ${candidate.count} room membership(s).`,
-      )
+      } else {
+        const localpart = sessions[index].userId.replace(/^@/, '').split(':')[0]
+        await restoreProfile(sessions[index], {
+          displayname: localpart,
+          avatar_url: '',
+        })
+        console.log(
+          `Account ${accounts[index].slot}: no membership profile remained; reset to its Matrix localpart without an avatar.`,
+        )
+      }
     }
     const rooms = await legacyMarketingRooms(sessions[0])
     for (const roomId of rooms) await removeRoom(roomId, sessions)
     console.log(`Removed ${rooms.length} interrupted “${roomName}” room(s).`)
+    for (let index = 0; index < sessions.length; index++) {
+      const cleanup = await cleanupNonAdminRooms(sessions[index])
+      console.log(
+        `Cleanup account ${accounts[index].slot}: left ${cleanup.left}, declined ${cleanup.declined}, preserved ${cleanup.preserved}.`,
+      )
+    }
   } finally {
     for (const session of sessions) await logoutSession(session)
   }
@@ -648,6 +862,31 @@ async function openRoom(page, roomId) {
     .waitFor({ state: 'visible', timeout: 60_000 })
 }
 
+async function openNamedRoom(page, name) {
+  const mobile = (page.viewportSize()?.width ?? 1_000) <= 760
+  if (mobile) await page.getByRole('button', { name: 'Open room list' }).click()
+  else {
+    const back = page.getByRole('button', { name: 'arrow-left' })
+    if (await back.isVisible()) await back.click()
+  }
+  const row = page.getByTestId('room-row').filter({ hasText: name })
+  await row.waitFor({ state: 'visible', timeout: 60_000 })
+  await row.click()
+  const heading = page.getByRole('heading', { name, exact: true }).last()
+  const openedDirectly = await heading
+    .waitFor({ state: 'visible', timeout: 2_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!openedDirectly) {
+    const browseChannels = page
+      .getByTestId('room-sidebar')
+      .getByText('Browse channels', { exact: true })
+      .first()
+    if (await browseChannels.isVisible()) await browseChannels.click()
+  }
+  await heading.waitFor({ state: 'visible', timeout: 60_000 })
+}
+
 async function humanPause(page, milliseconds) {
   if (delayScale) await page.waitForTimeout(Math.round(milliseconds * delayScale))
 }
@@ -671,34 +910,6 @@ async function sendText(page, text) {
   const result = await (await sent).json()
   if (typeof result.event_id !== 'string') throw new Error('Message send returned no event_id')
   return result.event_id
-}
-
-async function sendImage(page) {
-  await page.locator('input[type="file"]').setInputFiles(sharedImage)
-  await page.getByRole('button', { name: 'Remove image' }).waitFor({
-    state: 'visible',
-    timeout: 30_000,
-  })
-  await humanPause(page, 700)
-  const sent = page.waitForResponse(
-    (response) => {
-      if (
-        !response.ok() ||
-        response.request().method() !== 'PUT' ||
-        !new URL(response.url()).pathname.includes('/send/m.room.message/')
-      )
-        return false
-      const content = response.request().postDataJSON()
-      return content?.msgtype === 'm.image'
-    },
-    { timeout: 90_000 },
-  )
-  await page.getByRole('button', { name: 'Send message' }).click()
-  await sent
-  await page.getByTestId('message-image').last().waitFor({
-    state: 'visible',
-    timeout: 60_000,
-  })
 }
 
 async function react(session, roomId, eventId, reaction) {
@@ -729,23 +940,95 @@ async function browserSession(page) {
 }
 
 async function enableDarkMode(page) {
-  await page
-    .getByTestId('account-menu')
-    .getByRole('button', { name: 'Open settings', exact: true })
-    .click()
-  const dialog = page.getByRole('dialog', { name: 'Settings' })
-  await dialog.waitFor({ state: 'visible' })
-  await dialog.getByRole('tab', { name: 'Appearance' }).click()
-  const toggle = dialog.getByRole('tabpanel', { name: 'Appearance' }).getByRole('switch').first()
-  if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click()
-  for (let attempt = 0; attempt < 20; attempt++) {
-    if ((await toggle.getAttribute('aria-checked')) === 'true') break
-    await page.waitForTimeout(100)
+  const mobile = (page.viewportSize()?.width ?? 1_000) <= 760
+  if (mobile) {
+    await page.getByRole('button', { name: 'Open room list' }).click()
+    await page.getByTestId('room-sidebar').waitFor({ state: 'visible' })
   }
-  if ((await toggle.getAttribute('aria-checked')) !== 'true')
-    throw new Error('The Appearance dark-mode switch did not turn on')
-  await dialog.locator('.ant-modal-close').click()
-  await dialog.waitFor({ state: 'hidden' })
+  const sidebar = page.locator('[data-testid="room-sidebar"]:visible').first()
+  const enable = sidebar.locator('button[aria-label="Enable dark mode"]')
+  if (await enable.isVisible()) await enable.click()
+  await sidebar.locator('button[aria-label="Enable light mode"]').waitFor({
+    state: 'visible',
+    timeout: 10_000,
+  })
+  if (mobile) {
+    await page.keyboard.press('Escape')
+    await sidebar.waitFor({ state: 'hidden' })
+  }
+}
+
+async function settleVisuals(page) {
+  await page
+    .waitForFunction(
+      () =>
+        [...document.images]
+          .filter((image) => {
+            const rect = image.getBoundingClientRect()
+            return rect.width > 0 && rect.height > 0
+          })
+          .every((image) => image.complete && image.naturalWidth > 0),
+      undefined,
+      { timeout: 15_000 },
+    )
+    .catch(() => undefined)
+  await page.waitForTimeout(1_500)
+}
+
+async function capturePng(page, path) {
+  await settleVisuals(page)
+  await page.screenshot({ path, caret: 'hide' })
+}
+
+async function createTourGif(page, roomNames, output, label) {
+  if (!ffmpegPath) throw new Error('ffmpeg-static did not provide an executable')
+  const frameDirectory = resolve(outputDirectory, `.frames-${label}`)
+  const expectedPrefix = `${resolve(outputDirectory)}${sep}`
+  if (!resolve(frameDirectory).startsWith(expectedPrefix))
+    throw new Error(`Refusing to use unexpected frame directory: ${frameDirectory}`)
+  mkdirSync(frameDirectory, { recursive: true })
+  let frame = 0
+  try {
+    for (const name of roomNames) {
+      await openNamedRoom(page, name)
+      await settleVisuals(page)
+      for (let hold = 0; hold < 4; hold++) {
+        const filename = `frame-${String(frame++).padStart(3, '0')}.png`
+        await page.screenshot({ path: resolve(frameDirectory, filename), caret: 'hide' })
+      }
+    }
+    const encoded = spawnSync(
+      ffmpegPath,
+      [
+        '-y',
+        '-framerate',
+        '3',
+        '-i',
+        resolve(frameDirectory, 'frame-%03d.png'),
+        '-vf',
+        'scale=960:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=192[p];[s1][p]paletteuse=dither=bayer',
+        '-loop',
+        '0',
+        output,
+      ],
+      { cwd: root, encoding: 'utf8', windowsHide: true },
+    )
+    if (encoded.status !== 0)
+      throw new Error(`Could not encode ${label} GIF: ${encoded.stderr || encoded.stdout}`)
+  } finally {
+    rmSync(frameDirectory, { recursive: true, force: true })
+  }
+}
+
+async function openSpaceChannel(page, spaceName, channelName) {
+  await openNamedRoom(page, spaceName)
+  const channel = page.getByTestId('room-sidebar').getByText(channelName, { exact: true }).first()
+  await channel.waitFor({ state: 'visible', timeout: 60_000 })
+  await channel.click()
+  await page
+    .getByTestId('room-header')
+    .getByRole('heading', { name: channelName, exact: true })
+    .waitFor({ state: 'visible', timeout: 60_000 })
 }
 
 async function captureScreenshots(pages) {
@@ -768,7 +1051,14 @@ async function captureScreenshots(pages) {
   const media = resolve(outputDirectory, '02-shared-media.png')
   const mobile = resolve(outputDirectory, '03-mobile-conversation.png')
   const dark = resolve(outputDirectory, '04-dark-conversation.png')
-  await pages[0].screenshot({ path: desktop, caret: 'hide' })
+  const darkMobile = resolve(outputDirectory, '05-dark-mobile-conversation.png')
+  const spaceLight = resolve(outputDirectory, '06-space-overview-light.png')
+  const spaceChatLight = resolve(outputDirectory, '07-space-chat-light.png')
+  const spaceDark = resolve(outputDirectory, '08-space-overview-dark.png')
+  const spaceChatDark = resolve(outputDirectory, '09-space-chat-dark.png')
+  const tourLight = resolve(outputDirectory, '10-chat-tour-light.gif')
+  const tourDark = resolve(outputDirectory, '11-chat-tour-dark.gif')
+  await capturePng(pages[0], desktop)
 
   const image = pages[1].getByTestId('message-image').locator('img').last()
   await image.waitFor({ state: 'visible', timeout: 60_000 })
@@ -776,7 +1066,7 @@ async function captureScreenshots(pages) {
   await pages[1]
     .getByRole('dialog', { name: 'Image viewer' })
     .waitFor({ state: 'visible', timeout: 30_000 })
-  await pages[1].screenshot({ path: media, caret: 'hide' })
+  await capturePng(pages[1], media)
   await pages[1].getByRole('button', { name: 'Close image' }).click()
 
   const mobilePage = pages.at(-1)
@@ -787,14 +1077,59 @@ async function captureScreenshots(pages) {
       timeline.scrollTop = timeline.scrollHeight
     })
   }
-  await mobilePage.screenshot({ path: mobile, caret: 'hide' })
+  await capturePng(mobilePage, mobile)
+
+  await openNamedRoom(pages[0], 'Studio North')
+  await capturePng(pages[0], spaceLight)
+  await openSpaceChannel(pages[0], 'Studio North', 'Design lab')
+  await pages[0].getByTestId('message-image').locator('img').last().waitFor({
+    state: 'visible',
+    timeout: 60_000,
+  })
+  await capturePng(pages[0], spaceChatLight)
+  await createTourGif(
+    pages[0],
+    ['Launch crew', 'Weekend escape', 'Launch crew'],
+    tourLight,
+    'light',
+  )
 
   await enableDarkMode(pages[0])
+  await openNamedRoom(pages[0], 'Launch crew')
   await pages[0].getByTestId('timeline').evaluate((timeline) => {
     timeline.scrollTop = timeline.scrollHeight
   })
-  await pages[0].screenshot({ path: dark, caret: 'hide' })
-  return [desktop, media, mobile, dark]
+  await capturePng(pages[0], dark)
+
+  await openNamedRoom(pages[0], 'Studio North')
+  await capturePng(pages[0], spaceDark)
+  await openSpaceChannel(pages[0], 'Studio North', 'Photo drops')
+  await pages[0].getByTestId('message-image').locator('img').last().waitFor({
+    state: 'visible',
+    timeout: 60_000,
+  })
+  await capturePng(pages[0], spaceChatDark)
+  await createTourGif(pages[0], ['Launch crew', 'Weekend escape', 'Launch crew'], tourDark, 'dark')
+
+  await enableDarkMode(mobilePage)
+  await openNamedRoom(mobilePage, 'Launch crew')
+  await mobilePage.getByTestId('timeline').evaluate((timeline) => {
+    timeline.scrollTop = timeline.scrollHeight
+  })
+  await capturePng(mobilePage, darkMobile)
+  return [
+    desktop,
+    media,
+    mobile,
+    dark,
+    darkMobile,
+    spaceLight,
+    spaceChatLight,
+    spaceDark,
+    spaceChatDark,
+    tourLight,
+    tourDark,
+  ]
 }
 
 async function main() {
@@ -841,6 +1176,7 @@ async function main() {
   let server
   let browser
   let roomId
+  let scene
   let journeyError
   let recoveryCleanupFailed = false
   const rawSessions = []
@@ -865,7 +1201,10 @@ async function main() {
 
     roomId = await createRoom(rawSessions)
     saveRecoveryState(rawSessions, originalProfiles, roomId)
-    console.log(`Created “${roomName}” and joined ${accounts.length} clients.`)
+    scene = await createMarketingScene(rawSessions, roomId)
+    console.log(
+      `Created the launch room, Studio North Space, two channels, and Weekend escape for ${accounts.length} clients.`,
+    )
     browser = await chromium.launch({ headless: !headed })
     for (let index = 0; index < accounts.length; index++) {
       const context = await browser.newContext({
@@ -888,24 +1227,30 @@ async function main() {
     await sendText(pages[0], 'Okay, I finally put the launch plan in one place ✨')
     await humanPause(pages[1], 550)
     await sendText(pages[1], 'Perfect timing — I just finished the onboarding pass.')
-    const thirdClient = pages[2] ?? pages[0]
     const thirdSession = rawSessions[2] ?? rawSessions[0]
-    await humanPause(thirdClient, 650)
-    await sendText(thirdClient, 'The new room switcher feels really quick now.')
-    await humanPause(pages[0], 500)
-    await sendText(pages[0], 'Here’s the direction I was thinking for launch week:')
-    await sendImage(pages[0])
-    await humanPause(pages[1], 750)
-    const designMessage = await sendText(
-      pages[1],
+    await sendRawText(thirdSession, roomId, 'The new room switcher feels really quick now.')
+    await sendRawText(
+      rawSessions[0],
+      roomId,
+      'Here’s the direction I was thinking for launch week:',
+    )
+    await sendRawImage(
+      rawSessions[0],
+      roomId,
+      sharedImage,
+      scene.moodboardMxc,
+      'Launch week direction',
+    )
+    const designMessage = await sendRawText(
+      rawSessions[1],
+      roomId,
       'Love this direction. The colors feel warm without getting noisy.',
     )
-    await humanPause(thirdClient, 500)
-    await sendText(thirdClient, 'I can take the final screenshots before lunch 👍')
+    await sendRawText(thirdSession, roomId, 'I can take the final screenshots before lunch 👍')
     await react(thirdSession, roomId, designMessage, '❤️')
-    await humanPause(pages[0], 650)
-    await sendText(
-      pages.length > 2 ? pages[0] : pages[1],
+    await sendRawText(
+      pages.length > 2 ? rawSessions[0] : rawSessions[1],
+      roomId,
       'Deal. Shipping the tiny details today 🚀',
     )
 
