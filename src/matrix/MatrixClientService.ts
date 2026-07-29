@@ -728,8 +728,23 @@ export class MatrixClientService {
     // A pending decryption-retry batch may already be mid-flight against the crypto store
     // (scheduleAllRoomDecryptionRetry is fire-and-forget). Let it finish before stopping the
     // client and reloading - abandoning it mid-write is what can leave the crypto store's
-    // IndexedDB connection in a state the next page load has to wait out.
-    if (this.cryptoRetryInFlight) await this.cryptoRetryInFlight
+    // IndexedDB connection in a state the next page load has to wait out. A Matrix decryption
+    // attempt can itself stall indefinitely, though, so never let background history recovery
+    // prevent account sign-out forever.
+    if (this.cryptoRetryInFlight) {
+      const inFlight = this.cryptoRetryInFlight
+      let timeout: number | undefined
+      const completed = await Promise.race([
+        inFlight.then(() => true),
+        new Promise<false>((resolve) => {
+          timeout = window.setTimeout(() => resolve(false), 10_000)
+        }),
+      ])
+      if (timeout !== undefined) window.clearTimeout(timeout)
+      if (!completed) {
+        console.warn('[crypto] Timed out waiting for background decryption before stopping')
+      }
+    }
     this.client?.stopClient()
     this.client = undefined
     this.secretStorageKeys.clear()

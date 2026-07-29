@@ -362,8 +362,40 @@ async function restoreRecovery() {
   await selectSettingsTab('Security')
   await clickText('button', 'Restore encrypted history')
   await fill('input[data-testid="recovery-secret-input"]', recoveryKey)
+  // Give React a turn to commit the controlled password value before invoking restore. Without
+  // this, WebKitGTK can click while ClientApp's recoverySecret state is still empty and restore()
+  // intentionally returns without either closing the modal or showing an error.
+  await delay(500)
   await clickText('button', 'Restore keys')
-  await waitFor('recovery success', async () => !(await bodyContains('Restore keys')), 120_000)
+  const started = Date.now()
+  const deadline = started + 120_000
+  let state
+  while (Date.now() < deadline) {
+    state = await command('POST', sessionPath('/execute/sync'), {
+      script: `
+        const visible = element =>
+          !!element?.getClientRects().length && getComputedStyle(element).visibility !== 'hidden'
+        const error = [...document.querySelectorAll('.ant-message-error')].find(visible)
+        return {
+          complete: ![...document.querySelectorAll('button')].some(
+            element => visible(element) && element.textContent?.trim() === 'Restore keys'
+          ),
+          error: error?.textContent?.replace(/\\s+/g, ' ').trim() || null,
+        }
+      `,
+      args: [],
+    })
+    if (state.error) {
+      await dumpPageState('recovery-error')
+      throw new Error(`Recovery failed in the desktop UI: ${state.error}`)
+    }
+    if (state.complete) break
+    await delay(500)
+  }
+  if (!state?.complete) {
+    await dumpPageState('recovery-timeout')
+    throw new Error('Timed out waiting for recovery success')
+  }
   console.log(`PASS ${platformName}: recovery key restored encrypted history`)
 }
 
@@ -399,6 +431,7 @@ async function dumpPageState(name) {
         bodyTextSnippet: document.body ? document.body.innerText.slice(0, 1500) : null,
       }
     `,
+    args: [],
   }).catch((error) => ({ error: String(error) }))
   await writeFile(
     resolve(outputDirectory, `${platformName}-${name}.json`),
