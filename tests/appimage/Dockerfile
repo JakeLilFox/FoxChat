@@ -15,6 +15,7 @@ RUN apt-get update \
 FROM archlinux:base
 
 RUN pacman -Syu --noconfirm --needed \
+      alsa-lib \
       appmenu-gtk-module \
       bash \
       ca-certificates \

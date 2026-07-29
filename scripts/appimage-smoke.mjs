@@ -349,7 +349,11 @@ async function clickExternalLink() {
 async function signOut() {
   await selectSettingsTab('Account')
   await clickText('button', 'Sign out', false)
-  await waitFor('login after sign out', () => findCss('[data-testid="login-page"]'), 60_000)
+  // Sign-out reloads the whole SPA (location.reload()), re-initializing the multi-megabyte
+  // rust-crypto WASM bundle from scratch. On a software-rendering-only CI worker (no /dev/dri
+  // access) and right after the heavy recovery-key import above, that cold reload can run past
+  // 60s - match the other generous waits in this script (recovery success, fixture room row).
+  await waitFor('login after sign out', () => findCss('[data-testid="login-page"]'), 120_000)
   console.log(`PASS ${platformName}: signed out and revoked the desktop session`)
 }
 
