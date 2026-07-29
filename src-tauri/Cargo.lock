@@ -1065,6 +1065,7 @@ name = "foxchat"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "notify-rust",
  "serde",
  "serde_json",
  "tauri",

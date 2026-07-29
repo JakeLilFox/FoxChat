@@ -571,7 +571,7 @@
         "type": "cmd",
         "id": "d4c3e6f8-9001-4c23-bd4e-5f6a7b8c9d0e",
         "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export JAVA_HOME=/tmp/jdk21 && export PATH=$JAVA_HOME/bin:$PATH && export ANDROID_E2E_ADB_KEY_BASE64=\"${ANDROID_E2E_ADB_KEY_BASE64}\" && if [ -f /tmp/fdroid-apk/app-universal.apk ]; then APK_PATH=/tmp/fdroid-apk/app-universal.apk; else APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk -type f -path '*/x86_64/*' -name '*.apk' | sort | head -n 1); fi && test -n \"$APK_PATH\" && export ANDROID_E2E_APK_PATH=\"$APK_PATH\" && npm run android:e2e:setup-emulator && npm run test:e2e:android"
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export JAVA_HOME=/tmp/jdk21 && export PATH=$JAVA_HOME/bin:$PATH && export ANDROID_E2E_ADB_KEY_BASE64=\"${ANDROID_E2E_ADB_KEY_BASE64}\" && if [ -f /tmp/fdroid-apk/app-universal.apk ]; then APK_PATH=/tmp/fdroid-apk/app-universal.apk; else APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' \\( -path '*/x86_64/*' -o -path '*/universal/*' \\) | sort | head -n 1); fi && test -n \"$APK_PATH\" && export ANDROID_E2E_APK_PATH=\"$APK_PATH\" && npm run android:e2e:setup-emulator && npm run test:e2e:android"
         ],
         "flags": [
           "ignore-errors"

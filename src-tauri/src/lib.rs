@@ -1,17 +1,65 @@
 use tauri::Manager;
 mod automation_api;
 
+#[cfg(desktop)]
+fn open_notification_room(app: &tauri::AppHandle, room_id: &str) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let room_id = serde_json::to_string(room_id).unwrap_or_else(|_| "\"\"".to_string());
+    let script = format!(
+        "window.__foxchatPendingNotificationRoom={room_id};\
+         window.dispatchEvent(new CustomEvent('foxchat-notification-open',{{detail:{room_id}}}));"
+    );
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    let _ = window.eval(script);
+}
+
+#[tauri::command]
+#[cfg(desktop)]
+fn show_desktop_notification(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+    room_id: String,
+) -> Result<(), String> {
+    let mut notification = notify_rust::Notification::new();
+    notification
+        .appname("FoxChat")
+        .summary(&title)
+        .body(&body)
+        .action("default", "Open");
+    #[cfg(target_os = "windows")]
+    notification.app_id(&app.config().identifier);
+    let handle = notification.show().map_err(|error| error.to_string())?;
+    std::thread::spawn(move || {
+        let activated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let activated_in_handler = activated.clone();
+        let _ = handle.wait_for_response(move |response: &notify_rust::NotificationResponse| {
+            activated_in_handler.store(
+                matches!(
+                    response,
+                    notify_rust::NotificationResponse::Default
+                        | notify_rust::NotificationResponse::Action(_)
+                ),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        });
+        if activated.load(std::sync::atomic::Ordering::Relaxed) {
+            open_notification_room(&app, &room_id);
+        }
+    });
+    Ok(())
+}
+
 fn accounts_directory(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let default_directory = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
 
-    // Android sandboxes each application. Walking to the parent of the app
-    // data directory can leave the writable sandbox, which meant the account
-    // backup was never created and an updated WebView could lose every login.
-    // app_data_dir itself is private, durable across normal app updates, and
-    // removed only when the user clears app data or uninstalls the app.
     #[cfg(mobile)]
     return Ok(default_directory.join("FoxChat"));
 
@@ -74,6 +122,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             save_matrix_accounts,
             load_matrix_accounts,
+            #[cfg(desktop)]
+            show_desktop_notification,
             automation_api::start_automation_api,
             automation_api::stop_automation_api,
             automation_api::automation_api_status,

@@ -47,6 +47,7 @@ export function fakeEvent(options: FakeEventOptions): MatrixEvent {
     getSender: () => options.sender,
     getTs: () => options.ts ?? 0,
     isRedacted: () => options.redacted ?? false,
+    isDecryptionFailure: () => false,
     getContent: <T>() => content as T,
     getOriginalContent: <T>() => content as T,
     getPrevContent: <T>() => (options.prevContent ?? {}) as T,

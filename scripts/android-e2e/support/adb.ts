@@ -54,13 +54,17 @@ export function pressHome() {
 export async function closeBackgroundApp(packageName: string) {
   pressHome()
   await new Promise((resolve) => setTimeout(resolve, 1000))
+  const originalPids = adbAllowFailure(['shell', 'pidof', packageName]).trim()
   adb(['shell', 'am', 'kill', packageName])
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
-    if (!adbAllowFailure(['shell', 'pidof', packageName]).trim()) return
+    const currentPids = adbAllowFailure(['shell', 'pidof', packageName]).trim()
+    if (!currentPids || (originalPids && currentPids !== originalPids)) return
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  throw new Error(`${packageName} was still running after \`adb shell am kill\``)
+  throw new Error(
+    `${packageName} process ${originalPids || '(unknown)'} did not exit after \`adb shell am kill\``,
+  )
 }
 
 export function relaunchWithE2eDebugFlag(packageName: string, mainActivity: string) {

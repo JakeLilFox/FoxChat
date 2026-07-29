@@ -139,6 +139,58 @@ test.describe('live timeline history-pagination journey', () => {
         await expect(remotePage!.getByTestId('timeline').getByText(firstLabel)).toHaveCount(0)
       })
 
+      await test.step('loading one history page preserves the visible anchor away from the top', async () => {
+        const timeline = remotePage!.getByTestId('timeline')
+        const newestLabel = 'Newest message before history pagination'
+        await sendFillerMessages(account1Session!, roomId!, 1, newestLabel)
+        await expect(timeline.getByText(newestLabel)).toBeVisible({ timeout: 30_000 })
+        const historyRoute = '**/_matrix/client/**/rooms/**/messages*'
+        let delayedHistoryRequest = false
+        await remotePage!.route(historyRoute, async (route) => {
+          if (!delayedHistoryRequest) {
+            delayedHistoryRequest = true
+            await new Promise((resolve) => setTimeout(resolve, 350))
+          }
+          await route.continue()
+        })
+
+        await timeline.hover()
+        await expect
+          .poll(
+            async () => {
+              await remotePage!.mouse.wheel(0, -900)
+              return delayedHistoryRequest
+            },
+            { timeout: 15_000, intervals: [200] },
+          )
+          .toBe(true)
+        const anchor = await timeline.evaluate((element) => {
+          const bounds = element.getBoundingClientRect()
+          const node = [...element.querySelectorAll<HTMLElement>('[data-event-id]')].find(
+            (candidate) => candidate.getBoundingClientRect().bottom > bounds.top,
+          )
+          return {
+            eventId: node?.dataset.eventId,
+            offset: node ? node.getBoundingClientRect().top - bounds.top : 0,
+          }
+        })
+        expect(anchor.eventId).toBeTruthy()
+
+        await expect
+          .poll(() => timeline.evaluate((element) => element.scrollTop), { timeout: 30_000 })
+          .toBeGreaterThan(80)
+        const restoredOffset = await timeline
+          .locator(`[data-event-id="${anchor.eventId}"]`)
+          .evaluate((node) => {
+            const timelineElement = node.closest<HTMLElement>('[data-testid="timeline"]')
+            return (
+              node.getBoundingClientRect().top - (timelineElement?.getBoundingClientRect().top ?? 0)
+            )
+          })
+        expect(Math.abs(restoredOffset - anchor.offset)).toBeLessThan(20)
+        await remotePage!.unroute(historyRoute)
+      })
+
       await test.step('scrolling up repeatedly reaches the very first message', async () => {
         const first = remotePage!.getByTestId('timeline').getByText(firstLabel)
         await expect

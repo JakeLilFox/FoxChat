@@ -750,7 +750,9 @@ function TimelineView({
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
             const restore = () => {
-              if (!anchorId || positionStabilizerSuperseded.current) return
+              // Pagination owns this anchor. A newer event may supersede the initial room-mount
+              // stabilizer, but must not leave user-driven history pagination pinned at the top.
+              if (!anchorId) return
               const target = box.querySelector<HTMLElement>(
                 `[data-event-id="${CSS.escape(anchorId)}"]`,
               )
@@ -837,7 +839,7 @@ function TimelineView({
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
-            if (anchorId && !positionStabilizerSuperseded.current) {
+            if (anchorId) {
               const target = box.querySelector<HTMLElement>(
                 `[data-event-id="${CSS.escape(anchorId)}"]`,
               )
