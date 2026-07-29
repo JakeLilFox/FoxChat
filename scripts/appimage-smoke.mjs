@@ -321,11 +321,10 @@ async function restoreRecovery() {
   await clickText('button', 'Restore encrypted history')
   await fill('input[placeholder*="xxxx"], input[placeholder*="Recovery"], textarea', recoveryKey)
   await clickText('button', 'Restore keys')
-  await waitFor(
-    'recovery success',
-    async () => !(await bodyContains('Restore encrypted history')),
-    120_000,
-  )
+  // "Restore encrypted history" is also the trigger button's permanent label in the Security
+  // tab, so it never leaves the page and can't be used as a completion signal. "Restore keys"
+  // is unique to the recovery modal's own OK button and only visible while that modal is open.
+  await waitFor('recovery success', async () => !(await bodyContains('Restore keys')), 120_000)
   console.log(`PASS ${platformName}: recovery key restored encrypted history`)
 }
 
