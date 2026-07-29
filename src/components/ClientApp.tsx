@@ -773,6 +773,7 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
             : 'Enter the optional passphrase chosen when encrypted backup was set up.'}
         </p>
         <Input.Password
+          data-testid="recovery-secret-input"
           value={recoverySecret}
           onChange={(e) => setRecoverySecret(e.target.value)}
           onPressEnter={() => void restore()}

@@ -319,11 +319,8 @@ async function selectSettingsTab(name) {
 async function restoreRecovery() {
   await selectSettingsTab('Security')
   await clickText('button', 'Restore encrypted history')
-  await fill('input[placeholder*="xxxx"], input[placeholder*="Recovery"], textarea', recoveryKey)
+  await fill('[data-testid="recovery-secret-input"] input', recoveryKey)
   await clickText('button', 'Restore keys')
-  // "Restore encrypted history" is also the trigger button's permanent label in the Security
-  // tab, so it never leaves the page and can't be used as a completion signal. "Restore keys"
-  // is unique to the recovery modal's own OK button and only visible while that modal is open.
   await waitFor('recovery success', async () => !(await bodyContains('Restore keys')), 120_000)
   console.log(`PASS ${platformName}: recovery key restored encrypted history`)
 }
@@ -349,10 +346,6 @@ async function clickExternalLink() {
 async function signOut() {
   await selectSettingsTab('Account')
   await clickText('button', 'Sign out', false)
-  // Sign-out reloads the whole SPA (location.reload()), re-initializing the multi-megabyte
-  // rust-crypto WASM bundle from scratch. On a software-rendering-only CI worker (no /dev/dri
-  // access) and right after the heavy recovery-key import above, that cold reload can run past
-  // 60s - match the other generous waits in this script (recovery success, fixture room row).
   await waitFor('login after sign out', () => findCss('[data-testid="login-page"]'), 120_000)
   console.log(`PASS ${platformName}: signed out and revoked the desktop session`)
 }
