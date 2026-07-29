@@ -2,12 +2,26 @@ import { MatrixEmoteImage } from './message'
 import { type MatrixEmotePack, uniquePackName } from '../lib/emojiData'
 import { IconBtn, PackEditorWrap } from '../styles'
 import { useRef, useState } from 'react'
-import { Button, Empty, Input, Segmented, App as AntApp } from 'antd'
-import { DeleteOutlined, FileZipOutlined, UploadOutlined } from '@ant-design/icons'
+import { Button, Empty, Input, Modal, Segmented, App as AntApp } from 'antd'
+import {
+  CloudDownloadOutlined,
+  DeleteOutlined,
+  FileZipOutlined,
+  UploadOutlined,
+} from '@ant-design/icons'
 import { type ImageInfo } from 'matrix-js-sdk/lib/@types/media'
 import { type MatrixClient } from 'matrix-js-sdk'
 import JSZip from 'jszip'
 import { matrixService } from '../matrix/MatrixClientService'
+
+const TELEGRAM_DOWNLOAD_ENDPOINT = 'https://sticker.zenzon.net/download'
+const telegramPackName = (url: string) => {
+  try {
+    return new URL(url).pathname.split('/').filter(Boolean).pop()
+  } catch {
+    return url.split('/').filter(Boolean).pop()
+  }
+}
 
 type PackItem = {
   id: string
@@ -34,7 +48,7 @@ const mimeFromName = (name: string) => {
       return 'application/octet-stream'
   }
 }
-const filesFromZip = async (file: File) => {
+const filesFromZip = async (file: Blob) => {
   const zip = await JSZip.loadAsync(file)
   const entries = Object.values(zip.files).filter((entry) => {
     const base = entry.name.split('/').pop() ?? ''
@@ -94,6 +108,8 @@ export function ImagePackEditor({
     ),
   )
   const [busy, setBusy] = useState(false)
+  const [telegramModalOpen, setTelegramModalOpen] = useState(false)
+  const [telegramUrl, setTelegramUrl] = useState('')
   const addUploaded = (uploaded: { body: string; url: string; info?: unknown }[]) => {
     setItems((current) => {
       const used = new Set(current.map((item) => item.name))
@@ -149,6 +165,35 @@ export function ImagePackEditor({
     } finally {
       setBusy(false)
       if (zipInput.current) zipInput.current.value = ''
+    }
+  }
+  const importFromTelegram = async () => {
+    const url = telegramUrl.trim()
+    if (!url) return
+    setBusy(true)
+    try {
+      const response = await fetch(`${TELEGRAM_DOWNLOAD_ENDPOINT}?url=${encodeURIComponent(url)}`)
+      if (!response.ok) throw new Error(`Could not download that sticker pack (${response.status})`)
+      const extracted = await filesFromZip(await response.blob())
+      if (!extracted.length) {
+        message.warning('No PNG, GIF, JPEG or WebP images found in that sticker pack')
+        return
+      }
+      const uploaded = await matrixService.uploadImagePackFiles(extracted)
+      addUploaded(uploaded)
+      const packName = telegramPackName(url)
+      if (packName) setName(packName)
+      message.success(
+        `${extracted.length} image${extracted.length === 1 ? '' : 's'} imported from Telegram, review the names, then save`,
+      )
+      setTelegramModalOpen(false)
+      setTelegramUrl('')
+    } catch (error) {
+      message.error(
+        error instanceof Error ? error.message : 'Could not import that Telegram sticker pack',
+      )
+    } finally {
+      setBusy(false)
     }
   }
   const save = async () => {
@@ -215,6 +260,13 @@ export function ImagePackEditor({
         <Button icon={<FileZipOutlined />} loading={busy} onClick={() => zipInput.current?.click()}>
           Import zip
         </Button>
+        <Button
+          icon={<CloudDownloadOutlined />}
+          loading={busy}
+          onClick={() => setTelegramModalOpen(true)}
+        >
+          Import from Telegram
+        </Button>
         <Button type="primary" loading={busy} onClick={() => void save()}>
           Save all changes
         </Button>
@@ -223,6 +275,27 @@ export function ImagePackEditor({
           PNG, GIF, JPEG or WebP inside is added as a sticker.
         </span>
       </div>
+      <Modal
+        title="Import from Telegram"
+        open={telegramModalOpen}
+        okText="Import"
+        confirmLoading={busy}
+        onOk={() => void importFromTelegram()}
+        onCancel={() => setTelegramModalOpen(false)}
+      >
+        <p>
+          Paste a Telegram sticker pack link, e.g. <code>https://t.me/addstickers/foxflea</code>.
+          The pack name is taken from the end of the link.
+        </p>
+        <Input
+          aria-label="Telegram sticker pack link"
+          placeholder="https://t.me/addstickers/foxflea"
+          value={telegramUrl}
+          onChange={(event) => setTelegramUrl(event.target.value)}
+          onPressEnter={() => void importFromTelegram()}
+          autoFocus
+        />
+      </Modal>
       <div className="packList">
         {items.map((item) => (
           <div className="packItem" key={item.id}>

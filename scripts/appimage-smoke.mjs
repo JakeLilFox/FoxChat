@@ -94,8 +94,28 @@ async function waitFor(description, operation, timeout = 90_000) {
   )
 }
 
+const CONNECT_FAILURE_CODES = new Set([
+  'UND_ERR_CONNECT_TIMEOUT',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+])
+
+async function fetchWithRetry(url, options, attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fetch(url, options)
+    } catch (error) {
+      const retryable = attempt < attempts && CONNECT_FAILURE_CODES.has(error?.cause?.code)
+      if (!retryable) throw error
+      await new Promise((resolve) => setTimeout(resolve, attempt * 2_000))
+    }
+  }
+}
+
 async function matrix(path, { method = 'GET', token, body } = {}) {
-  const response = await fetch(`${homeserver}${path}`, {
+  const response = await fetchWithRetry(`${homeserver}${path}`, {
     method,
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
