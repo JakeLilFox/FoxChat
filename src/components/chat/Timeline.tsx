@@ -1498,7 +1498,8 @@ function TimelineView({
   }
   const send = () => {
     const body = draftRef.current.trim()
-    const images = [...pendingImagesRef.current]
+
+    const images = [...pendingImages]
     const galleryIds = assignGalleryIds(images, (file) => file.type.startsWith('image/'))
     if (!body && !images.length) return
     if (!canSendMessages) {

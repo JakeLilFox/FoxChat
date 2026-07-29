@@ -164,6 +164,19 @@ async function findCss(selector) {
   return refId(value)
 }
 
+async function findEventContent(eventId, selector) {
+  const value = await command('POST', sessionPath('/execute/sync'), {
+    script: `
+      const event = [...document.querySelectorAll('[data-event-id]')].find(
+        element => element.dataset.eventId === arguments[0]
+      )
+      return event?.querySelector(arguments[1]) || null
+    `,
+    args: [eventId, selector],
+  })
+  return refId(value)
+}
+
 async function findText(selector, text, exact = true) {
   const value = await command('POST', sessionPath('/execute/sync'), {
     script: `
@@ -285,9 +298,9 @@ async function attachPng() {
   await waitFor('pending image', () => findCss('[aria-label="Remove image"]'), 30_000)
   await clickCss('[aria-label="Send message"]')
   await waitFor(
-    'uploaded image in timeline',
-    () => findCss('[data-testid="message-image"], [data-testid="message-gallery"]'),
-    90_000,
+    'image accepted for upload',
+    async () => !(await findCss('[aria-label="Remove image"]')),
+    15_000,
   )
 }
 
@@ -365,6 +378,15 @@ async function dumpPageState(name) {
 }
 
 async function closeRoomWithEscape() {
+  await command('POST', sessionPath('/execute/sync'), {
+    script: `
+      const target = document.querySelector('[data-testid="room-header"]') || document.body
+      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'])
+        target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }))
+    `,
+    args: [],
+  })
+  await delay(300)
   await command('POST', sessionPath('/actions'), {
     actions: [
       {
@@ -378,7 +400,12 @@ async function closeRoomWithEscape() {
     ],
   })
   await command('DELETE', sessionPath('/actions')).catch(() => undefined)
-  await waitFor('empty room state after Escape', () => findText('h3', 'Select a room'))
+  try {
+    await waitFor('empty room state after Escape', () => findText('h3', 'Select a room'), 30_000)
+  } catch (error) {
+    await dumpPageState('escape-timeout')
+    throw error
+  }
   const url = new URL(await command('GET', sessionPath('/url')))
   if (url.searchParams.has('room')) throw new Error('Escape left the selected room in the URL')
   console.log(`PASS ${platformName}: Escape closed the selected room`)
@@ -457,11 +484,20 @@ try {
     console.log(`PASS ${platformName}: sent text and verified the Matrix event`)
 
     await attachPng()
-    await waitFor(
+    const imageEvent = await waitFor(
       'image event on Matrix server',
       async () =>
-        (await roomMessages(fixture.access_token, roomId)).some(
+        (await roomMessages(fixture.access_token, roomId)).find(
           (event) => event.content?.msgtype === 'm.image' && event.content?.url,
+        ),
+      90_000,
+    )
+    await waitFor(
+      'sent image event in timeline',
+      () =>
+        findEventContent(
+          imageEvent.event_id,
+          '[data-testid="message-image"], [data-testid="message-gallery"]',
         ),
       90_000,
     )

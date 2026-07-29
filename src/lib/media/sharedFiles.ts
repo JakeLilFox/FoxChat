@@ -41,6 +41,49 @@ const extensionForImageType = (type: string) =>
 const replaceFileExtension = (name: string, extension: string) =>
   /\.[^.]+$/.test(name) ? name.replace(/\.[^.]+$/, extension) : `${name}${extension}`
 
+type DecodedImage = {
+  source: CanvasImageSource
+  width: number
+  height: number
+  close: () => void
+}
+
+async function decodeImage(file: File): Promise<DecodedImage> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file)
+      return {
+        source: bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+        close: () => bitmap.close(),
+      }
+    } catch {
+      // WebKitGTK may expose createImageBitmap without supporting File inputs.
+    }
+  }
+
+  if (typeof Image === 'undefined') throw new Error('Image decoding is unavailable')
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const image = new Image()
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new Error('Image decoding failed'))
+      image.src = objectUrl
+    })
+    return {
+      source: image,
+      width: image.naturalWidth || image.width,
+      height: image.naturalHeight || image.height,
+      close: () => URL.revokeObjectURL(objectUrl),
+    }
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl)
+    throw error
+  }
+}
+
 const stripGifMetadata = async (file: File) => {
   const input = new Uint8Array(await file.arrayBuffer())
   if (input.length < 13 || new TextDecoder('ascii').decode(input.subarray(0, 3)) !== 'GIF') {
@@ -113,9 +156,9 @@ const stripGifMetadata = async (file: File) => {
 export async function stripImageMetadata(file: File) {
   const type = file.type.toLowerCase()
   if (type === 'image/gif') return stripGifMetadata(file)
-  let bitmap: ImageBitmap
+  let image: DecodedImage
   try {
-    bitmap = await createImageBitmap(file)
+    image = await decodeImage(file)
   } catch {
     throw new Error(
       `Could not remove metadata from ${file.type || 'this image type'}. Turn it off to send the original.`,
@@ -124,11 +167,11 @@ export async function stripImageMetadata(file: File) {
 
   try {
     const canvas = document.createElement('canvas')
-    canvas.width = bitmap.width
-    canvas.height = bitmap.height
+    canvas.width = image.width
+    canvas.height = image.height
     const context = canvas.getContext('2d')
     if (!context) throw new Error('Image metadata removal is unavailable')
-    context.drawImage(bitmap, 0, 0)
+    context.drawImage(image.source, 0, 0)
     const requestedType =
       type === 'image/jpeg' || type === 'image/png' || type === 'image/webp'
         ? type
@@ -149,24 +192,30 @@ export async function stripImageMetadata(file: File) {
       lastModified: Date.now(),
     })
   } finally {
-    bitmap.close()
+    image.close()
   }
 }
 
 export async function compressedImageFile(file: File) {
   if (!/^image\/(jpeg|png|webp|bmp)$/i.test(file.type)) return file
-  const bitmap = await createImageBitmap(file)
-  const scale = Math.min(1, 1920 / Math.max(bitmap.width, bitmap.height))
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale))
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale))
-  const context = canvas.getContext('2d')
-  if (!context) {
-    bitmap.close()
+  let image: DecodedImage
+  try {
+    image = await decodeImage(file)
+  } catch {
+    // Compression is optional
     return file
   }
-  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-  bitmap.close()
+  const scale = Math.min(1, 1920 / Math.max(image.width, image.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(image.width * scale))
+  canvas.height = Math.max(1, Math.round(image.height * scale))
+  const context = canvas.getContext('2d')
+  if (!context) {
+    image.close()
+    return file
+  }
+  context.drawImage(image.source, 0, 0, canvas.width, canvas.height)
+  image.close()
   const blob = await new Promise<Blob | undefined>((resolve) =>
     canvas.toBlob((value) => resolve(value ?? undefined), 'image/webp', 0.82),
   )
