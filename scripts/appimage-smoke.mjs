@@ -27,18 +27,47 @@ if (!skipRecovery && !recoveryKey)
 await mkdir(outputDirectory, { recursive: true })
 await unlink(openedUrlFile).catch(() => undefined)
 
+const CONNECT_FAILURE_CODES = new Set([
+  'UND_ERR_CONNECT_TIMEOUT',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+])
+
+async function fetchWithRetry(url, options, attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fetch(url, options)
+    } catch (error) {
+      const retryable = attempt < attempts && CONNECT_FAILURE_CODES.has(error?.cause?.code)
+      if (!retryable) throw error
+      await new Promise((resolve) => setTimeout(resolve, attempt * 2_000))
+    }
+  }
+}
+
 async function discoverHomeserver(value) {
   const normalized = (/^https?:\/\//i.test(value) ? value : `https://${value}`).replace(/\/$/, '')
   try {
-    const response = await fetch(`${normalized}/.well-known/matrix/client`, {
+    const response = await fetchWithRetry(`${normalized}/.well-known/matrix/client`, {
       signal: AbortSignal.timeout(15_000),
     })
     if (response.ok) {
       const discovered = (await response.json())['m.homeserver']?.base_url
       if (discovered) return new URL(discovered, normalized).toString().replace(/\/$/, '')
+      console.warn(
+        `[discovery] ${normalized}/.well-known/matrix/client did not include m.homeserver.base_url; using ${normalized} directly`,
+      )
+    } else {
+      console.warn(
+        `[discovery] ${normalized}/.well-known/matrix/client returned ${response.status}; using ${normalized} directly`,
+      )
     }
-  } catch {
-    // Direct homeserver URLs do not need discovery.
+  } catch (error) {
+    console.warn(
+      `[discovery] Could not reach ${normalized}/.well-known/matrix/client (${error instanceof Error ? error.message : error}); using ${normalized} directly`,
+    )
   }
   return normalized
 }
@@ -92,26 +121,6 @@ async function waitFor(description, operation, timeout = 90_000) {
       lastError instanceof Error ? `: ${lastError.message}` : ''
     }`,
   )
-}
-
-const CONNECT_FAILURE_CODES = new Set([
-  'UND_ERR_CONNECT_TIMEOUT',
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ENOTFOUND',
-  'EAI_AGAIN',
-])
-
-async function fetchWithRetry(url, options, attempts = 3) {
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      return await fetch(url, options)
-    } catch (error) {
-      const retryable = attempt < attempts && CONNECT_FAILURE_CODES.has(error?.cause?.code)
-      if (!retryable) throw error
-      await new Promise((resolve) => setTimeout(resolve, attempt * 2_000))
-    }
-  }
 }
 
 async function matrix(path, { method = 'GET', token, body } = {}) {
