@@ -1,3 +1,6 @@
+import { matrixService } from '../matrix/MatrixClientService'
+import { writeRoomUrl } from './urlState'
+
 export const formattedTags = new Set([
   'B',
   'STRONG',
@@ -33,6 +36,30 @@ export const matrixUserIdFromHref = (href: string) => {
   } catch {
     return undefined
   }
+}
+
+export const roomReferenceFromHref = (href: string) => {
+  if (!href.startsWith('foxchat://room/')) return undefined
+  const target = decodeURIComponent(href.slice('foxchat://room/'.length))
+  return /^[#!][^\s/]+:[^\s/]+$/.test(target) ? target : undefined
+}
+
+// Opens an already-joined room directly; otherwise hands off to the join-room flow so the
+// user can pick which account to join with, mirroring how invite links are handled.
+export const openRoomReference = (value: string) => {
+  const room = matrixService
+    .rooms()
+    .find(
+      (candidate) =>
+        candidate.roomId === value ||
+        candidate.getCanonicalAlias() === value ||
+        candidate.getAltAliases().includes(value),
+    )
+  if (room) {
+    writeRoomUrl(room.roomId)
+    return
+  }
+  window.dispatchEvent(new CustomEvent('foxchat-join-room', { detail: value }))
 }
 
 export const firstPreviewUrl = (body: string) =>

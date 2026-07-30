@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { marked, type Token } from 'marked'
 import { CloseOutlined, CopyOutlined } from '@ant-design/icons'
 import { highlightCode } from '../../lib/codeHighlight'
+import { openRoomReference, roomReferenceFromHref } from '../../lib/messageText'
 import { preprocessMarkdown } from '../../lib/markdownPreprocess'
 import { JsonFilePreview } from './JsonFilePreview'
 import {
@@ -210,7 +211,10 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
         return `<span class="md-mention">${safeHtml(text ?? href)}</span>`
       }
       if (href && href.startsWith('foxchat://room/')) {
-        return `<span class="md-room-mention">${safeHtml(text ?? href)}</span>`
+        const target = roomReferenceFromHref(href)
+        return target
+          ? `<span class="md-room-mention" data-room-target="${safeHtml(target)}" tabindex="0" role="button" aria-label="Open room ${safeHtml(target)}">${safeHtml(text ?? target)}</span>`
+          : `<span class="md-room-mention">${safeHtml(text ?? href)}</span>`
       }
       if (href && href.startsWith('foxchat://spoiler/')) {
         return `<span class="md-spoiler" data-spoiler tabindex="0" role="button" aria-label="Spoiler, click to reveal">${safeHtml(text ?? href)}</span>`
@@ -306,6 +310,12 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
         spoiler.classList.toggle('revealed')
         return
       }
+      const roomMention = (event.target as HTMLElement).closest<HTMLElement>('.md-room-mention')
+      if (roomMention && root.contains(roomMention)) {
+        const target = roomMention.dataset.roomTarget
+        if (target) openRoomReference(target)
+        return
+      }
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-code-action]')
       if (!button || !root.contains(button)) return
       event.preventDefault()
@@ -337,9 +347,17 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
     const keydown = (event: KeyboardEvent) => {
       if (event.key !== 'Enter' && event.key !== ' ') return
       const spoiler = (event.target as HTMLElement).closest<HTMLElement>('.md-spoiler')
-      if (!spoiler || !root.contains(spoiler)) return
+      if (spoiler && root.contains(spoiler)) {
+        event.preventDefault()
+        spoiler.classList.toggle('revealed')
+        return
+      }
+      const roomMention = (event.target as HTMLElement).closest<HTMLElement>('.md-room-mention')
+      if (!roomMention || !root.contains(roomMention)) return
+      const target = roomMention.dataset.roomTarget
+      if (!target) return
       event.preventDefault()
-      spoiler.classList.toggle('revealed')
+      openRoomReference(target)
     }
     root.addEventListener('click', click)
     root.addEventListener('keydown', keydown)

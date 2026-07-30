@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { EventType, HistoryVisibility, MatrixEvent, type Room } from 'matrix-js-sdk'
+import { DecryptionFailureCode } from 'matrix-js-sdk/lib/crypto-api'
 import { describe, expect, it } from 'vitest'
 import {
   eventBody,
@@ -126,6 +127,15 @@ describe('content presentation helpers', () => {
     } as unknown as Room
 
     expect(isPreJoinHistoryUnavailable(message, room, userId)).toBe(true)
+  })
+
+  it('uses the exact crypto failure reason when cached membership timing is unavailable', () => {
+    const message = event(EventType.RoomMessageEncrypted, {})
+    Object.defineProperty(message, 'decryptionFailureReason', {
+      value: DecryptionFailureCode.HISTORICAL_MESSAGE_USER_NOT_JOINED,
+    })
+
+    expect(isPreJoinHistoryUnavailable(message, undefined, undefined)).toBe(true)
   })
 
   it('does not confuse other missing-key failures with unavailable pre-join history', () => {

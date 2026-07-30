@@ -13,6 +13,7 @@ export function RoomActionsHost() {
   const { message } = AntApp.useApp()
   const [action, setAction] = useState<RoomAction | undefined>(roomActionFromUrl)
   const [inviteRoomId, setInviteRoomId] = useState<string>()
+  const [joinHint, setJoinHint] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [form] = Form.useForm()
   const accounts = matrixService.availableAccounts()
@@ -24,19 +25,26 @@ export function RoomActionsHost() {
       const next = roomActionFromUrl()
       setAction(next)
       if (next !== 'invite') setInviteRoomId(undefined)
+      if (next !== 'join') setJoinHint(undefined)
     }
     const invite = (event: Event) => {
       setInviteRoomId((event as CustomEvent<string>).detail)
       setRoomActionUrl('invite')
     }
+    const join = (event: Event) => {
+      setJoinHint((event as CustomEvent<string>).detail)
+      setRoomActionUrl('join')
+    }
     window.addEventListener('popstate', navigate)
     window.addEventListener('foxchat-room-action', navigate)
     window.addEventListener('foxchat-invite-to-room', invite)
+    window.addEventListener('foxchat-join-room', join)
     navigate()
     return () => {
       window.removeEventListener('popstate', navigate)
       window.removeEventListener('foxchat-room-action', navigate)
       window.removeEventListener('foxchat-invite-to-room', invite)
+      window.removeEventListener('foxchat-join-room', join)
     }
   }, [])
   useEffect(() => {
@@ -51,7 +59,8 @@ export function RoomActionsHost() {
       (targetRoomId && matrixService.selectedRoomAccountId(targetRoomId)) ?? eligible[0]?.id,
     )
     if (action === 'create' || action === 'create-space') form.setFieldValue('federated', true)
-  }, [action, targetRoomId, form])
+    if (action === 'join' && joinHint) form.setFieldValue('room', joinHint)
+  }, [action, targetRoomId, joinHint, form])
   const close = (force = false) => {
     if (busy && !force) return
     if (history.state?.foxchatRoomAction === action) history.back()

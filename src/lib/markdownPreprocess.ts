@@ -1,7 +1,10 @@
 import { timestampMarkdownLinks } from './timestamps'
 
 const MENTION_RE = /(?<![A-Za-z0-9_/:.?&=%-])@([A-Za-z0-9._=/-]+:[A-Za-z0-9.-]+)/g
-const ROOM_RE = /(?<![A-Za-z0-9_/:.?&=%-])#([A-Za-z0-9._=-]+(?::[A-Za-z0-9.-]+)?)/g
+// A room alias always has a server part per the Matrix spec (#localpart:server_name) -
+// unlike room IDs, there is no valid alias form without one, so the suffix isn't optional here.
+// Making it optional previously matched plain "#hashtag" text as a room reference.
+const ROOM_RE = /(?<![A-Za-z0-9_/:.?&=%-])#([A-Za-z0-9._=-]+:[A-Za-z0-9.-]+)/g
 const ROOM_ID_RE = /(?<![A-Za-z0-9_/:.?&=%-])!([A-Za-z0-9_-]+(?::[A-Za-z0-9.-]+)?)/g
 const SPOILER_RE = /\|\|([^|]+)\|\|/g
 

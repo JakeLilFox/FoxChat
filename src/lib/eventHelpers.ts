@@ -1,4 +1,5 @@
 import { EventType, HistoryVisibility, M_POLL_START, MatrixEvent, Room } from 'matrix-js-sdk'
+import { DecryptionFailureCode } from 'matrix-js-sdk/lib/crypto-api'
 import { textOf } from './pollHelpers'
 import { type TimelineAppearanceSettings, timelineAppearanceSettings } from './constants'
 
@@ -50,6 +51,11 @@ export const isPreJoinHistoryUnavailable = (
   room: Room | null | undefined,
   userId: string | undefined | null,
 ) => {
+  // Rust crypto knows the membership at the event itself, which remains reliable when the
+  // current membership state is missing from a cached timeline or was replaced by a later
+  // profile/rejoin event.
+  if (event.decryptionFailureReason === DecryptionFailureCode.HISTORICAL_MESSAGE_USER_NOT_JOINED)
+    return true
   if (!room || !userId || room.getHistoryVisibility() !== HistoryVisibility.Joined) return false
   const membershipEvent = room.currentState.getStateEvents(EventType.RoomMember, userId)
   if (

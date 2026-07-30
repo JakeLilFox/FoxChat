@@ -3473,6 +3473,28 @@ export class MatrixClientService {
     return client.paginateEventTimeline(timeline, { backwards, limit })
   }
 
+  // In a combined multi-account room, only the account driving the on-screen timeline
+  // normally paginates. If that account joined more recently than another logged-in account
+  // sharing the room, its copy of older events can be undecryptable ("history before you
+  // joined") even though the other account could read them - but that other account's own
+  // timeline never independently backfills just because the primary one hit its join wall.
+  // This paginates every joined account a page backwards so combinedRoomEvents can pick up
+  // whichever account actually has a decryptable copy. Callers should keep invoking this
+  // (bounded) after hitting the wall, since it can take more than one page for a
+  // less-recently-scrolled account's timeline to catch up to the same point in history.
+  // Returns whether any account actually had more to fetch.
+  async backfillCombinedRoomHistory(roomId: string, limit = 30) {
+    const results = await Promise.allSettled(
+      this.roomAccounts(roomId).map(async ({ client }) => {
+        const room = client.getRoom(roomId)
+        const timeline = room?.getLiveTimeline()
+        if (!room || !timeline || !timeline.getPaginationToken(Direction.Backward)) return false
+        return client.paginateEventTimeline(timeline, { backwards: true, limit })
+      }),
+    )
+    return results.some((result) => result.status === 'fulfilled' && result.value)
+  }
+
   async joinRoom(roomIdOrAlias: string, viaServers?: string[]) {
     const invited = this.availableAccounts().find(
       (account) => account.client.getRoom(roomIdOrAlias)?.getMyMembership() === 'invite',

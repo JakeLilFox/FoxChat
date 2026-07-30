@@ -12,6 +12,7 @@ import {
   openChannelInSpace,
   openCurrentRoomSettings,
   openRoomActions,
+  openRoomRow,
   openRoomSettings,
   sendMessage,
   signIn,
@@ -86,6 +87,17 @@ const inviteFromCurrentRoom = async (page: Page, userId: string) => {
     () => invite.getByRole('button', { name: 'Send invitation' }).click(),
     { label: 'Matrix invite (joined-history)' },
   )
+}
+
+const expectPreJoinHistoryUnavailable = async (page: Page, eventId: string) => {
+  const oldEvent = page.locator(`[data-event-id="${eventId}"]`)
+  await expect(page.getByTestId('history-visibility-status')).toHaveText(
+    'History before you joined is not available in this room',
+    { timeout: 60_000 },
+  )
+  await expect(oldEvent).toHaveCount(0)
+  await expect(page.getByTestId('timeline').getByText(/Unable to decrypt/)).toHaveCount(0)
+  await expect(page.getByTestId('timeline').getByText('Loading earlier messages…')).toHaveCount(0)
 }
 
 test.describe('live joined-history decryption presentation', () => {
@@ -197,13 +209,16 @@ test.describe('live joined-history decryption presentation', () => {
         })
 
         await test.step('the old event is identified as unavailable history, not a crypto error', async () => {
-          const oldEvent = receiverPage.locator(`[data-event-id="${oldEventId}"]`)
-          await expect(oldEvent.getByTestId('history-unavailable')).toHaveText(
-            'Message unavailable · sent before you joined this room',
-            { timeout: 60_000 },
-          )
-          await expect(oldEvent.getByText(/Unable to decrypt/)).toHaveCount(0)
-          await expect(oldEvent.getByRole('button', { name: 'Retry' })).toHaveCount(0)
+          await expectPreJoinHistoryUnavailable(receiverPage, oldEventId)
+        })
+
+        await test.step('the explanation survives reload and cached timeline restoration', async () => {
+          await receiverPage.reload()
+          await openRoomRow(receiverPage, roomName)
+          await expect(
+            receiverPage.getByTestId('room-header').getByRole('heading', { name: roomName }),
+          ).toBeVisible({ timeout: 90_000 })
+          await expectPreJoinHistoryUnavailable(receiverPage, oldEventId)
         })
 
         await test.step('a message encrypted after the join still decrypts normally', async () => {
