@@ -5,8 +5,11 @@ import {
   ALL_ACCOUNT_IMAGE_PACKS_KEY,
   allAccountImagePacksEnabled,
   deduplicateFavoritePacks,
+  forgetRecents,
   imagePackAccounts,
   preferNonEmptyPack,
+  readRecent,
+  rememberRecent,
   setAllAccountImagePacksEnabled,
   uniquePackName,
   type MatrixEmotePack,
@@ -131,6 +134,20 @@ describe('combined-account image packs', () => {
     ]
 
     expect(deduplicateFavoritePacks(favorites, secondClient)).toEqual([favorites[1], favorites[2]])
+  })
+})
+
+describe('image-pack recents', () => {
+  it('removes deleted images without disturbing other recent entries', () => {
+    const key = 'foxchat-test-image-pack-recents'
+    localStorage.removeItem(key)
+    rememberRecent(key, { url: 'mxc://example.org/kept' }, (item) => item.url)
+    rememberRecent(key, { url: 'mxc://example.org/deleted' }, (item) => item.url)
+
+    forgetRecents<{ url: string }>(key, (item) => item.url.endsWith('/deleted'))
+
+    expect(readRecent(key)).toEqual([{ url: 'mxc://example.org/kept' }])
+    localStorage.removeItem(key)
   })
 })
 

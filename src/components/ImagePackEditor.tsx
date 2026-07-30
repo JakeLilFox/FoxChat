@@ -1,5 +1,11 @@
 import { MatrixEmoteImage } from './message'
-import { type MatrixEmotePack, uniquePackName } from '../lib/emojiData'
+import {
+  type MatrixEmotePack,
+  type StoredEmote,
+  forgetRecents,
+  recentStorage,
+  uniquePackName,
+} from '../lib/emojiData'
 import { IconBtn, PackEditorWrap } from '../styles'
 import { useRef, useState } from 'react'
 import { Button, Empty, Input, Modal, Segmented, App as AntApp } from 'antd'
@@ -86,6 +92,9 @@ export function ImagePackEditor({
     : matrixService.matrixClient
   const input = useRef<HTMLInputElement>(null)
   const zipInput = useRef<HTMLInputElement>(null)
+  const savedUrls = useRef(
+    new Set(Object.values(pack?.images ?? {}).flatMap((item) => (item.url ? [item.url] : []))),
+  )
   const [name, setName] = useState(
     pack?.pack?.display_name ??
       defaultName ??
@@ -214,6 +223,14 @@ export function ImagePackEditor({
       }
       if (roomId) await matrixService.saveRoomImagePack(roomId, content, stateKey)
       else await matrixService.savePersonalImagePack(content)
+      const currentUrls = new Set(items.map((item) => item.url))
+      const removedUrls = new Set([...savedUrls.current].filter((url) => !currentUrls.has(url)))
+      if (removedUrls.size) {
+        const wasRemoved = (item: StoredEmote) => removedUrls.has(item.url)
+        forgetRecents<StoredEmote>(recentStorage.emojis, wasRemoved)
+        forgetRecents<StoredEmote>(recentStorage.stickers, wasRemoved)
+      }
+      savedUrls.current = currentUrls
       setItems((current) =>
         current.map((item, index) => ({
           ...item,

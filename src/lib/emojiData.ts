@@ -169,6 +169,14 @@ export const rememberRecent = <T>(key: string, value: T, identity: (item: T) => 
   window.dispatchEvent(new CustomEvent('foxchat-recents', { detail: key }))
   return next
 }
+export const forgetRecents = <T>(key: string, shouldForget: (item: T) => boolean) => {
+  const current = readRecent<T>(key)
+  const next = current.filter((item) => !shouldForget(item))
+  if (next.length === current.length) return current
+  localStorage.setItem(key, JSON.stringify(next))
+  window.dispatchEvent(new CustomEvent('foxchat-recents', { detail: key }))
+  return next
+}
 export function useRecents<T>(key: string) {
   const [items, setItems] = useState<T[]>(() => readRecent<T>(key))
   useEffect(() => {
