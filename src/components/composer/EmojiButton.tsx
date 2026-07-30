@@ -16,14 +16,132 @@ import {
   useRecents,
 } from '../../lib/emojiData'
 import { containingSpacePath } from '../../lib/spaceHelpers'
+import {
+  emojiPickerSourceTab,
+  matrixPickerContentTab,
+  setEmojiPickerSourceTab,
+  setMatrixPickerContentTab,
+} from '../../lib/uiPreferences'
 import { closeEmojiUrl, emojiOpenFromUrl, openEmojiUrl } from '../../lib/urlState'
-import { EmojiGrid, EmojiPanel, IconBtn, PackCollection } from '../../styles'
+import { EmojiGrid, EmojiPanel, IconBtn, PackCollection, PackJumpBar } from '../../styles'
 import { useEffect, useRef, useState } from 'react'
 import { Empty, Popover, Tabs, Tooltip } from 'antd'
 import { SmileOutlined } from '@ant-design/icons'
 import { EventType, Room, RoomType } from 'matrix-js-sdk'
 import { type ImageInfo } from 'matrix-js-sdk/lib/@types/media'
 import { matrixService } from '../../matrix/MatrixClientService'
+
+type PickerPack = {
+  id: string
+  label: string
+  items: MatrixEmote[]
+}
+
+function MatrixPackBrowser({
+  usage,
+  groups,
+  recent,
+  client,
+  empty,
+  onSelect,
+}: {
+  usage: 'emoticon' | 'sticker'
+  groups: PickerPack[]
+  recent: StoredEmote[]
+  client: ReturnType<typeof matrixService.clientForRoom>
+  empty: string
+  onSelect: (emote: MatrixEmote) => void
+}) {
+  const collectionRef = useRef<HTMLDivElement>(null)
+  const packRefs = useRef(new Map<string, HTMLDivElement>())
+  const packs: PickerPack[] = [
+    ...(recent.length
+      ? [
+          {
+            id: 'recent',
+            label: 'Recently used',
+            items: recent.map((item) => ({ ...item, client })),
+          },
+        ]
+      : []),
+    ...groups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((emote) => !emote.usage || emote.usage.includes(usage)),
+      }))
+      .filter((group) => group.items.length),
+  ]
+  if (!packs.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty} />
+
+  const jumpToPack = (packId: string) => {
+    const collection = collectionRef.current
+    const target = packRefs.current.get(packId)
+    if (!collection || !target) return
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? 'auto'
+      : 'smooth'
+    if (collection.scrollHeight > collection.clientHeight + 1) {
+      collection.scrollTo({
+        top:
+          collection.scrollTop +
+          target.getBoundingClientRect().top -
+          collection.getBoundingClientRect().top,
+        behavior,
+      })
+    } else {
+      target.scrollIntoView({ behavior, block: 'start' })
+    }
+  }
+
+  return (
+    <div>
+      <PackJumpBar
+        role="navigation"
+        aria-label={usage === 'sticker' ? 'Sticker packs' : 'Emoji packs'}
+      >
+        {packs.map((pack) => (
+          <button
+            key={pack.id}
+            type="button"
+            title={pack.label}
+            aria-label={`Jump to ${pack.label}`}
+            onClick={() => jumpToPack(pack.id)}
+          >
+            <MatrixEmoteImage emote={pack.items[0]} />
+          </button>
+        ))}
+      </PackJumpBar>
+      <PackCollection ref={collectionRef}>
+        {packs.map((pack) => (
+          <div
+            className="pack"
+            key={pack.id}
+            ref={(node) => {
+              if (node) packRefs.current.set(pack.id, node)
+              else packRefs.current.delete(pack.id)
+            }}
+          >
+            <div className="packTitle">
+              {pack.label} · {pack.items.length}
+            </div>
+            <EmojiGrid $stickers={usage === 'sticker'}>
+              {pack.items.map((emote) => (
+                <button
+                  key={`${emote.name}:${emote.url}`}
+                  type="button"
+                  title={`${emote.body} · ${pack.label}`}
+                  onClick={() => onSelect(emote)}
+                >
+                  <MatrixEmoteImage emote={emote} />
+                </button>
+              ))}
+            </EmojiGrid>
+          </div>
+        ))}
+      </PackCollection>
+    </div>
+  )
+}
 
 export function EmojiButton({
   room,
@@ -37,6 +155,8 @@ export function EmojiButton({
   onSticker: (emote: MatrixEmote) => void
 }) {
   const [open, setOpen] = useState(() => emojiOpenFromUrl())
+  const [sourceTab, setSourceTab] = useState(emojiPickerSourceTab)
+  const [matrixContentTab, setMatrixContentTab] = useState(matrixPickerContentTab)
   const triggerRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -262,53 +382,6 @@ export function EmojiButton({
     })
     .filter((group) => group.items.length)
   const allCustom = groups.flatMap((group) => group.items)
-  const packGrid = (usage: 'emoticon' | 'sticker', empty: string) => {
-    const visible = groups
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((emote) => !emote.usage || emote.usage.includes(usage)),
-      }))
-      .filter((group) => group.items.length)
-    return visible.length ? (
-      <PackCollection>
-        {visible.map((group) => (
-          <div className="pack" key={group.id}>
-            <div className="packTitle">
-              {group.label} · {group.items.length}
-            </div>
-            <EmojiGrid $stickers={usage === 'sticker'}>
-              {group.items.map((emote) => (
-                <button
-                  key={`${emote.name}:${emote.url}`}
-                  type="button"
-                  title={`${emote.body} · ${group.label}`}
-                  onClick={() => {
-                    rememberRecent(
-                      usage === 'emoticon' ? recentStorage.emojis : recentStorage.stickers,
-                      {
-                        name: emote.name,
-                        body: emote.body,
-                        url: emote.url,
-                        info: emote.info,
-                        usage: emote.usage,
-                      },
-                      (item) => item.url,
-                    )
-                    ;(usage === 'emoticon' ? onEmote : onSticker)(emote)
-                    close()
-                  }}
-                >
-                  <MatrixEmoteImage emote={emote} />
-                </button>
-              ))}
-            </EmojiGrid>
-          </div>
-        ))}
-      </PackCollection>
-    ) : (
-      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty} />
-    )
-  }
   const emojiCount = allCustom.filter(
     (emote) => !emote.usage || emote.usage.includes('emoticon'),
   ).length
@@ -370,67 +443,57 @@ export function EmojiButton({
       ]}
     />
   )
-  const recentGrid = (
-    items: StoredEmote[],
-    select: (emote: MatrixEmote) => void,
-    stickers = false,
-  ) => (
-    <EmojiGrid $stickers={stickers}>
-      {items.map((item) => {
-        const emote = { ...item, client }
-        return (
-          <button
-            key={item.url}
-            type="button"
-            title={item.body}
-            onClick={() => {
-              rememberRecent(
-                select === onEmote ? recentStorage.emojis : recentStorage.stickers,
-                item,
-                (value) => value.url,
-              )
-              select(emote)
-              close()
-            }}
-          >
-            <MatrixEmoteImage emote={emote} />
-          </button>
-        )
-      })}
-    </EmojiGrid>
-  )
+  const selectMatrixItem = (usage: 'emoticon' | 'sticker', emote: MatrixEmote) => {
+    rememberRecent(
+      usage === 'emoticon' ? recentStorage.emojis : recentStorage.stickers,
+      {
+        name: emote.name,
+        body: emote.body,
+        url: emote.url,
+        info: emote.info,
+        usage: emote.usage,
+      },
+      (item) => item.url,
+    )
+    ;(usage === 'emoticon' ? onEmote : onSticker)(emote)
+    close()
+  }
   const matrixTabs = (
     <Tabs
       size="small"
+      activeKey={matrixContentTab}
+      onChange={(tab) => {
+        if (tab !== 'emoticon' && tab !== 'sticker') return
+        setMatrixContentTab(tab)
+        setMatrixPickerContentTab(tab)
+      }}
       items={[
         {
           key: 'emoticon',
           label: `Emoji (${emojiCount})`,
           children: (
-            <>
-              {recentEmojis.length > 0 && (
-                <>
-                  <div className="packTitle">Recently used</div>
-                  {recentGrid(recentEmojis, onEmote)}
-                </>
-              )}
-              {packGrid('emoticon', 'No Matrix emoji packs')}
-            </>
+            <MatrixPackBrowser
+              usage="emoticon"
+              groups={groups}
+              recent={recentEmojis}
+              client={client}
+              empty="No Matrix emoji packs"
+              onSelect={(emote) => selectMatrixItem('emoticon', emote)}
+            />
           ),
         },
         {
           key: 'sticker',
           label: `Stickers (${stickerCount})`,
           children: (
-            <>
-              {recentStickers.length > 0 && (
-                <>
-                  <div className="packTitle">Recently used</div>
-                  {recentGrid(recentStickers, onSticker, true)}
-                </>
-              )}
-              {packGrid('sticker', 'No Matrix sticker packs')}
-            </>
+            <MatrixPackBrowser
+              usage="sticker"
+              groups={groups}
+              recent={recentStickers}
+              client={client}
+              empty="No Matrix sticker packs"
+              onSelect={(emote) => selectMatrixItem('sticker', emote)}
+            />
           ),
         },
       ]}
@@ -440,6 +503,12 @@ export function EmojiButton({
     <EmojiPanel ref={panelRef}>
       <Tabs
         size="small"
+        activeKey={sourceTab}
+        onChange={(tab) => {
+          if (tab !== 'unicode' && tab !== 'matrix') return
+          setSourceTab(tab)
+          setEmojiPickerSourceTab(tab)
+        }}
         items={[
           { key: 'unicode', label: 'Unicode', children: unicodeTabs },
           {

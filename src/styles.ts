@@ -28,9 +28,11 @@ export const GlobalStyle = createGlobalStyle`*{box-sizing:border-box}:root{--fox
 .md-room-mention{border-radius:4px;padding:0 3px;background:${(p) => p.theme.accentSoft};color:${(p) => p.theme.accent};font-weight:600;cursor:pointer}
 .md-spoiler{border-radius:4px;padding:0 3px;background:${(p) => p.theme.text};color:transparent;cursor:pointer;transition:background .12s ease,color .12s ease}
 .md-spoiler.revealed{background:${(p) => p.theme.input};color:inherit}
-*::-webkit-scrollbar{width:9px;height:9px}
-*::-webkit-scrollbar-track,*::-webkit-scrollbar-corner{background:transparent}
-*::-webkit-scrollbar-button{display:none;width:0;height:0}
+*{scrollbar-width:thin;scrollbar-color:transparent transparent}
+*:hover,*.foxchat-scroll-active{scrollbar-color:color-mix(in srgb,${(p) => p.theme.muted} 55%,transparent) transparent}
+*::-webkit-scrollbar{width:9px;height:9px;background:transparent}
+*::-webkit-scrollbar-track,*::-webkit-scrollbar-track-piece,*::-webkit-scrollbar-corner{background:transparent}
+*::-webkit-scrollbar-button,*::-webkit-scrollbar-button:single-button{display:none;width:0;height:0;background:transparent;-webkit-appearance:none}
 *::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:transparent;background-clip:padding-box}
 *:hover::-webkit-scrollbar-thumb,*.foxchat-scroll-active::-webkit-scrollbar-thumb{background-color:color-mix(in srgb,${(p) => p.theme.muted} 55%,transparent)}
 *:hover::-webkit-scrollbar-thumb:hover{background-color:color-mix(in srgb,${(p) => p.theme.muted} 78%,transparent)}`
@@ -2840,6 +2842,40 @@ export const EmojiPanel = styled.div`
     .ant-tabs-content-holder {
       min-height: 0;
     }
+  }
+`
+export const PackJumpBar = styled.div`
+  display: flex;
+  gap: 5px;
+  margin: 0 0 8px;
+  padding: 3px 2px 7px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-bottom: 1px solid ${(p) => p.theme.border};
+  button {
+    display: grid;
+    place-items: center;
+    flex: 0 0 42px;
+    width: 42px;
+    height: 42px;
+    padding: 4px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: transparent;
+    color: ${(p) => p.theme.text};
+    cursor: pointer;
+  }
+  button:hover,
+  button:focus-visible {
+    border-color: ${(p) => p.theme.border};
+    background: ${(p) => p.theme.hover};
+    outline: none;
+  }
+  img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
   }
 `
 export const PackCollection = styled.div`

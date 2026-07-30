@@ -10,6 +10,7 @@ import { type ThemeMode } from '../lib/constants'
 import { useMediaQuery } from '../lib/hooks'
 import { shouldUseMobileLayout } from '../lib/responsiveLayout'
 import { containingSpacePath, lastSpaceRooms, rememberSpaceRoom } from '../lib/spaceHelpers'
+import { desktopDetailsOpen, setDesktopDetailsOpen } from '../lib/uiPreferences'
 import {
   accountsOpenFromUrl,
   browseFromUrl,
@@ -86,7 +87,10 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
     window.screen.height,
   )
   const desktopDetails = wideDetailsViewport && !mobileLayout
-  const [desktopInfo, setDesktopInfo] = useState(true)
+  const [desktopInfo, setDesktopInfo] = useState(desktopDetailsOpen)
+  useEffect(() => {
+    if (desktopDetails) setDesktopDetailsOpen(desktopInfo)
+  }, [desktopDetails, desktopInfo])
   const [rooms, setRooms] = useState<Room[]>(() => matrixService.rooms())
   const [matrixRevision, setMatrixRevision] = useState(0)
   const [lastChangedRoomIds, setLastChangedRoomIds] = useState<ReadonlySet<string>>(
@@ -142,13 +146,13 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
       const next = (event as CustomEvent<boolean>).detail
       setCallViewOpen(next)
       if (next) {
-        setDesktopInfo(false)
+        if (desktopDetails) setDesktopInfo(false)
         setInfo(false)
       }
     }
     window.addEventListener('foxchat-call-view-changed', callViewChanged)
     return () => window.removeEventListener('foxchat-call-view-changed', callViewChanged)
-  }, [])
+  }, [desktopDetails])
   useEffect(() => {
     const refresh = (roomId?: string, refreshTimelineGlobally = false) => {
       if (roomId) changedRoomIds.current.add(roomId)
@@ -359,7 +363,7 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
       event.preventDefault()
       setSelected(undefined)
       setSpaceOverview(false)
-      setDesktopInfo(false)
+      if (desktopDetails) setDesktopInfo(false)
       setInfo(false)
       writeRoomUrl(undefined, false, space)
     }
@@ -376,6 +380,7 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
     mobile,
     info,
     callViewOpen,
+    desktopDetails,
   ])
   const open = useCallback(
     (id: string) => {
@@ -527,8 +532,9 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
     if (mobileLayout) {
       setMobile(false)
       setDrawerOpenUrl(false)
-    } else {
+    } else if (desktopDetails) {
       setDesktopInfo(true)
+    } else {
       setInfo(true)
     }
     if (!browseFromUrl() || spaceIdFromUrl() !== target.roomId)
@@ -554,7 +560,7 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
   const showUnreadInbox = () => {
     setUnreadInbox(true)
     setSpaceOverview(false)
-    setDesktopInfo(false)
+    if (desktopDetails) setDesktopInfo(false)
     setInfo(false)
     if (mobileLayout) {
       setMobile(false)
