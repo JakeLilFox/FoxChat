@@ -14,4 +14,6 @@ npm run build   # production build, output in dist/
 ```
 
 CI builds this with `VITE_BUILD_VERSION` set and deploys `dist/`; see
-`ci.json` in the repository root for the exact pipeline.
+`ci.json` in the repository root for the exact pipeline. The `Marketing`
+worker captures the website screenshots into a build artifact, and the
+homepage deployment publishes that artifact under `/marketing/`.

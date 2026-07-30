@@ -87,6 +87,80 @@
   },
   {
     "type": "worker",
+    "id": "6c719b9f-5bf4-4f4e-bc80-e26fe8fce9ea",
+    "name": "Marketing",
+    "children": [
+      {
+        "type": "step",
+        "id": "1194dcf5-6a25-4c80-8724-40c063137a97",
+        "name": "Generate marketing material",
+        "tasks": [
+          {
+            "type": "checkout",
+            "id": "6c6a687a-af99-4789-9d52-70a65e8b388a"
+          },
+          {
+            "type": "grapsecrets",
+            "id": "6077a0a8-8aae-46fb-a5ba-af79b63f3f80",
+            "files": [
+              "test.env"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "d8dbbbd2-7333-4680-93b7-ae1f4e9e68e0",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "9ff29aa2-986a-4cf9-9d44-3a6dcb1d17e9",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && npm install"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "48d8a855-5850-43d2-9a9e-7642af8afb47",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && npx playwright install --with-deps chromium"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "5bb53a9a-355f-41dd-b9fb-0863f4364243",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && npm run marketing:screenshots -- --output=marketing-material"
+            ]
+          },
+          {
+            "type": "asset",
+            "id": "564b5e4e-04f3-49d6-920a-cb9634278f01",
+            "files": [
+              "marketing-material/"
+            ],
+            "prefix": "marketing"
+          }
+        ]
+      }
+    ],
+    "image": "build-container-tauri",
+    "depends": [
+      "Test"
+    ],
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "worker",
     "id": "9f73307f-3fc3-49a7-8654-7b0b3109722f",
     "name": "HomeBuild",
     "children": [
@@ -133,7 +207,8 @@
     ],
     "image": "build-container-tauri",
     "depends": [
-      "Test"
+      "Test",
+      "Marketing"
     ],
     "trigger": {
       "logic": {
@@ -666,6 +741,12 @@
           },
           {
             "type": "upload",
+            "id": "e4393f61-f137-4c5b-89b4-7ee771f8a265",
+            "from": "marketing/marketing-material/",
+            "to": "/var/www/foxchathome/marketing/"
+          },
+          {
+            "type": "upload",
             "id": "41c3b43d-25ef-4085-be96-d42a4d16dd97",
             "from": "windows/desktop-updates/",
             "to": "/var/www/foxchathome/updates/"
@@ -678,6 +759,7 @@
     "image": "build-container-tauri",
     "depends": [
       "HomeBuild",
+      "Marketing",
       "Desktop",
       "Test"
     ],

@@ -516,21 +516,36 @@ function TimelineView({
       scrollHeight: box.scrollHeight,
     }
   }, [])
+  // Guards against two independent restore sessions (loadOlder's own pagination and the
+  // combined-account backfill effect can each request one around the same time) correcting
+  // scrollTop on top of one another - that double-correction was what made scrolling visibly
+  // teleport. Only one session drives scrollTop at a time.
+  const scrollRestoreActiveRef = useRef(false)
   const restoreScrollAnchor = useCallback(
     (captured: ReturnType<typeof captureScrollAnchor> | undefined) =>
       new Promise<void>((resolve) => {
         const box = messagesRef.current
-        if (!box || !captured) {
+        if (!box || !captured || scrollRestoreActiveRef.current) {
           resolve()
           return
         }
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
-            // Correct the position exactly once, right after this load finished, and only if
-            // the user is still sitting at the top where the load was triggered from - if
-            // they've since scrolled away (or another in-flight load already corrected this
-            // same spot), leave their position alone instead of yanking it out from under them.
-            if (box.scrollTop < 80) {
+            // Only start a session while the user is still sitting at the top where the load
+            // was triggered from - if they've since scrolled away, leave their position alone.
+            if (box.scrollTop >= 80) {
+              resolve()
+              return
+            }
+            scrollRestoreActiveRef.current = true
+            const restore = () => {
+              // Re-check on every call, not just once: scrollTop can legitimately still be
+              // small right when a huge shift is requested, because the browser clamps it to
+              // scrollHeight - clientHeight and scrollHeight hasn't finished growing to fit the
+              // newly inserted content yet. Bailing out here the first time scrollTop happens to
+              // read >=80 would abandon the correction partway once clamping briefly undershoots
+              // it, leaving it stuck below the intended position instead of catching up once
+              // more content is measurable.
               const target = captured.eventId
                 ? box.querySelector<HTMLElement>(`[data-event-id="${CSS.escape(captured.eventId)}"]`)
                 : undefined
@@ -549,7 +564,40 @@ function TimelineView({
                 if (grown) box.scrollTop += grown
               }
             }
-            resolve()
+            restore()
+            // Content can still settle a little after this first pass - not just existing rows
+            // resizing, but new siblings appearing entirely (grouping collapsing an avatar/name
+            // header as the newly loaded messages connect to what was already there, read
+            // receipts, etc.), which a resize observer on the current children never sees since
+            // none of them individually changed size. A mutation observer catches insertions
+            // too, matching stabilizeTimelinePosition's approach to the same class of problem.
+            const resizeObserver = new ResizeObserver(restore)
+            const observeChildren = () =>
+              [...box.children].forEach((child) => resizeObserver.observe(child))
+            observeChildren()
+            resizeObserver.observe(box)
+            const mutationObserver = new MutationObserver(() => {
+              observeChildren()
+              restore()
+            })
+            mutationObserver.observe(box, { childList: true, subtree: true })
+            // Resolve only once this session actually ends (settled or user took over), not as
+            // soon as it starts - loadOlder awaits this before clearing its own in-flight guard,
+            // so a scroll event our own correction triggers can't start a second loadOlder call
+            // that shifts the window again while this session is still adjusting scrollTop.
+            const stop = () => {
+              scrollRestoreActiveRef.current = false
+              resizeObserver.disconnect()
+              mutationObserver.disconnect()
+              box.removeEventListener('wheel', stop)
+              box.removeEventListener('touchstart', stop)
+              box.removeEventListener('pointerdown', stop)
+              resolve()
+            }
+            box.addEventListener('wheel', stop, { passive: true })
+            box.addEventListener('touchstart', stop, { passive: true })
+            box.addEventListener('pointerdown', stop)
+            window.setTimeout(stop, 500)
           }),
         )
       }),
@@ -568,12 +616,25 @@ function TimelineView({
       // The newly merged history isn't reached through this timeline's own pagination, so
       // nothing else would otherwise keep the scroll position stable while it's spliced in.
       for (let attempt = 0; attempt < 6 && !cancelled; attempt++) {
-        const captured = captureScrollAnchor()
-        const fetchedMore = await matrixService.backfillCombinedRoomHistory(room.roomId)
+        // Share loadOlder/loadNewer's own in-flight lock instead of firing a second history
+        // request alongside theirs - wait for whatever's already in flight (including its
+        // render/scroll-settle tail) to finish rather than overlapping with it.
+        while (loadingRef.current && !cancelled) {
+          await new Promise((resolve) => window.setTimeout(resolve, 100))
+        }
         if (cancelled) return
-        if (fetchedMore) {
-          render((x) => x + 1)
-          await restoreScrollAnchor(captured)
+        loadingRef.current = true
+        let fetchedMore = false
+        try {
+          const captured = captureScrollAnchor()
+          fetchedMore = await matrixService.backfillCombinedRoomHistory(room.roomId)
+          if (cancelled) return
+          if (fetchedMore) {
+            render((x) => x + 1)
+            await restoreScrollAnchor(captured)
+          }
+        } finally {
+          loadingRef.current = false
         }
         if (cancelled || !fetchedMore) return
         await new Promise((resolve) => window.setTimeout(resolve, 250))

@@ -99,7 +99,8 @@
   margin: 0 0 48px;
 }
 
-.features h2 {
+.features h2,
+.marketing-gallery h2 {
   font-size: 24px;
   font-weight: 600;
   margin: 0 0 32px;
@@ -189,6 +190,95 @@
 
 .feature-card:hover p {
   color: #fff;
+}
+
+.marketing-gallery {
+  margin: 0 0 64px;
+}
+
+.section-heading {
+  max-width: 600px;
+  margin: 0 auto 32px;
+  text-align: center;
+}
+
+.section-heading .section-eyebrow {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.section-heading h2 {
+  margin-bottom: 10px;
+}
+
+.section-heading p {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.marketing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.marketing-card {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+
+.marketing-image-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(224, 106, 40, 0.12), transparent 35%), #171922;
+}
+
+.marketing-image-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.marketing-card-mobile .marketing-image-wrap {
+  aspect-ratio: 16 / 10;
+}
+
+.marketing-card-mobile .marketing-image-wrap img {
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.marketing-card figcaption {
+  padding: 18px 20px 20px;
+}
+
+.marketing-card h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.marketing-card p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .platforms {
@@ -502,7 +592,8 @@ footer a:hover {
 
   .feature-grid,
   .platform-grid,
-  .linux-grid {
+  .linux-grid,
+  .marketing-grid {
     grid-template-columns: 1fr;
   }
 

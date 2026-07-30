@@ -2,6 +2,68 @@ import { useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import './App.css'
 
+type MarketingShot = {
+  src: string
+  title: string
+  description: string
+  format?: 'mobile'
+}
+
+const marketingShots: MarketingShot[] = [
+  {
+    src: '/marketing/02-shared-media.png',
+    title: 'Shared media',
+    description: 'Images stay close to the conversation, with a focused viewer when you need it.',
+  },
+  {
+    src: '/marketing/04-dark-conversation.png',
+    title: 'Dark mode',
+    description: 'A quieter theme for late-night conversations and low-light rooms.',
+  },
+  {
+    src: '/marketing/03-mobile-conversation.png',
+    title: 'Made for mobile',
+    description: 'The same conversations and familiar controls, shaped for a smaller screen.',
+    format: 'mobile',
+  },
+  {
+    src: '/marketing/05-dark-mobile-conversation.png',
+    title: 'Mobile after dark',
+    description: 'Dark mode carries cleanly from the desktop client to Android.',
+    format: 'mobile',
+  },
+  {
+    src: '/marketing/06-space-overview-light.png',
+    title: 'Spaces at a glance',
+    description: 'Keep projects and communities organized without losing your place.',
+  },
+  {
+    src: '/marketing/07-space-chat-light.png',
+    title: 'Channels with context',
+    description: 'Move from a Space overview into a channel and keep the bigger picture nearby.',
+  },
+  {
+    src: '/marketing/08-space-overview-dark.png',
+    title: 'Spaces in dark mode',
+    description: 'The full Space layout remains readable and calm in either theme.',
+  },
+  {
+    src: '/marketing/09-space-chat-dark.png',
+    title: 'Focused conversations',
+    description: 'Chat, shared photos, and room details fit together without crowding the message.',
+  },
+  {
+    src: '/marketing/10-chat-tour-light.gif',
+    title: 'A quick tour',
+    description: 'Move between conversations in the light theme.',
+  },
+  {
+    src: '/marketing/11-chat-tour-dark.gif',
+    title: 'A quick tour after dark',
+    description: 'The same fast room switching in dark mode.',
+  },
+]
+
 function TiltCard(props: { children: React.ReactNode; className?: string }) {
   const ref = useRef<HTMLDivElement>(null)
   const [tilt, setTilt] = useState({ x: 0, y: 0 })
@@ -108,7 +170,15 @@ function App() {
 
       <section className="screenshot">
         <div className="screenshot-frame">
-          <img src="/img.png" alt="FoxChat screenshot" className="screenshot-img" />
+          <img
+            src="/marketing/01-desktop-conversation.png"
+            alt="A lively launch-planning conversation in FoxChat"
+            className="screenshot-img"
+            onError={(event) => {
+              event.currentTarget.onerror = null
+              event.currentTarget.src = '/img.png'
+            }}
+          />
         </div>
       </section>
 
@@ -124,6 +194,33 @@ function App() {
               <h3>{feature.title}</h3>
               <p>{feature.desc}</p>
             </TiltCard>
+          ))}
+        </div>
+      </section>
+
+      <section className="marketing-gallery">
+        <div className="section-heading">
+          <span className="section-eyebrow">See it in action</span>
+          <h2>Comfortable wherever you chat</h2>
+          <p>
+            FoxChat keeps conversations, Spaces, and shared media clear across screen sizes and
+            themes.
+          </p>
+        </div>
+        <div className="marketing-grid">
+          {marketingShots.map((shot) => (
+            <figure
+              className={`marketing-card${shot.format === 'mobile' ? ' marketing-card-mobile' : ''}`}
+              key={shot.src}
+            >
+              <div className="marketing-image-wrap">
+                <img src={shot.src} alt={shot.title} loading="lazy" />
+              </div>
+              <figcaption>
+                <h3>{shot.title}</h3>
+                <p>{shot.description}</p>
+              </figcaption>
+            </figure>
           ))}
         </div>
       </section>

@@ -703,6 +703,14 @@ export const Messages = styled.div<{ $background?: string; $fixedBackground?: bo
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* This container has its own explicit scroll-position restoration for history loading
+     (Timeline's captureScrollAnchor/restoreScrollAnchor). Browsers' native scroll anchoring
+     targets the exact same "content got prepended above the viewport" case and would apply
+     its own correction independently and earlier (synchronously at layout, before our
+     rAF-timed correction runs) - the two fighting over which node to anchor to and stacking
+     their adjustments is what produced visibly jumpy scrolling. Disable it so only our
+     deliberate correction applies. */
+  overflow-anchor: none;
   touch-action: pan-y;
   padding: 22px clamp(15px, 5vw, 65px);
   background-image: ${(p) =>
@@ -803,12 +811,16 @@ export const TimelineDateHint = styled.div`
   position: sticky;
   z-index: 6;
   top: 8px;
-  display: flex;
-  justify-content: center;
+  width: max-content;
+  max-width: 100%;
   height: 0;
+  margin: 0 auto;
   pointer-events: none;
   time {
-    display: block;
+    display: inline-flex;
+    align-items: center;
+    width: max-content;
+    max-width: 100%;
     padding: 5px 11px;
     border: 1px solid ${(p) => p.theme.border};
     border-radius: 20px;
@@ -817,6 +829,8 @@ export const TimelineDateHint = styled.div`
     box-shadow: 0 4px 14px ${(p) => p.theme.shadow};
     font-size: 11px;
     font-weight: 700;
+    line-height: 1.2;
+    white-space: nowrap;
   }
 `
 export const HistoryStatus = styled.div`
@@ -1933,6 +1947,15 @@ export const MediaFrame = styled.div`
   background: ${(p) => p.theme.input};
   img,
   video {
+    /* A percentage height only resolves against a parent with a definite height, and this
+       frame's height comes from "aspect-ratio" on a grid container - browsers don't reliably
+       treat that as definite for a grid item's percentage-height resolution, so "height:100%"
+       silently falls back to the media's own intrinsic height, overflowing the frame with
+       nothing left to actually contain against. Sizing via inset instead of width/height:100%
+       sidesteps percentage resolution entirely - the containing block for an absolutely
+       positioned box is this frame's real, already-resolved layout box. */
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     object-fit: contain;
