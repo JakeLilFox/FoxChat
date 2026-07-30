@@ -778,6 +778,45 @@ export const Unread = styled.div`
     background: ${(p) => p.theme.accent};
   }
 `
+export const TimelineDateSeparator = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 18px;
+  color: ${(p) => p.theme.muted};
+  font-size: 11px;
+  font-weight: 700;
+  &:before,
+  &:after {
+    content: '';
+    height: 1px;
+    flex: 1;
+    background: ${(p) => p.theme.border};
+  }
+  time {
+    flex: none;
+  }
+`
+export const TimelineDateHint = styled.div`
+  position: sticky;
+  z-index: 6;
+  top: 8px;
+  display: flex;
+  justify-content: center;
+  height: 0;
+  pointer-events: none;
+  time {
+    display: block;
+    padding: 5px 11px;
+    border: 1px solid ${(p) => p.theme.border};
+    border-radius: 20px;
+    background: ${(p) => p.theme.panel};
+    color: ${(p) => p.theme.muted};
+    box-shadow: 0 4px 14px ${(p) => p.theme.shadow};
+    font-size: 11px;
+    font-weight: 700;
+  }
+`
 export const HistoryStatus = styled.div`
   height: 28px;
   text-align: center;

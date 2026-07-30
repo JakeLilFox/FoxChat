@@ -7,6 +7,7 @@ import {
 import { TypingPreview } from '../styles'
 import { Direction, EventType, MatrixEvent, Room, RoomType } from 'matrix-js-sdk'
 import { matrixService } from '../matrix/MatrixClientService'
+import { shouldGroupMessages } from './timelinePresentation'
 
 export const logHistoryDiagnostics = (
   room: Room,
@@ -97,9 +98,8 @@ export const messagePosition = (room: Room, event: MatrixEvent) => {
   const previous = index !== undefined && index > 0 ? cached.events[index - 1] : undefined
   const next = index !== undefined ? cached.events[index + 1] : undefined
   return {
-    grouped:
-      !!previous && isVisibleMessageEvent(previous) && previous.getSender() === event.getSender(),
-    continues: !!next && isVisibleMessageEvent(next) && next.getSender() === event.getSender(),
+    grouped: !!previous && shouldGroupMessages(previous, event),
+    continues: !!next && shouldGroupMessages(event, next),
   }
 }
 export const lastMessagePreview = (room: Room) =>

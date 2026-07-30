@@ -1,4 +1,5 @@
 import { EventType, type MatrixEvent } from 'matrix-js-sdk'
+import { timelineDateTime } from './timelinePresentation'
 
 export const GALLERY_EVENT_FIELD = 'foxchat.gallery'
 export const GALLERY_MAX_IMAGES = 5
@@ -50,7 +51,7 @@ export const galleryTimelineItems = (events: readonly MatrixEvent[]): GalleryTim
   for (const event of events) {
     const galleryId = eventGalleryId(event)
     if (!galleryId) continue
-    const key = `${event.getSender() ?? ''}\u0000${galleryId}`
+    const key = `${event.getSender() ?? ''}\u0000${galleryId}\u0000${timelineDateTime(event.getTs())}`
     const galleryChunks = chunks.get(key) ?? []
     let chunk = galleryChunks.at(-1)
     if (!chunk || chunk.length >= GALLERY_MAX_IMAGES) {

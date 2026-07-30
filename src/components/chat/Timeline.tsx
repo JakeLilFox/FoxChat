@@ -47,6 +47,12 @@ import {
 } from '../../lib/media'
 import { logHistoryDiagnostics } from '../../lib/timelineHelpers'
 import {
+  isSameLocalDay,
+  shouldShowTimelineDateHint,
+  timelineDateLabel,
+  timelineDateTime,
+} from '../../lib/timelinePresentation'
+import {
   addedVisibleEventCount,
   initialTimelinePosition,
   nextFollowLatest,
@@ -84,6 +90,8 @@ import {
   NoSendNotice,
   SendBtn,
   SendingAsButton,
+  TimelineDateHint,
+  TimelineDateSeparator,
   TimelineLoadingSkeleton,
   TombstoneBanner,
   TopInfo,
@@ -295,6 +303,32 @@ function TimelineView({
   const typingTimer = useRef<number | undefined>(undefined)
   const typingActive = useRef(false)
   const messagesRef = useRef<HTMLDivElement>(null)
+  const [timelineDateHintTimestamp, setTimelineDateHintTimestamp] = useState<number>()
+  const updateTimelineDateHint = useCallback(() => {
+    const box = messagesRef.current
+    if (!box) return
+    const bounds = box.getBoundingClientRect()
+    const isVisible = (node: HTMLElement) => {
+      const rect = node.getBoundingClientRect()
+      return rect.bottom > bounds.top && rect.top < bounds.bottom
+    }
+    const separatorVisible = [
+      ...box.querySelectorAll<HTMLElement>('[data-timeline-date-separator]'),
+    ].some(isVisible)
+    const firstVisibleEvent = [
+      ...box.querySelectorAll<HTMLElement>('[data-timeline-event-timestamp]'),
+    ].find(isVisible)
+    const timestamp = Number(firstVisibleEvent?.dataset.timelineEventTimestamp)
+    if (!shouldShowTimelineDateHint(timestamp, separatorVisible)) {
+      setTimelineDateHintTimestamp(undefined)
+      return
+    }
+    setTimelineDateHintTimestamp((current) =>
+      current !== undefined && timelineDateTime(current) === timelineDateTime(timestamp)
+        ? current
+        : timestamp,
+    )
+  }, [])
   const initializedRoom = useRef<string | undefined>(undefined)
   const lastEventId = useRef<string | undefined>(undefined)
   const lastVisibleEventCount = useRef(0)
@@ -534,6 +568,16 @@ function TimelineView({
     )
   }, [timelineEvents, allEvents.length, visibleMessages, windowEnd, timelineAppearance])
   const renderedEvents = useMemo(() => galleryTimelineItems(events), [events])
+  useEffect(() => {
+    let innerFrame = 0
+    const outerFrame = requestAnimationFrame(() => {
+      innerFrame = requestAnimationFrame(updateTimelineDateHint)
+    })
+    return () => {
+      cancelAnimationFrame(outerFrame)
+      cancelAnimationFrame(innerFrame)
+    }
+  }, [positioningTimeline, renderedEvents, roomIdentity, updateTimelineDateHint, windowEndOffset])
   const newestId = allEvents.at(-1)?.getId()
   useLayoutEffect(() => {
     if (windowEndOffset !== 0 || scrollAnchor.current?.type !== 'bottom') return
@@ -1421,6 +1465,7 @@ function TimelineView({
   const onScroll = () => {
     const box = messagesRef.current
     if (!box) return
+    updateTimelineDateHint()
     if (!historyPagingReady.current || historyPagingRoom.current !== roomIdentity) return
     const bottomDistance = box.scrollHeight - box.scrollTop - box.clientHeight
     atBottom.current = windowEndOffset === 0 && bottomDistance <= FOLLOW_LATEST_THRESHOLD
@@ -2019,6 +2064,13 @@ function TimelineView({
             addPendingFiles(files)
           }}
         >
+          {timelineDateHintTimestamp !== undefined && (
+            <TimelineDateHint>
+              <time dateTime={timelineDateTime(timelineDateHintTimestamp)}>
+                {timelineDateLabel(timelineDateHintTimestamp)}
+              </time>
+            </TimelineDateHint>
+          )}
           <HistoryStatus>{loadingHistory ? 'Loading earlier messages…' : ''}</HistoryStatus>
           <Day>
             {!acceptedInvite && room.getMyMembership() === 'invite'
@@ -2067,31 +2119,48 @@ function TimelineView({
               ))}
             </TimelineLoadingSkeleton>
           ) : (
-            renderedEvents.map(({ event: e, gallery }) => (
-              <div key={e.getTxnId() ?? e.getId() ?? `${e.getTs()}`} data-event-id={e.getId()}>
-                {(e.getId() === unreadStart ||
-                  gallery?.some((galleryEvent) => galleryEvent.getId() === unreadStart)) && (
-                  <Unread>Unread messages</Unread>
-                )}
-                {isMembershipChange(e) ? (
-                  <MembershipStatus event={e} />
-                ) : isCallMembershipChange(e) ? (
-                  <CallMembershipStatus event={e} />
-                ) : isDisplayNameChange(e) || isAvatarChange(e) ? (
-                  <ProfileUpdateStatus
-                    event={e}
-                    showDisplayName={timelineAppearance.displayName}
-                    showAvatar={timelineAppearance.avatar}
-                  />
-                ) : (
-                  <Message
-                    event={e}
-                    gallery={gallery}
-                    revision={`${matrixRevision}:${renderTick}`}
-                  />
-                )}
-              </div>
-            ))
+            renderedEvents.map(({ event: e, gallery }, index) => {
+              const previousItem = renderedEvents[index - 1]
+              const previousEvent = previousItem?.gallery?.at(-1) ?? previousItem?.event
+              const startsLocalDay =
+                !previousEvent || !isSameLocalDay(previousEvent.getTs(), e.getTs())
+              return (
+                <div
+                  key={e.getTxnId() ?? e.getId() ?? `${e.getTs()}`}
+                  data-event-id={e.getId()}
+                  data-timeline-event-timestamp={e.getTs()}
+                >
+                  {startsLocalDay && (
+                    <TimelineDateSeparator role="separator" data-timeline-date-separator>
+                      <time dateTime={timelineDateTime(e.getTs())}>
+                        {timelineDateLabel(e.getTs())}
+                      </time>
+                    </TimelineDateSeparator>
+                  )}
+                  {(e.getId() === unreadStart ||
+                    gallery?.some((galleryEvent) => galleryEvent.getId() === unreadStart)) && (
+                    <Unread>Unread messages</Unread>
+                  )}
+                  {isMembershipChange(e) ? (
+                    <MembershipStatus event={e} />
+                  ) : isCallMembershipChange(e) ? (
+                    <CallMembershipStatus event={e} />
+                  ) : isDisplayNameChange(e) || isAvatarChange(e) ? (
+                    <ProfileUpdateStatus
+                      event={e}
+                      showDisplayName={timelineAppearance.displayName}
+                      showAvatar={timelineAppearance.avatar}
+                    />
+                  ) : (
+                    <Message
+                      event={e}
+                      gallery={gallery}
+                      revision={`${matrixRevision}:${renderTick}`}
+                    />
+                  )}
+                </div>
+              )
+            })
           )}
           {timelineAppearance.voiceMembership &&
             voiceNotices.map((notice) => (
