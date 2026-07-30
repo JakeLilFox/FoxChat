@@ -193,15 +193,25 @@ async function findCss(selector) {
   return refId(value)
 }
 
-async function findEventContent(eventId, selector) {
+async function findRenderedImage(eventId, body) {
   const value = await command('POST', sessionPath('/execute/sync'), {
     script: `
-      const event = [...document.querySelectorAll('[data-event-id]')].find(
+      const mediaSelector = '[data-testid="message-image"], [data-testid="message-gallery"]'
+      const exactEvent = [...document.querySelectorAll('[data-event-id]')].find(
         element => element.dataset.eventId === arguments[0]
       )
-      return event?.querySelector(arguments[1]) || null
+      const exactMedia = exactEvent?.querySelector(mediaSelector)
+      if (exactMedia) return exactMedia
+
+      // Matrix renders a local echo before the server assigns the final event ID. WebKitGTK can
+      // retain that transaction-backed wrapper even after the server event is visible, so use
+      // the unique upload filename to correlate the rendered image with the verified event.
+      const image = [...document.querySelectorAll(\`\${mediaSelector} img\`)].find(
+        element => element.getAttribute('alt') === arguments[1]
+      )
+      return image?.closest(mediaSelector) || null
     `,
-    args: [eventId, selector],
+    args: [eventId, body],
   })
   return refId(value)
 }
@@ -428,6 +438,13 @@ async function dumpPageState(name) {
         hasLoginPage: !!document.querySelector('[data-testid="login-page"]'),
         hasRoomSidebar: !!document.querySelector('[data-testid="room-sidebar"]'),
         hasSettingsDialog: !!document.querySelector('.ant-modal-wrap'),
+        renderedMedia: [...document.querySelectorAll(
+          '[data-testid="message-image"], [data-testid="message-gallery"]'
+        )].map(element => ({
+          eventId: element.closest('[data-event-id]')?.dataset.eventId || null,
+          testId: element.getAttribute('data-testid'),
+          imageAlts: [...element.querySelectorAll('img')].map(image => image.alt),
+        })),
         bodyTextSnippet: document.body ? document.body.innerText.slice(0, 1500) : null,
       }
     `,
@@ -554,15 +571,16 @@ try {
         ),
       90_000,
     )
-    await waitFor(
-      'sent image event in timeline',
-      () =>
-        findEventContent(
-          imageEvent.event_id,
-          '[data-testid="message-image"], [data-testid="message-gallery"]',
-        ),
-      90_000,
-    )
+    try {
+      await waitFor(
+        'sent image event in timeline',
+        () => findRenderedImage(imageEvent.event_id, imageEvent.content.body),
+        90_000,
+      )
+    } catch (error) {
+      await dumpPageState('image-timeline-timeout')
+      throw error
+    }
     console.log(`PASS ${platformName}: uploaded a PNG and verified the Matrix image event`)
 
     await clickExternalLink()
