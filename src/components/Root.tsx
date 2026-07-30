@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import { ConfigProvider, Spin, theme, App as AntApp } from 'antd'
 import { ThemeProvider } from 'styled-components'
 import { matrixService } from '../matrix/MatrixClientService'
-import { syncNativeBackground } from '../platform/nativeBackground'
+import { listenForAndroidResume, syncNativeBackground } from '../platform/nativeBackground'
 import { startAutomationApiIntegration } from '../platform/automationApi'
 import { listenForDesktopExternalLinks } from '../platform/externalLinks'
 
@@ -29,6 +29,7 @@ export function Root() {
   }, [mode])
   useEffect(() => trackActiveScrollbars(document), [])
   useEffect(() => listenForDesktopExternalLinks(), [])
+  useEffect(() => listenForAndroidResume(() => matrixService.retrySyncAfterResume()), [])
   useEffect(() => {
     void matrixService.listenForNotificationDecryptRequests()
     void startAutomationApiIntegration()

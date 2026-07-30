@@ -9,7 +9,7 @@ import {
 import { DesktopUpdateContext } from './desktopUpdateContext'
 
 const INITIAL_CHECK_DELAY_MS = 5_000
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000
+const CHECK_INTERVAL_MS = 60 * 60 * 1_000
 
 export function DesktopUpdateProvider({ children }: { children: ReactNode }) {
   const updateRef = useRef<Update | null>(null)

@@ -152,6 +152,7 @@ export type SyncObserver = {
 const SESSION_KEY = 'foxchat.matrix.session'
 const ACCOUNTS_KEY = 'foxchat.matrix.accounts'
 const ACTIVE_ACCOUNT_KEY = 'foxchat.matrix.activeAccount'
+const SESSION_REVOCATION_TIMEOUT_MS = 15_000
 const HOMESERVER_KEY = 'foxchat.matrix.lastHomeserver'
 const NATIVE_ACCOUNTS_VERSION = 1
 const ROOM_ACCOUNTS_KEY = 'foxchat.matrix.roomAccounts'
@@ -243,6 +244,7 @@ export class MatrixClientService {
   private presenceQueues = new WeakMap<MatrixClient, Promise<void>>()
   private verificationRequests = new Set<VerificationRequest>()
   private trackedVerificationRequests = new WeakSet<VerificationRequest>()
+  private resumeSyncRetryUntil = 0
   private readonly secondary: boolean
   private readonly ephemeral: boolean
 
@@ -253,6 +255,23 @@ export class MatrixClientService {
 
   get matrixClient() {
     return this.client
+  }
+
+  private retryBackedOffSyncAfterResume(client: MatrixClient) {
+    if (Date.now() > this.resumeSyncRetryUntil) return false
+    const state = String(client.getSyncState()).toUpperCase()
+    if (state !== 'RECONNECTING' && state !== 'ERROR') return false
+    const retried = client.retryImmediately()
+    if (retried) this.resumeSyncRetryUntil = 0
+    return retried
+  }
+
+  retrySyncAfterResume(retryWindowMs = 15_000) {
+    this.resumeSyncRetryUntil = Date.now() + retryWindowMs
+    let retried = this.client && this.retryBackedOffSyncAfterResume(this.client) ? 1 : 0
+    for (const service of this.secondaryClients.values())
+      retried += service.retrySyncAfterResume(retryWindowMs)
+    return retried
   }
 
   private waitForInitialSync(client: MatrixClient, timeoutMs = 45000) {
@@ -553,7 +572,21 @@ export class MatrixClientService {
       userId: session.userId,
       deviceId: session.deviceId,
     })
-    await client.logout(true)
+    let timeout: number | undefined
+    try {
+      await Promise.race([
+        client.logout(true),
+        new Promise<never>((_, reject) => {
+          timeout = window.setTimeout(
+            () => reject(new Error('Timed out while revoking the Matrix session')),
+            SESSION_REVOCATION_TIMEOUT_MS,
+          )
+        }),
+      ])
+    } finally {
+      if (timeout !== undefined) window.clearTimeout(timeout)
+      client.stopClient()
+    }
   }
 
   async login(baseUrl: string, username: string, password: string) {
@@ -856,6 +889,7 @@ export class MatrixClientService {
     })
     client.on(ClientEvent.Sync, (state) => {
       this.observers.forEach((x) => x.onSync?.(String(state)))
+      this.retryBackedOffSyncAfterResume(client)
       if (String(state) === 'PREPARED') void this.enableAutomaticKeySync()
     })
     client.on(ClientEvent.Room, (room) => {

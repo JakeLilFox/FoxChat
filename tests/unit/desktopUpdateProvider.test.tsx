@@ -87,4 +87,40 @@ describe('desktop update provider', () => {
     await act(async () => root.unmount())
     expect(close).toHaveBeenCalledOnce()
   })
+
+  it('checks once after startup and then every hour', async () => {
+    updateMocks.checkForDesktopUpdate.mockResolvedValue({
+      currentVersion: '1.0.0',
+      update: null,
+    })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(
+        <DesktopUpdateProvider>
+          <span>App</span>
+        </DesktopUpdateProvider>,
+      )
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(5_000)
+      await Promise.resolve()
+    })
+    expect(updateMocks.checkForDesktopUpdate).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      vi.advanceTimersByTime(60 * 60 * 1_000 - 5_000)
+      await Promise.resolve()
+    })
+    expect(updateMocks.checkForDesktopUpdate).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      vi.advanceTimersByTime(60 * 60 * 1_000)
+      await Promise.resolve()
+    })
+    expect(updateMocks.checkForDesktopUpdate).toHaveBeenCalledTimes(3)
+
+    await act(async () => root.unmount())
+  })
 })

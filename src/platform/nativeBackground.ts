@@ -22,3 +22,28 @@ export function syncNativeBackground(mode: 'light' | 'dark') {
     color: THEME_BACKGROUND[mode],
   }).catch(() => undefined)
 }
+
+export function listenForAndroidResume(onResume: () => void) {
+  if (!isAndroidApp()) return () => undefined
+  let inactive = document.visibilityState === 'hidden'
+  const markInactive = () => {
+    inactive = true
+  }
+  const resume = () => {
+    if (!inactive || document.visibilityState === 'hidden') return
+    inactive = false
+    onResume()
+  }
+  const visibilityChanged = () => {
+    if (document.visibilityState === 'hidden') markInactive()
+    else resume()
+  }
+  document.addEventListener('visibilitychange', visibilityChanged)
+  window.addEventListener('blur', markInactive)
+  window.addEventListener('focus', resume)
+  return () => {
+    document.removeEventListener('visibilitychange', visibilityChanged)
+    window.removeEventListener('blur', markInactive)
+    window.removeEventListener('focus', resume)
+  }
+}
