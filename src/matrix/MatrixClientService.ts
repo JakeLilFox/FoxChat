@@ -162,6 +162,7 @@ export const AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT = 'foxchat-auto-read-all-accou
 const PRESENCE_MODES_KEY = 'foxchat.matrix.presenceModes'
 const LOCAL_ROOM_NAMES_KEY = 'foxchat.matrix.localRoomNames'
 const REACTION_PARENT_CACHE_KEY = 'foxchat.matrix.reactionParents'
+const IMAGE_PACK_ORDER_EVENT = 'chat.foxchat.image_pack_order'
 const REACTION_PARENT_CACHE_LIMIT = 2_000
 const PRESENCE_IDLE_MS = 5 * 60 * 1000
 const normalizedPowerLevel = (value: unknown) =>
@@ -2637,6 +2638,24 @@ export class MatrixClientService {
   async savePersonalImagePack(content: Record<string, unknown>) {
     if (!this.client) throw new Error('Matrix client is not ready')
     await this.client.setAccountData('im.ponies.user_emotes' as never, content as never)
+  }
+
+  imagePackOrder(client = this.client) {
+    const order = client
+      ?.getAccountData(IMAGE_PACK_ORDER_EVENT as never)
+      ?.getContent<{ order?: unknown }>().order
+    if (!Array.isArray(order)) return []
+    return [...new Set(order.filter((key): key is string => typeof key === 'string' && !!key))]
+  }
+
+  async setImagePackOrder(order: string[], client = this.client) {
+    if (!client) throw new Error('Matrix client is not ready')
+    await client.setAccountData(
+      IMAGE_PACK_ORDER_EVENT as never,
+      {
+        order: [...new Set(order)],
+      } as never,
+    )
   }
 
   async saveRoomImagePack(roomId: string, content: Record<string, unknown>, stateKey = '') {

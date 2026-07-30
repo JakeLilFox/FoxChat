@@ -5,11 +5,16 @@ import {
   ALL_ACCOUNT_IMAGE_PACKS_KEY,
   allAccountImagePacksEnabled,
   deduplicateFavoritePacks,
+  deduplicateRoomPacks,
   forgetRecents,
   imagePackAccounts,
+  moveImagePackOrder,
+  orderedImageEntries,
+  orderImagePacks,
   preferNonEmptyPack,
   readRecent,
   rememberRecent,
+  serializeImagePackItems,
   setAllAccountImagePacksEnabled,
   uniquePackName,
   type MatrixEmotePack,
@@ -67,6 +72,79 @@ describe('uniquePackName', () => {
     const used = new Set<string>()
     uniquePackName('favicon.png', used)
     expect(uniquePackName('favicon.png', used)).toBe('favicon 2')
+  })
+})
+
+describe('image-pack ordering', () => {
+  it('serializes every dragged image position as a string order code', () => {
+    expect(
+      serializeImagePackItems([
+        {
+          name: 'first',
+          url: 'mxc://example.org/first',
+          usage: ['sticker'],
+        },
+        {
+          name: 'second',
+          url: 'mxc://example.org/second',
+          usage: ['sticker', 'emoticon'],
+        },
+      ]),
+    ).toEqual({
+      first: {
+        body: 'first',
+        url: 'mxc://example.org/first',
+        info: undefined,
+        usage: ['sticker'],
+        order: '00000',
+      },
+      second: {
+        body: 'second',
+        url: 'mxc://example.org/second',
+        info: undefined,
+        usage: ['sticker', 'emoticon'],
+        order: '00001',
+      },
+    })
+  })
+
+  it('sorts images by their string order code and preserves source order for unordered images', () => {
+    const pack: MatrixEmotePack = {
+      images: {
+        second: { url: 'mxc://example.org/second', order: '00002' },
+        unorderedA: { url: 'mxc://example.org/a' },
+        first: { url: 'mxc://example.org/first', order: '00001' },
+        unorderedB: { url: 'mxc://example.org/b' },
+      },
+    }
+
+    expect(orderedImageEntries(pack).map(([name]) => name)).toEqual([
+      'first',
+      'second',
+      'unorderedA',
+      'unorderedB',
+    ])
+  })
+
+  it('orders packs privately and preserves saved keys that are hidden in the current room', () => {
+    const packs = [
+      { orderKey: 'room', label: 'Room' },
+      { orderKey: 'personal', label: 'Personal' },
+      { orderKey: 'space', label: 'Space' },
+    ]
+    expect(
+      orderImagePacks(packs, ['personal', 'space', 'room']).map((pack) => pack.orderKey),
+    ).toEqual(['personal', 'space', 'room'])
+
+    expect(
+      moveImagePackOrder(
+        ['hidden-pack', 'personal', 'space', 'room'],
+        ['personal', 'space', 'room'],
+        'room',
+        'personal',
+        'before',
+      ),
+    ).toEqual(['hidden-pack', 'room', 'personal', 'space'])
   })
 })
 
@@ -135,6 +213,26 @@ describe('combined-account image packs', () => {
 
     expect(deduplicateFavoritePacks(favorites, secondClient)).toEqual([favorites[1], favorites[2]])
   })
+
+  it('does not repeat a favorited pack when it is also available from the current space', () => {
+    const favorite = {
+      id: 'favorite-space-pack',
+      roomPackKey: '!space:example.org\u0000pack',
+      label: 'Favorite space pack',
+    }
+    const contextualCopy = {
+      id: 'context-space-pack',
+      roomPackKey: '!space:example.org\u0000pack',
+      label: 'Contextual space pack',
+    }
+    const roomPack = {
+      id: 'context-room-pack',
+      roomPackKey: '!room:example.org\u0000pack',
+      label: 'Room pack',
+    }
+
+    expect(deduplicateRoomPacks([favorite, contextualCopy, roomPack])).toEqual([favorite, roomPack])
+  })
 })
 
 describe('image-pack recents', () => {
@@ -196,5 +294,23 @@ describe('saveRoomImagePack / savePersonalImagePack', () => {
     await service.savePersonalImagePack(content)
 
     expect(captured).toEqual(['im.ponies.user_emotes', content])
+  })
+
+  it('stores picker pack order in private account data and filters invalid saved keys', async () => {
+    let saved: [string, unknown] | undefined
+    const content = { order: ['personal', 42, '', 'room', 'personal'] }
+    const client = {
+      getAccountData: () => ({ getContent: () => content }),
+      setAccountData: (type: string, value: unknown) => {
+        saved = [type, value]
+        return Promise.resolve({})
+      },
+    }
+    const service = new MatrixClientService()
+
+    expect(service.imagePackOrder(client as never)).toEqual(['personal', 'room'])
+    await service.setImagePackOrder(['room', 'personal', 'room'], client as never)
+
+    expect(saved).toEqual(['chat.foxchat.image_pack_order', { order: ['room', 'personal'] }])
   })
 })

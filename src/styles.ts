@@ -2871,6 +2871,21 @@ export const PackJumpBar = styled.div`
     background: ${(p) => p.theme.hover};
     outline: none;
   }
+  button[draggable='true'] {
+    cursor: grab;
+  }
+  button.dragging {
+    opacity: 0.45;
+    cursor: grabbing;
+  }
+  button.drop-before {
+    border-left-color: ${(p) => p.theme.accent};
+    box-shadow: -3px 0 0 ${(p) => p.theme.accent};
+  }
+  button.drop-after {
+    border-right-color: ${(p) => p.theme.accent};
+    box-shadow: 3px 0 0 ${(p) => p.theme.accent};
+  }
   img {
     display: block;
     width: 100%;
@@ -2930,13 +2945,32 @@ export const PackEditorWrap = styled.div`
   }
   .packItem {
     display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) max-content 32px;
+    grid-template-columns: 26px 48px minmax(0, 1fr) max-content 32px;
     align-items: center;
     gap: 9px;
     padding: 8px;
     border: 1px solid ${(p) => p.theme.border};
     border-radius: 11px;
     background: ${(p) => p.theme.input};
+  }
+  .dragHandle {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 38px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: ${(p) => p.theme.muted};
+    cursor: grab;
+    touch-action: none;
+  }
+  .dragHandle:active {
+    cursor: grabbing;
+  }
+  .dragHandle:disabled {
+    cursor: default;
+    opacity: 0.5;
   }
   .packImage {
     width: 48px;
@@ -2964,10 +2998,10 @@ export const PackEditorWrap = styled.div`
   }
   @media (max-width: 600px) {
     .packItem {
-      grid-template-columns: 44px minmax(0, 1fr) 32px;
+      grid-template-columns: 24px 44px minmax(0, 1fr) 32px;
     }
     .packItem .usage {
-      grid-column: 2/4;
+      grid-column: 3/5;
     }
   }
 `

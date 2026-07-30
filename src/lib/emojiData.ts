@@ -14,14 +14,25 @@ export type MatrixEmote = {
 }
 export type MatrixEmotePack = {
   pack?: { display_name?: string }
-  images?: Record<string, { body?: string; url?: string; info?: ImageInfo; usage?: string[] }>
+  images?: Record<
+    string,
+    {
+      body?: string
+      url?: string
+      info?: ImageInfo
+      usage?: string[]
+      order?: string
+    }
+  >
 }
 export type NamedEmotePack = {
   id: string
+  orderKey?: string
   label: string
   pack: MatrixEmotePack
   client: MatrixClient
   mine?: boolean
+  roomPackKey?: string
 }
 export type ImagePackAccount<TClient = MatrixClient> = {
   id: string
@@ -68,6 +79,64 @@ export const deduplicateFavoritePacks = <
   }
   return [...unique.values()]
 }
+export const deduplicateRoomPacks = <TPack extends { roomPackKey?: string }>(packs: TPack[]) => {
+  const seen = new Set<string>()
+  return packs.filter((pack) => {
+    if (!pack.roomPackKey) return true
+    if (seen.has(pack.roomPackKey)) return false
+    seen.add(pack.roomPackKey)
+    return true
+  })
+}
+export const orderedImageEntries = (pack?: MatrixEmotePack) =>
+  Object.entries(pack?.images ?? {})
+    .map((entry, index) => ({ entry, index }))
+    .sort((first, second) => {
+      const firstOrder = first.entry[1].order
+      const secondOrder = second.entry[1].order
+      if (firstOrder && secondOrder) {
+        return firstOrder.localeCompare(secondOrder) || first.index - second.index
+      }
+      if (firstOrder) return -1
+      if (secondOrder) return 1
+      return first.index - second.index
+    })
+    .map(({ entry }) => entry)
+export const orderImagePacks = <TPack extends { orderKey?: string }>(
+  packs: TPack[],
+  order: string[],
+) => {
+  const positions = new Map(order.map((key, index) => [key, index]))
+  return packs
+    .map((pack, index) => ({
+      pack,
+      index,
+      position: pack.orderKey ? positions.get(pack.orderKey) : undefined,
+    }))
+    .sort((first, second) => {
+      if (first.position !== undefined && second.position !== undefined) {
+        return first.position - second.position || first.index - second.index
+      }
+      if (first.position !== undefined) return -1
+      if (second.position !== undefined) return 1
+      return first.index - second.index
+    })
+    .map(({ pack }) => pack)
+}
+export const moveImagePackOrder = (
+  savedOrder: string[],
+  visibleOrder: string[],
+  source: string,
+  target: string,
+  edge: 'before' | 'after',
+) => {
+  const order = [...new Set([...savedOrder, ...visibleOrder])]
+  if (source === target || !order.includes(source) || !order.includes(target)) return order
+  const withoutSource = order.filter((key) => key !== source)
+  const targetIndex = withoutSource.indexOf(target)
+  withoutSource.splice(targetIndex + (edge === 'after' ? 1 : 0), 0, source)
+  return withoutSource
+}
 export function useAllAccountImagePacks() {
   const [enabled, setEnabled] = useState(allAccountImagePacksEnabled)
   useEffect(() => {
@@ -84,6 +153,31 @@ export const uniquePackName = (wanted: string, used: Set<string>) => {
   while (used.has(name)) name = `${base} ${number++}`
   used.add(name)
   return name
+}
+export const serializeImagePackItems = (
+  items: Array<{
+    name: string
+    url: string
+    info?: ImageInfo
+    usage: string[]
+  }>,
+) => {
+  const used = new Set<string>()
+  return Object.fromEntries(
+    items.map((item, index) => {
+      const name = uniquePackName(item.name, used)
+      return [
+        name,
+        {
+          body: name,
+          url: item.url,
+          info: item.info,
+          usage: item.usage,
+          order: index.toString().padStart(5, '0'),
+        },
+      ]
+    }),
+  )
 }
 export const roomImagePackTypes = ['m.image_pack', 'im.ponies.room_emotes'] as const
 export const preferNonEmptyPack = (

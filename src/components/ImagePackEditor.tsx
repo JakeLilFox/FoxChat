@@ -3,7 +3,9 @@ import {
   type MatrixEmotePack,
   type StoredEmote,
   forgetRecents,
+  orderedImageEntries,
   recentStorage,
+  serializeImagePackItems,
   uniquePackName,
 } from '../lib/emojiData'
 import { IconBtn, PackEditorWrap } from '../styles'
@@ -13,6 +15,7 @@ import {
   CloudDownloadOutlined,
   DeleteOutlined,
   FileZipOutlined,
+  HolderOutlined,
   UploadOutlined,
 } from '@ant-design/icons'
 import { type ImageInfo } from 'matrix-js-sdk/lib/@types/media'
@@ -101,7 +104,7 @@ export function ImagePackEditor({
       (roomId ? 'Room stickers and emoji' : 'Personal stickers'),
   )
   const [items, setItems] = useState<PackItem[]>(() =>
-    Object.entries(pack?.images ?? {}).flatMap(([name, item]) =>
+    orderedImageEntries(pack).flatMap(([name, item]) =>
       item.url
         ? [
             {
@@ -117,6 +120,11 @@ export function ImagePackEditor({
     ),
   )
   const [busy, setBusy] = useState(false)
+  const [drag, setDrag] = useState<{
+    source: string
+    target?: string
+    edge?: 'before' | 'after'
+  }>()
   const [telegramModalOpen, setTelegramModalOpen] = useState(false)
   const [telegramUrl, setTelegramUrl] = useState('')
   const addUploaded = (uploaded: { body: string; url: string; info?: unknown }[]) => {
@@ -205,16 +213,23 @@ export function ImagePackEditor({
       setBusy(false)
     }
   }
+  const dropItem = (targetId: string, edge: 'before' | 'after') => {
+    const sourceId = drag?.source
+    setDrag(undefined)
+    if (!sourceId || sourceId === targetId) return
+    setItems((current) => {
+      const source = current.find((item) => item.id === sourceId)
+      const next = current.filter((item) => item.id !== sourceId)
+      const targetIndex = next.findIndex((item) => item.id === targetId)
+      if (!source || targetIndex < 0) return current
+      next.splice(targetIndex + (edge === 'after' ? 1 : 0), 0, source)
+      return next
+    })
+  }
   const save = async () => {
     setBusy(true)
     try {
-      const used = new Set<string>()
-      const images = Object.fromEntries(
-        items.map((item) => {
-          const name = uniquePackName(item.name, used)
-          return [name, { body: name, url: item.url, info: item.info, usage: item.usage }]
-        }),
-      )
+      const images = serializeImagePackItems(items)
       const content = {
         pack: {
           display_name: name.trim() || (roomId ? 'Room stickers and emoji' : 'Personal stickers'),
@@ -289,7 +304,7 @@ export function ImagePackEditor({
         </Button>
         <span className="hint">
           Files are uploaded together and named from their filenames. A zip is unpacked and every
-          PNG, GIF, JPEG or WebP inside is added as a sticker.
+          PNG, GIF, JPEG or WebP inside is added as a sticker. Drag images to change their order.
         </span>
       </div>
       <Modal
@@ -314,64 +329,109 @@ export function ImagePackEditor({
         />
       </Modal>
       <div className="packList">
-        {items.map((item) => (
-          <div className="packItem" key={item.id}>
-            <div className="packImage">
-              <MatrixEmoteImage emote={{ ...item, client, mine: true }} />
+        {items.map((item) => {
+          const edge = drag?.target === item.id ? drag.edge : undefined
+          return (
+            <div
+              className="packItem"
+              key={item.id}
+              onDragOver={(event) => {
+                if (!drag?.source || drag.source === item.id) return
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'move'
+                const bounds = event.currentTarget.getBoundingClientRect()
+                const nextEdge = event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after'
+                setDrag((current) =>
+                  current?.target === item.id && current.edge === nextEdge
+                    ? current
+                    : { source: drag.source, target: item.id, edge: nextEdge },
+                )
+              }}
+              onDrop={(event) => {
+                event.preventDefault()
+                dropItem(item.id, edge ?? 'before')
+              }}
+              style={{
+                borderTop: edge === 'before' ? '3px solid #7357e8' : undefined,
+                borderBottom: edge === 'after' ? '3px solid #7357e8' : undefined,
+                opacity: drag?.source === item.id ? 0.45 : 1,
+              }}
+            >
+              <button
+                className="dragHandle"
+                type="button"
+                draggable={!busy}
+                disabled={busy}
+                title={`Reorder ${item.name}`}
+                aria-label={`Reorder ${item.name}`}
+                onDragStart={(event) => {
+                  setDrag({ source: item.id })
+                  event.dataTransfer.effectAllowed = 'move'
+                  event.dataTransfer.setData('text/plain', item.id)
+                }}
+                onDragEnd={() => setDrag(undefined)}
+              >
+                <HolderOutlined />
+              </button>
+              <div className="packImage">
+                <MatrixEmoteImage emote={{ ...item, client, mine: true }} />
+              </div>
+              <Input
+                value={item.name}
+                aria-label="Sticker name"
+                onChange={(event) =>
+                  setItems((current) =>
+                    current.map((value) =>
+                      value.id === item.id ? { ...value, name: event.target.value } : value,
+                    ),
+                  )
+                }
+              />
+              <Segmented
+                className="usage"
+                size="small"
+                value={
+                  item.usage.includes('sticker') && item.usage.includes('emoticon')
+                    ? 'both'
+                    : item.usage.includes('emoticon')
+                      ? 'emoji'
+                      : 'sticker'
+                }
+                options={[
+                  { label: 'Sticker', value: 'sticker' },
+                  { label: 'Emoji', value: 'emoji' },
+                  { label: 'Both', value: 'both' },
+                ]}
+                onChange={(value) =>
+                  setItems((current) =>
+                    current.map((entry) =>
+                      entry.id === item.id
+                        ? {
+                            ...entry,
+                            usage:
+                              value === 'both'
+                                ? ['sticker', 'emoticon']
+                                : value === 'emoji'
+                                  ? ['emoticon']
+                                  : ['sticker'],
+                          }
+                        : entry,
+                    ),
+                  )
+                }
+              />
+              <IconBtn
+                danger
+                shape="circle"
+                title="Remove"
+                icon={<DeleteOutlined />}
+                onClick={() =>
+                  setItems((current) => current.filter((value) => value.id !== item.id))
+                }
+              />
             </div>
-            <Input
-              value={item.name}
-              aria-label="Sticker name"
-              onChange={(event) =>
-                setItems((current) =>
-                  current.map((value) =>
-                    value.id === item.id ? { ...value, name: event.target.value } : value,
-                  ),
-                )
-              }
-            />
-            <Segmented
-              className="usage"
-              size="small"
-              value={
-                item.usage.includes('sticker') && item.usage.includes('emoticon')
-                  ? 'both'
-                  : item.usage.includes('emoticon')
-                    ? 'emoji'
-                    : 'sticker'
-              }
-              options={[
-                { label: 'Sticker', value: 'sticker' },
-                { label: 'Emoji', value: 'emoji' },
-                { label: 'Both', value: 'both' },
-              ]}
-              onChange={(value) =>
-                setItems((current) =>
-                  current.map((entry) =>
-                    entry.id === item.id
-                      ? {
-                          ...entry,
-                          usage:
-                            value === 'both'
-                              ? ['sticker', 'emoticon']
-                              : value === 'emoji'
-                                ? ['emoticon']
-                                : ['sticker'],
-                        }
-                      : entry,
-                  ),
-                )
-              }
-            />
-            <IconBtn
-              danger
-              shape="circle"
-              title="Remove"
-              icon={<DeleteOutlined />}
-              onClick={() => setItems((current) => current.filter((value) => value.id !== item.id))}
-            />
-          </div>
-        ))}
+          )
+        })}
         {!items.length && (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No images in this pack" />
         )}

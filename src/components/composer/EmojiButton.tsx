@@ -6,8 +6,13 @@ import {
   type StoredEmote,
   accountImagePackTypes,
   deduplicateFavoritePacks,
+  deduplicateRoomPacks,
+  findRoomImagePacks,
   imagePackAccounts,
   imagePackRoomsTypes,
+  moveImagePackOrder,
+  orderedImageEntries,
+  orderImagePacks,
   recentStorage,
   rememberRecent,
   roomImagePackTypes,
@@ -25,7 +30,7 @@ import {
 import { closeEmojiUrl, emojiOpenFromUrl, openEmojiUrl } from '../../lib/urlState'
 import { EmojiGrid, EmojiPanel, IconBtn, PackCollection, PackJumpBar } from '../../styles'
 import { useEffect, useRef, useState } from 'react'
-import { Empty, Popover, Tabs, Tooltip } from 'antd'
+import { App as AntApp, Empty, Popover, Tabs, Tooltip } from 'antd'
 import { SmileOutlined } from '@ant-design/icons'
 import { EventType, Room, RoomType } from 'matrix-js-sdk'
 import { type ImageInfo } from 'matrix-js-sdk/lib/@types/media'
@@ -33,6 +38,7 @@ import { matrixService } from '../../matrix/MatrixClientService'
 
 type PickerPack = {
   id: string
+  orderKey: string
   label: string
   items: MatrixEmote[]
 }
@@ -44,6 +50,7 @@ function MatrixPackBrowser({
   client,
   empty,
   onSelect,
+  onMovePack,
 }: {
   usage: 'emoticon' | 'sticker'
   groups: PickerPack[]
@@ -51,16 +58,24 @@ function MatrixPackBrowser({
   client: ReturnType<typeof matrixService.clientForRoom>
   empty: string
   onSelect: (emote: MatrixEmote) => void
+  onMovePack: (source: string, target: string, edge: 'before' | 'after') => void
 }) {
   const collectionRef = useRef<HTMLDivElement>(null)
   const packRefs = useRef(new Map<string, HTMLDivElement>())
-  const packs: PickerPack[] = [
+  const [drag, setDrag] = useState<{
+    source: string
+    target?: string
+    edge?: 'before' | 'after'
+  }>()
+  const packs: Array<PickerPack & { reorderable: boolean }> = [
     ...(recent.length
       ? [
           {
             id: 'recent',
+            orderKey: 'recent',
             label: 'Recently used',
             items: recent.map((item) => ({ ...item, client })),
+            reorderable: false,
           },
         ]
       : []),
@@ -68,6 +83,7 @@ function MatrixPackBrowser({
       .map((group) => ({
         ...group,
         items: group.items.filter((emote) => !emote.usage || emote.usage.includes(usage)),
+        reorderable: true,
       }))
       .filter((group) => group.items.length),
   ]
@@ -103,9 +119,42 @@ function MatrixPackBrowser({
           <button
             key={pack.id}
             type="button"
+            className={[
+              drag?.source === pack.orderKey ? 'dragging' : '',
+              drag?.target === pack.orderKey && drag.edge ? `drop-${drag.edge}` : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            draggable={pack.reorderable}
             title={pack.label}
             aria-label={`Jump to ${pack.label}`}
             onClick={() => jumpToPack(pack.id)}
+            onDragStart={(event) => {
+              if (!pack.reorderable) return
+              setDrag({ source: pack.orderKey })
+              event.dataTransfer.effectAllowed = 'move'
+              event.dataTransfer.setData('text/plain', pack.orderKey)
+            }}
+            onDragEnd={() => setDrag(undefined)}
+            onDragOver={(event) => {
+              if (!pack.reorderable || !drag?.source || drag.source === pack.orderKey) return
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+              const bounds = event.currentTarget.getBoundingClientRect()
+              const edge = event.clientX < bounds.left + bounds.width / 2 ? 'before' : 'after'
+              setDrag((current) =>
+                current?.target === pack.orderKey && current.edge === edge
+                  ? current
+                  : { source: drag.source, target: pack.orderKey, edge },
+              )
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              if (drag?.source && drag.source !== pack.orderKey) {
+                onMovePack(drag.source, pack.orderKey, drag.edge ?? 'before')
+              }
+              setDrag(undefined)
+            }}
           >
             <MatrixEmoteImage emote={pack.items[0]} />
           </button>
@@ -154,6 +203,7 @@ export function EmojiButton({
   onEmote: (emote: MatrixEmote) => void
   onSticker: (emote: MatrixEmote) => void
 }) {
+  const { message } = AntApp.useApp()
   const [open, setOpen] = useState(() => emojiOpenFromUrl())
   const [sourceTab, setSourceTab] = useState(emojiPickerSourceTab)
   const [matrixContentTab, setMatrixContentTab] = useState(matrixPickerContentTab)
@@ -186,6 +236,13 @@ export function EmojiButton({
   const allAccountPacksEnabled = useAllAccountImagePacks()
   const [remoteFavoritePacks, setRemoteFavoritePacks] = useState<NamedEmotePack[]>([])
   const client = matrixService.clientForRoom(room.roomId)
+  const [packOrder, setPackOrder] = useState(() => matrixService.imagePackOrder(client))
+  const packOrderRef = useRef(packOrder)
+  useEffect(() => {
+    const next = matrixService.imagePackOrder(client)
+    packOrderRef.current = next
+    setPackOrder(next)
+  }, [client])
   const availableAccounts = matrixService.availableAccounts()
   const selectedPackAccounts = imagePackAccounts(
     availableAccounts,
@@ -212,6 +269,7 @@ export function EmojiButton({
         ? [
             {
               id: `account-${account.id}-${type}`,
+              orderKey: `account\u0000${account.id}\u0000${type}`,
               label: [
                 pack.pack?.display_name || 'Homeserver default',
                 ...(mergingAccounts ? [account.userId] : []),
@@ -234,19 +292,16 @@ export function EmojiButton({
     : [room]
   const contextualPacks: NamedEmotePack[] = client
     ? contextualRooms.flatMap((contextRoom) =>
-        roomImagePackTypes.flatMap((eventType) =>
-          contextRoom.currentState.getStateEvents(eventType).map((event, index) => {
-            const pack = event.getContent<MatrixEmotePack>()
-            return {
-              id: `context-${contextRoom.roomId}-${eventType}-${event.getStateKey() || index}`,
-              label:
-                pack.pack?.display_name ||
-                `${contextRoom.name} ${contextRoom.getType() === RoomType.Space ? 'Space' : 'channel'}`,
-              pack,
-              client,
-            }
-          }),
-        ),
+        findRoomImagePacks(contextRoom).map(({ stateKey, pack }, index) => ({
+          id: `context-${contextRoom.roomId}-${stateKey || index}`,
+          roomPackKey: `${contextRoom.roomId}\u0000${stateKey}`,
+          orderKey: `room\u0000${contextRoom.roomId}\u0000${stateKey}`,
+          label:
+            pack.pack?.display_name ||
+            `${contextRoom.name} ${contextRoom.getType() === RoomType.Space ? 'Space' : 'channel'}`,
+          pack,
+          client,
+        })),
       )
     : []
   const favoriteRoomKey = JSON.stringify(
@@ -304,6 +359,8 @@ export function EmojiButton({
               return {
                 id: `favorite-${roomId}-${stateKey || index}`,
                 favoriteKey: `${roomId}\u0000${stateKey}`,
+                roomPackKey: `${roomId}\u0000${stateKey}`,
+                orderKey: `room\u0000${roomId}\u0000${stateKey}`,
                 label: `Favorite · ${pack.pack?.display_name || known?.name || roomId}`,
                 pack,
                 client: source.client,
@@ -328,6 +385,8 @@ export function EmojiButton({
               return {
                 id: `favorite-${roomId}-${stateKey || index}`,
                 favoriteKey: `${roomId}\u0000${stateKey}`,
+                roomPackKey: `${roomId}\u0000${stateKey}`,
+                orderKey: `room\u0000${roomId}\u0000${stateKey}`,
                 label: `Favorite · ${pack.pack?.display_name || roomName}`,
                 pack,
                 client: source.client,
@@ -345,12 +404,15 @@ export function EmojiButton({
       cancelled = true
     }
   }, [client, favoriteRoomKey, mergingAccounts])
-  const namedPacks = [...accountPacks, ...remoteFavoritePacks, ...contextualPacks]
+  const namedPacks = orderImagePacks(
+    deduplicateRoomPacks([...accountPacks, ...remoteFavoritePacks, ...contextualPacks]),
+    packOrder,
+  )
   const groups = namedPacks
     .map((source) => {
       const items = [
         ...new Map(
-          Object.entries(source.pack.images ?? {})
+          orderedImageEntries(source.pack)
             .filter(
               (
                 entry,
@@ -378,9 +440,31 @@ export function EmojiButton({
             }),
         ).values(),
       ]
-      return { ...source, items }
+      return { ...source, orderKey: source.orderKey ?? source.id, items }
     })
     .filter((group) => group.items.length)
+  const movePack = (source: string, target: string, edge: 'before' | 'after') => {
+    if (!client) return
+    const previous = packOrderRef.current
+    const next = moveImagePackOrder(
+      previous,
+      groups.map((group) => group.orderKey),
+      source,
+      target,
+      edge,
+    )
+    if (next.length === previous.length && next.every((key, index) => key === previous[index]))
+      return
+    packOrderRef.current = next
+    setPackOrder(next)
+    void matrixService.setImagePackOrder(next, client).catch((error) => {
+      if (packOrderRef.current === next) {
+        packOrderRef.current = previous
+        setPackOrder(previous)
+      }
+      message.error(error instanceof Error ? error.message : 'Could not save pack order')
+    })
+  }
   const allCustom = groups.flatMap((group) => group.items)
   const emojiCount = allCustom.filter(
     (emote) => !emote.usage || emote.usage.includes('emoticon'),
@@ -479,6 +563,7 @@ export function EmojiButton({
               client={client}
               empty="No Matrix emoji packs"
               onSelect={(emote) => selectMatrixItem('emoticon', emote)}
+              onMovePack={movePack}
             />
           ),
         },
@@ -493,6 +578,7 @@ export function EmojiButton({
               client={client}
               empty="No Matrix sticker packs"
               onSelect={(emote) => selectMatrixItem('sticker', emote)}
+              onMovePack={movePack}
             />
           ),
         },
