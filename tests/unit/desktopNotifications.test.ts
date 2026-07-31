@@ -227,13 +227,79 @@ describe('desktop notifications', () => {
     })
 
     const notification = notifyMatrixEvent(event, room)
-    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.advanceTimersByTimeAsync(15_000)
     await vi.advanceTimersByTimeAsync(1_500)
     await notification
 
     expect(invoke).toHaveBeenCalledWith('show_desktop_notification', {
       title: '@carol:example.org in Encrypted room',
-      body: 'New encrypted message',
+      body: 'New message',
+      roomId: room.roomId,
+    })
+  })
+
+  it('uses a decrypted copy from another account for a pending notification', async () => {
+    vi.useFakeTimers()
+    const room = fakeRoom({ roomId: '!shared:example.org', name: 'Shared room' })
+    const client = fakeClient([room], '@first:example.org')
+    const internals = matrixService as unknown as ServiceInternals
+    internals.client = client
+    internals.availableAccounts = () => [
+      { id: 'first', userId: '@first:example.org', client },
+      { id: 'second', userId: '@second:example.org', client },
+    ]
+    internals.room = () => undefined
+
+    const invoke = vi.fn(async (command: string) => {
+      if (command === 'plugin:notification|is_permission_granted') return true
+      if (command === 'show_desktop_notification') return undefined
+      throw new Error(`Unexpected command: ${command}`)
+    })
+    window.__TAURI__ = {
+      core: {
+        invoke: invoke as <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
+      },
+    }
+    vi.stubGlobal('Audio', function Audio(this: { play: () => Promise<void> }) {
+      this.play = () => Promise.resolve()
+    })
+    vi.spyOn(matrixService, 'retryEventDecryption').mockImplementation(
+      () => new Promise<boolean>(() => undefined),
+    )
+
+    const encrypted = fakeEvent({
+      id: '$multi-account',
+      roomId: room.roomId,
+      type: EventType.RoomMessage,
+      sender: '@carol:example.org',
+      ts: Date.now(),
+      notify: true,
+      content: { msgtype: 'm.bad.encrypted', body: 'Unable to decrypt' },
+    })
+    Object.assign(encrypted, {
+      isDecryptionFailure: () => true,
+      on: vi.fn(),
+      off: vi.fn(),
+    })
+    const decrypted = fakeEvent({
+      id: '$multi-account',
+      roomId: room.roomId,
+      type: EventType.RoomMessage,
+      sender: '@carol:example.org',
+      ts: Date.now(),
+      notify: true,
+      content: { msgtype: 'm.text', body: 'Decrypted by the other account' },
+    })
+
+    const notification = notifyMatrixEvent(encrypted, room)
+    await Promise.resolve()
+    await notifyMatrixEvent(decrypted, room)
+    await vi.advanceTimersByTimeAsync(1_500)
+    await notification
+
+    expect(invoke).toHaveBeenCalledWith('show_desktop_notification', {
+      title: '@carol:example.org in Shared room',
+      body: 'Decrypted by the other account',
       roomId: room.roomId,
     })
   })

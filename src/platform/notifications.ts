@@ -44,8 +44,9 @@ declare global {
 const startedAt = Date.now()
 const notified = new Set<string>()
 const pendingNotifications = new Set<string>()
+const pendingDecryptionUpdates = new Map<string, (event: MatrixEvent) => void>()
 const activeGroups = new Set<string>()
-const NOTIFICATION_DECRYPTION_GRACE_MS = 5_000
+const NOTIFICATION_DECRYPTION_GRACE_MS = 15_000
 const DESKTOP_NOTIFICATION_DEBOUNCE_MS = 1_500
 type PendingDesktopNotification = {
   eventId: string
@@ -329,9 +330,11 @@ async function permissionGranted(native?: NativeNotifications) {
 }
 
 async function waitForNotificationDecryption(event: MatrixEvent) {
-  if (!event.isDecryptionFailure()) return
+  let readableEvent = event.isDecryptionFailure() ? matrixService.eventForReading(event) : event
+  if (!readableEvent.isDecryptionFailure()) return readableEvent
 
-  void matrixService.retryEventDecryption(event).catch(() => undefined)
+  const eventId = event.getId()
+
   await new Promise<void>((resolve) => {
     let settled = false
     const finish = () => {
@@ -339,16 +342,32 @@ async function waitForNotificationDecryption(event: MatrixEvent) {
       settled = true
       window.clearTimeout(timeout)
       event.off(MatrixEventEvent.Decrypted, decrypted)
+      if (eventId) pendingDecryptionUpdates.delete(eventId)
       resolve()
     }
-    const decrypted = () => {
-      if (!event.isDecryptionFailure()) finish()
+    const consider = (candidate = event) => {
+      const selected = candidate.isDecryptionFailure()
+        ? matrixService.eventForReading(candidate)
+        : candidate
+      if (!selected.isDecryptionFailure()) {
+        readableEvent = selected
+        finish()
+      }
     }
+    const decrypted = (candidate?: MatrixEvent) => consider(candidate)
     const timeout = window.setTimeout(finish, NOTIFICATION_DECRYPTION_GRACE_MS)
     event.on(MatrixEventEvent.Decrypted, decrypted)
+    if (eventId) pendingDecryptionUpdates.set(eventId, consider)
+    void matrixService
+      .retryEventDecryption(event)
+      .then(() => consider(event))
+      .catch(() => undefined)
     // Do not miss decryption completing between the initial check and listener registration.
-    if (!event.isDecryptionFailure()) finish()
+    consider(event)
   })
+  return readableEvent.isDecryptionFailure()
+    ? matrixService.eventForReading(readableEvent)
+    : readableEvent
 }
 
 export async function notifyMatrixEvent(event: MatrixEvent, room?: Room) {
@@ -366,10 +385,14 @@ export async function notifyMatrixEvent(event: MatrixEvent, room?: Room) {
   )
     return
   const eventId = event.getId()
-  if (!eventId || notified.has(eventId) || pendingNotifications.has(eventId)) return
+  if (!eventId || notified.has(eventId)) return
+  if (pendingNotifications.has(eventId)) {
+    pendingDecryptionUpdates.get(eventId)?.(event)
+    return
+  }
   pendingNotifications.add(eventId)
   try {
-    await waitForNotificationDecryption(event)
+    event = await waitForNotificationDecryption(event)
     if (document.hasFocus() && document.visibilityState === 'visible') return
 
     notified.add(eventId)
@@ -377,33 +400,38 @@ export async function notifyMatrixEvent(event: MatrixEvent, room?: Room) {
     const content = event.getContent()
     const relation = content['m.relates_to'] as { rel_type?: string } | undefined
     if (relation?.rel_type === 'm.replace') return
-    if (!client.getPushActionsForEvent(event)?.notify) return
-    const groupId = notificationGroup(room)
+    const eventClient = matrixService.clientForEvent(event) ?? client
+    if (!eventClient.getPushActionsForEvent(event)?.notify) return
+    const notificationRoom = eventClient.getRoom(room.roomId) ?? room
+    const groupId = notificationGroup(notificationRoom)
     const silent = activeGroups.has(groupId) && groupUnreadCount(groupId) > 0
-    const sender = room.getMember(senderId)?.name ?? senderId
+    const sender = notificationRoom.getMember(senderId)?.name ?? senderId
     const body = event.isDecryptionFailure()
-      ? 'New encrypted message'
+      ? 'New message'
       : String(content.body ?? 'Sent an attachment')
     const native = nativeNotifications()
     if (!(await permissionGranted(native))) return
     if (native) {
-      const title = `${sender} in ${room.name}`
+      const title = `${sender} in ${notificationRoom.name}`
       await queueDesktopNotification({
         eventId,
         title,
         body,
         sender,
-        roomId: room.roomId,
-        roomName: room.name,
+        roomId: notificationRoom.roomId,
+        roomName: notificationRoom.name,
         groupId,
         silent,
         native,
       })
     } else {
-      const notification = new Notification(`${sender} in ${room.name}`, { body, tag: eventId })
+      const notification = new Notification(`${sender} in ${notificationRoom.name}`, {
+        body,
+        tag: eventId,
+      })
       notification.onclick = () => {
         notification.close()
-        openNotificationRoom(room.roomId)
+        openNotificationRoom(notificationRoom.roomId)
       }
       if (!silent) playNotificationSound()
       activeGroups.add(groupId)

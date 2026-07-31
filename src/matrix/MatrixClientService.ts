@@ -1603,6 +1603,14 @@ export class MatrixClientService {
     const roomId = event.getRoomId()
     if (!roomId) return false
     const copies = this.eventCopies(event)
+    const clients = new Set(
+      copies
+        .map((copy) => this.clientForEvent(copy))
+        .filter((client): client is MatrixClient => !!client),
+    )
+    await Promise.allSettled(
+      [...clients].map((client) => client.getCrypto()?.checkKeyBackupAndEnable()),
+    )
     await Promise.allSettled(
       copies.map(async (copy) => {
         const room = this.clientForEvent(copy)?.getRoom(roomId)

@@ -72,6 +72,8 @@ describe('desktop unread badge', () => {
     await updateDesktopUnreadBadge(12)
 
     expect(context.fillText).toHaveBeenCalledWith('12', 16, 17)
+    expect(context.arc).toHaveBeenCalledWith(16, 16, 16, 0, Math.PI * 2)
+    expect(context.stroke).not.toHaveBeenCalled()
     expect(badgeMocks.newImage).toHaveBeenCalledWith(expect.any(Uint8Array), 32, 32)
     expect(badgeMocks.setOverlayIcon).toHaveBeenCalledWith(expect.objectContaining({ rid: 1 }))
     expect(badgeMocks.closeImage).toHaveBeenCalledOnce()

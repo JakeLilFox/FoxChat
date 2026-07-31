@@ -12,12 +12,9 @@ function badgePixels(label: string) {
 
   context.clearRect(0, 0, BADGE_SIZE, BADGE_SIZE)
   context.beginPath()
-  context.arc(BADGE_SIZE / 2, BADGE_SIZE / 2, BADGE_SIZE / 2 - 1, 0, Math.PI * 2)
+  context.arc(BADGE_SIZE / 2, BADGE_SIZE / 2, BADGE_SIZE / 2, 0, Math.PI * 2)
   context.fillStyle = '#e5484d'
   context.fill()
-  context.lineWidth = 2
-  context.strokeStyle = '#ffffff'
-  context.stroke()
   context.fillStyle = '#ffffff'
   context.font = `700 ${label.length > 2 ? 13 : 17}px sans-serif`
   context.textAlign = 'center'
