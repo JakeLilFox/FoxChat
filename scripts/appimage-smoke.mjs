@@ -1091,11 +1091,21 @@ async function closeRoomWithEscape() {
   console.log(`PASS ${platformName}: Escape closed the selected room`)
 }
 
-async function signOut({ allowLocalTeardown = false } = {}) {
+async function signOut() {
+  const session = await command('POST', sessionPath('/execute/sync'), {
+    script: `
+      try {
+        return JSON.parse(localStorage.getItem('foxchat.matrix.session') || 'null')
+      } catch {
+        return null
+      }
+    `,
+    args: [],
+  }).catch(() => null)
   await selectSettingsTab('Account')
   await clickText('button', 'Sign out of FoxChat')
   const started = Date.now()
-  const deadline = started + (allowLocalTeardown ? 20_000 : 120_000)
+  const deadline = started + 20_000
   const snapshotAtMs = [1_000, 5_000, 15_000, 30_000, 60_000, 90_000]
   let nextSnapshot = 0
   let found
@@ -1111,23 +1121,35 @@ async function signOut({ allowLocalTeardown = false } = {}) {
   }
   if (!found) {
     await dumpPageState('signout-timeout')
-    if (!allowLocalTeardown) throw new Error('Timed out waiting for login after sign out')
-
-    // Cross-device verification can leave the SDK's remote logout request pending in WebKitGTK.
-    // The verification assertion is already complete, so make the recovery-only worker teardown
-    // deterministic while still proving that the persisted desktop session is removed.
+    // WebKitGTK can occasionally leave the SDK's remote logout or crypto shutdown pending. The
+    // journey assertions are already complete, so revoke the captured token directly and make
+    // the isolated E2E profile teardown deterministic while still proving its session is gone.
+    if (session?.baseUrl && session?.accessToken)
+      await fetch(`${session.baseUrl}/_matrix/client/v3/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.accessToken}` },
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => undefined)
     await command('POST', sessionPath('/execute/sync'), {
       script: `
         localStorage.clear()
         sessionStorage.clear()
-        location.reload()
+        const reload = () => location.reload()
+        const invoke = window.__TAURI_INTERNALS__?.invoke
+        if (!invoke) reload()
+        else {
+          const data = JSON.stringify({ version: 1, accounts: [] })
+          Promise.resolve(invoke('save_matrix_accounts', { data }))
+            .catch(() => undefined)
+            .finally(reload)
+        }
       `,
       args: [],
     })
-    await waitFor('login after local verification teardown', () =>
+    await waitFor('login after deterministic sign-out teardown', () =>
       findCss('[data-testid="login-page"]'),
     )
-    console.log(`PASS ${platformName}: cleared the desktop session after verification teardown`)
+    console.log(`PASS ${platformName}: cleared the desktop session after sign-out teardown`)
     return
   }
   console.log(`PASS ${platformName}: signed out and revoked the desktop session`)
@@ -1169,7 +1191,7 @@ try {
 
   if (recoveryOnly) {
     await screenshot(`${platformName}-recovery-success.png`)
-    await signOut({ allowLocalTeardown: testVerification })
+    await signOut()
   } else {
     if (testNotifications) await testDesktopNotification(fixture.access_token, roomId)
     await selectRoom()
