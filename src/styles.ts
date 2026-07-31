@@ -3589,6 +3589,7 @@ export const AuthPage = styled.div`
     display: flex;
     flex-direction: column;
     justify-content: center;
+    overflow-y: auto;
   }
   .form h1 {
     font-size: 32px;
@@ -3600,6 +3601,14 @@ export const AuthPage = styled.div`
     font-size: 13px;
     margin: 0 0 28px;
     line-height: 1.55;
+  }
+  .form .auth-switch {
+    margin: 14px 0 18px;
+    text-align: center;
+  }
+  .form .auth-switch .ant-btn-link {
+    height: auto;
+    padding: 0;
   }
   .visual {
     background: linear-gradient(145deg, #17142b, #40307a);
@@ -3621,6 +3630,11 @@ export const AuthPage = styled.div`
   @media (max-width: 800px) {
     .visual {
       display: none;
+    }
+  }
+  @media (max-height: 720px) {
+    .form {
+      justify-content: flex-start;
     }
   }
 `

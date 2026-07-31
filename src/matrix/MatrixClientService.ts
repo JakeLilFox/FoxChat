@@ -54,6 +54,11 @@ import { applyPermissionLevels } from '../lib/powerLevelPaths'
 import { DEVICE_DELETE_ACTION } from '../lib/accountManagement'
 import { GALLERY_EVENT_FIELD } from '../lib/gallery'
 import {
+  REGISTRATION_DUMMY_STAGE,
+  registrationChallengeFromUia,
+  type RegistrationChallenge,
+} from '../lib/registration'
+import {
   IMAGE_PACK_STATE_TARGET_BYTES,
   findRoomImagePacks,
   jsonByteLength,
@@ -78,6 +83,17 @@ export type MatrixSession = {
   userId: string
   deviceId: string
 }
+
+export type MatrixRegistrationDetails = {
+  homeserver: string
+  username: string
+  password: string
+  displayName?: string
+}
+
+export type MatrixRegistrationResult =
+  | { status: 'challenge'; challenge: RegistrationChallenge }
+  | { status: 'complete'; session: MatrixSession; profileWarning?: string }
 
 export type MatrixDeviceSession = {
   deviceId: string
@@ -215,7 +231,10 @@ const discoverHomeserverBaseUrl = async (homeserver: string) => {
           : ''
       if (baseUrl) {
         try {
-          return new URL(baseUrl, wellKnownUrl).toString().replace(/\/$/, '')
+          const discovered = new URL(baseUrl, wellKnownUrl)
+          if (discovered.protocol === 'https:' || discovered.protocol === 'http:')
+            return discovered.toString().replace(/\/$/, '')
+          return normalizeHomeserverInput(baseUrl)
         } catch {
           return normalizeHomeserverInput(baseUrl)
         }
@@ -627,6 +646,100 @@ export class MatrixClientService {
       throw error
     }
     return session
+  }
+
+  async registerAccount(
+    details: MatrixRegistrationDetails,
+    auth?: Record<string, unknown>,
+  ): Promise<MatrixRegistrationResult> {
+    const baseUrl = await discoverHomeserverBaseUrl(details.homeserver)
+    const enteredUsername = details.username.trim()
+    const username = enteredUsername.startsWith('@')
+      ? enteredUsername.slice(1).split(':')[0]
+      : enteredUsername
+    let nextAuth = auth
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await fetch(`${baseUrl}/_matrix/client/v3/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          password: details.password,
+          initial_device_display_name: 'FoxChat',
+          refresh_token: true,
+          ...(nextAuth ? { auth: nextAuth } : {}),
+        }),
+      })
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>
+
+      if (response.status === 401) {
+        const challenge = registrationChallengeFromUia(baseUrl, data)
+        if (!challenge) {
+          throw new Error(
+            typeof data.error === 'string'
+              ? data.error
+              : 'This homeserver returned an invalid registration challenge.',
+          )
+        }
+        if (challenge.stage === REGISTRATION_DUMMY_STAGE) {
+          nextAuth = { type: challenge.stage, session: challenge.session }
+          continue
+        }
+        return { status: 'challenge', challenge }
+      }
+
+      if (!response.ok) {
+        const message = typeof data.error === 'string' ? data.error : `HTTP ${response.status}`
+        const code = typeof data.errcode === 'string' ? `${data.errcode}: ` : ''
+        throw new Error(`${code}${message}`)
+      }
+
+      const userId = typeof data.user_id === 'string' ? data.user_id : ''
+      const accessToken = typeof data.access_token === 'string' ? data.access_token : ''
+      const deviceId = typeof data.device_id === 'string' ? data.device_id : ''
+      let session: MatrixSession
+      if (userId && accessToken && deviceId) {
+        session = {
+          baseUrl,
+          accessToken,
+          refreshToken: typeof data.refresh_token === 'string' ? data.refresh_token : undefined,
+          accessTokenExpiresAt:
+            typeof data.expires_in_ms === 'number' ? Date.now() + data.expires_in_ms : undefined,
+          userId,
+          deviceId,
+        }
+      } else {
+        session = await this.authenticate(baseUrl, username, details.password)
+      }
+
+      try {
+        await this.start(session)
+        let profileWarning: string | undefined
+        const displayName = details.displayName?.trim()
+        if (displayName) {
+          try {
+            await this.client!.setDisplayName(displayName)
+          } catch (error) {
+            profileWarning =
+              error instanceof Error ? error.message : 'The display name could not be saved.'
+          }
+        }
+        this.persistSession(session)
+        try {
+          localStorage.setItem(HOMESERVER_KEY, session.baseUrl)
+        } catch {
+          /* optional convenience value */
+        }
+        return { status: 'complete', session, profileWarning }
+      } catch (error) {
+        await this.stop().catch(() => undefined)
+        await this.revokeSession(session).catch(() => undefined)
+        throw error
+      }
+    }
+
+    throw new Error('The homeserver requested too many registration steps.')
   }
 
   async loginAdditionalAccount(baseUrl: string, username: string, password: string) {
