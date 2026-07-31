@@ -692,7 +692,8 @@
     ],
     "image": "build-container-tauri",
     "depends": [
-      "Test"
+      "Test",
+      "Desktop"
     ],
     "trigger": {
       "logic": {

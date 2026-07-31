@@ -359,7 +359,43 @@ async function bodyContains(text) {
 }
 
 async function selectRoom(name = roomName) {
-  const room = await waitFor(name, () => findText('[data-testid="room-row"]', name, false), 120_000)
+  let room
+  try {
+    room = await waitFor(name, () => findText('[data-testid="room-row"]', name, false), 120_000)
+  } catch (error) {
+    await dumpPageState('room-selection-timeout')
+    const desktopSession = await command('POST', sessionPath('/execute/sync'), {
+      script: `
+        try {
+          const session = JSON.parse(localStorage.getItem('foxchat.matrix.session') || 'null')
+          return session && {
+            accessToken: session.accessToken,
+            baseUrl: session.baseUrl,
+            userId: session.userId,
+          }
+        } catch {
+          return null
+        }
+      `,
+      args: [],
+    }).catch(() => null)
+    if (desktopSession?.accessToken && desktopSession?.baseUrl) {
+      try {
+        await matrix('/_matrix/client/v3/account/whoami', {
+          token: desktopSession.accessToken,
+          baseUrl: desktopSession.baseUrl,
+        })
+      } catch (sessionError) {
+        throw new Error(
+          `Desktop Matrix session became invalid while waiting for the fixture room: ${
+            sessionError instanceof Error ? sessionError.message : String(sessionError)
+          }`,
+          { cause: error },
+        )
+      }
+    }
+    throw error
+  }
   await click(room)
   await waitFor(
     'fixture room header',
@@ -1039,6 +1075,10 @@ async function dumpPageState(name) {
         hasLoginPage: !!document.querySelector('[data-testid="login-page"]'),
         hasRoomSidebar: !!document.querySelector('[data-testid="room-sidebar"]'),
         hasSettingsDialog: !!document.querySelector('.ant-modal-wrap'),
+        roomRows: [...document.querySelectorAll('[data-testid="room-row"]')].map(element => ({
+          text: element.textContent?.replace(/\\s+/g, ' ').trim() || '',
+          visible: !!element.getClientRects().length,
+        })),
         renderedMedia: [...document.querySelectorAll(
           '[data-testid="message-image"], [data-testid="message-gallery"]'
         )].map(element => ({
