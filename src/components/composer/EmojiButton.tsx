@@ -3,6 +3,7 @@ import {
   type MatrixEmote,
   type MatrixEmotePack,
   type NamedEmotePack,
+  type RoomImagePackLocation,
   type StoredEmote,
   accountImagePackTypes,
   deduplicateFavoritePacks,
@@ -16,7 +17,6 @@ import {
   orderImagePacks,
   recentStorage,
   rememberRecent,
-  roomImagePackTypes,
   unicodeCategories,
   useAllAccountImagePacks,
   useRecents,
@@ -33,7 +33,7 @@ import { EmojiGrid, EmojiPanel, IconBtn, PackCollection, PackJumpBar } from '../
 import { useEffect, useRef, useState } from 'react'
 import { App as AntApp, Empty, Input, Popover, Tabs, Tooltip } from 'antd'
 import { SearchOutlined, SmileOutlined } from '@ant-design/icons'
-import { EventType, Room, RoomType } from 'matrix-js-sdk'
+import { Room, RoomType } from 'matrix-js-sdk'
 import { type ImageInfo } from 'matrix-js-sdk/lib/@types/media'
 import { matrixService } from '../../matrix/MatrixClientService'
 
@@ -260,6 +260,13 @@ export function EmojiButton({
   const recentStickers = useRecents<StoredEmote>(recentStorage.stickers)
   const allAccountPacksEnabled = useAllAccountImagePacks()
   const [remoteFavoritePacks, setRemoteFavoritePacks] = useState<NamedEmotePack[]>([])
+  const [refreshedContextPacks, setRefreshedContextPacks] = useState<
+    Array<{
+      client: ReturnType<typeof matrixService.clientForRoom>
+      roomId: string
+      packs: RoomImagePackLocation[]
+    }>
+  >([])
   const client = matrixService.clientForRoom(room.roomId)
   const [packOrder, setPackOrder] = useState(() => matrixService.imagePackOrder(client))
   const packOrderRef = useRef(packOrder)
@@ -315,9 +322,45 @@ export function EmojiButton({
         client.getRoom(room.roomId) ?? room,
       ]
     : [room]
+  useEffect(() => {
+    if (!open || !client) return
+    let cancelled = false
+    const rooms = [
+      ...containingSpacePath(room.roomId, client)
+        .map((id) => client.getRoom(id))
+        .filter((value): value is Room => !!value),
+      client.getRoom(room.roomId) ?? room,
+    ]
+    void Promise.all(
+      rooms.map(async (contextRoom) => ({
+        client,
+        roomId: contextRoom.roomId,
+        packs: await matrixService.roomImagePacks(contextRoom.roomId, client),
+      })),
+    ).then((packs) => {
+      if (!cancelled) setRefreshedContextPacks(packs)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [open, client, room])
+  useEffect(
+    () =>
+      matrixService.subscribe({
+        onImagePacksChanged: (roomId, changedClient) =>
+          setRefreshedContextPacks((current) =>
+            current.filter((entry) => entry.roomId !== roomId || entry.client !== changedClient),
+          ),
+      }),
+    [],
+  )
   const contextualPacks: NamedEmotePack[] = client
     ? contextualRooms.flatMap((contextRoom) =>
-        findRoomImagePacks(contextRoom).map(({ stateKey, pack }, index) => ({
+        (
+          refreshedContextPacks.find(
+            (entry) => entry.client === client && entry.roomId === contextRoom.roomId,
+          )?.packs ?? findRoomImagePacks(contextRoom)
+        ).map(({ stateKey, pack }, index) => ({
           id: `context-${contextRoom.roomId}-${stateKey || index}`,
           roomPackKey: `${contextRoom.roomId}\u0000${stateKey}`,
           orderKey: `room\u0000${contextRoom.roomId}\u0000${stateKey}`,
@@ -344,6 +387,7 @@ export function EmojiButton({
     })),
   )
   useEffect(() => {
+    if (!open) return
     let cancelled = false
     const configs = JSON.parse(favoriteRoomKey) as Array<{
       id: string
@@ -369,55 +413,23 @@ export function EmojiButton({
     void Promise.allSettled(
       favoriteSources.flatMap((source) =>
         Object.keys(source.rooms).map(async (roomId) => {
-          const favoriteConfig = source.rooms
           const known = source.client.getRoom(roomId)
-          const configuredKeys = Object.keys(favoriteConfig[roomId] ?? {})
-          const accepts = (key: string | undefined) =>
-            !configuredKeys.length || configuredKeys.includes(key ?? '')
-          const localEvents = roomImagePackTypes
-            .flatMap((type) => known?.currentState.getStateEvents(type) ?? [])
-            .filter((event) => accepts(event.getStateKey()))
-          if (localEvents.length)
-            return localEvents.map((event, index) => {
-              const pack = event.getContent<MatrixEmotePack>()
-              const stateKey = event.getStateKey() ?? ''
-              return {
-                id: `favorite-${roomId}-${stateKey || index}`,
-                favoriteKey: `${roomId}\u0000${stateKey}`,
-                roomPackKey: `${roomId}\u0000${stateKey}`,
-                orderKey: `room\u0000${roomId}\u0000${stateKey}`,
-                label: `Favorite · ${pack.pack?.display_name || known?.name || roomId}`,
-                pack,
-                client: source.client,
-                mine: true,
-              }
-            })
-          const state = await source.client.roomState(roomId)
-          const roomName = String(
-            state.find((event) => event.type === EventType.RoomName)?.content.name ||
-              known?.name ||
-              roomId,
+          const packs: RoomImagePackLocation[] = await matrixService.roomImagePacks(
+            roomId,
+            source.client,
           )
-          return state
-            .filter(
-              (event) =>
-                roomImagePackTypes.includes(event.type as (typeof roomImagePackTypes)[number]) &&
-                accepts(event.state_key),
-            )
-            .map((event, index) => {
-              const pack = event.content as MatrixEmotePack
-              const stateKey = event.state_key ?? ''
-              return {
-                id: `favorite-${roomId}-${stateKey || index}`,
-                favoriteKey: `${roomId}\u0000${stateKey}`,
-                roomPackKey: `${roomId}\u0000${stateKey}`,
-                orderKey: `room\u0000${roomId}\u0000${stateKey}`,
-                label: `Favorite · ${pack.pack?.display_name || roomName}`,
-                pack,
-                client: source.client,
-                mine: true,
-              }
-            })
+          return packs.map(({ pack, stateKey }, index) => {
+            return {
+              id: `favorite-${roomId}-${stateKey || index}`,
+              favoriteKey: `${roomId}\u0000${stateKey}`,
+              roomPackKey: `${roomId}\u0000${stateKey}`,
+              orderKey: `room\u0000${roomId}\u0000${stateKey}`,
+              label: `Favorite · ${pack.pack?.display_name || known?.name || roomId}`,
+              pack,
+              client: source.client,
+              mine: true,
+            }
+          })
         }),
       ),
     ).then((results) => {
@@ -428,7 +440,7 @@ export function EmojiButton({
     return () => {
       cancelled = true
     }
-  }, [client, favoriteRoomKey, mergingAccounts])
+  }, [open, client, favoriteRoomKey, mergingAccounts])
   const namedPacks = orderImagePacks(
     deduplicateRoomPacks([...accountPacks, ...remoteFavoritePacks, ...contextualPacks]),
     packOrder,

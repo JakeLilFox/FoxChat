@@ -7,24 +7,37 @@ import { RoomSecuritySettings } from './RoomSecuritySettings'
 import { SpaceInvitations } from '../../spaces'
 import { SpaceManagement } from '../../spaces'
 import { SpacePresentationSettings } from './SpacePresentationSettings'
-import { type MatrixEmotePack, findRoomImagePacks } from '../../../lib/emojiData'
-import { useState } from 'react'
+import {
+  type MatrixEmotePack,
+  type RoomImagePackLocation,
+  findRoomImagePacks,
+  roomImagePackTypes,
+} from '../../../lib/emojiData'
+import { useEffect, useState } from 'react'
 import { Divider, Modal, Tabs, Tag } from 'antd'
 import { EventType, Room, RoomType } from 'matrix-js-sdk'
 import { matrixService } from '../../../matrix/MatrixClientService'
 
-type PackSlot = { key: string; stateKey: string; pack?: MatrixEmotePack }
-const newPackStateKey = () => `pack-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
-const slotsFromRoom = (room: Room): PackSlot[] => {
-  const locations = findRoomImagePacks(room)
+type RoomImagePackType = (typeof roomImagePackTypes)[number]
+type PackSlot = {
+  key: string
+  stateKey: string
+  eventType?: RoomImagePackType
+  pack?: MatrixEmotePack
+}
+const newPackStateKey = () =>
+  `pack-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+const slotsFromLocations = (locations: RoomImagePackLocation[]): PackSlot[] => {
   return locations.length
     ? locations.map((location) => ({
         key: location.stateKey || 'default',
         stateKey: location.stateKey,
+        eventType: location.type,
         pack: location.pack,
       }))
     : [{ key: 'default', stateKey: '', pack: undefined }]
 }
+const slotsFromRoom = (room: Room): PackSlot[] => slotsFromLocations(findRoomImagePacks(room))
 
 export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () => void }) {
   const userId = matrixService.matrixClient?.getUserId()
@@ -36,7 +49,28 @@ export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () =
     !!userId && room.currentState.maySendStateEvent('im.ponies.room_emotes', userId)
   const [packSlots, setPackSlots] = useState<PackSlot[]>(() => slotsFromRoom(room))
   const [activePackKey, setActivePackKey] = useState<string>(() => packSlots[0]?.key ?? 'default')
+  const [activeSettingsTab, setActiveSettingsTab] = useState('general')
   const kind = room.getType() === RoomType.Space ? 'Space' : 'Room'
+  useEffect(() => {
+    if (!canManagePacks || activeSettingsTab !== 'stickers') return
+    const client = matrixService.clientForRoom(room.roomId)
+    if (!client) return
+    let cancelled = false
+    void matrixService.roomImagePacks(room.roomId, client, true).then((locations) => {
+      if (cancelled) return
+      const loaded = slotsFromLocations(locations)
+      setPackSlots((current) => [
+        ...loaded,
+        ...current.filter((slot) => !slot.pack && slot.stateKey.startsWith('pack-')),
+      ])
+      setActivePackKey((current) =>
+        loaded.some(({ key }) => key === current) ? current : (loaded[0]?.key ?? 'default'),
+      )
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [activeSettingsTab, canManagePacks, room.roomId])
   const editPack = (targetKey: string, action: 'add' | 'remove') => {
     if (action === 'add') {
       const stateKey = newPackStateKey()
@@ -52,7 +86,8 @@ export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () =
       okText: 'Remove',
       okButtonProps: { danger: true },
       onOk: async () => {
-        if (slot.pack) await matrixService.saveRoomImagePack(room.roomId, {}, slot.stateKey)
+        if (slot.pack)
+          await matrixService.saveRoomImagePack(room.roomId, {}, slot.stateKey, slot.eventType)
         setPackSlots((current) => {
           const next = current.filter((candidate) => candidate.key !== targetKey)
           return next.length ? next : [{ key: 'default', stateKey: '', pack: undefined }]
@@ -156,6 +191,7 @@ export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () =
                         pack={slot.pack}
                         roomId={room.roomId}
                         stateKey={slot.stateKey}
+                        eventType={slot.eventType}
                         defaultName={packSlots.length > 1 ? `Pack ${index + 1}` : undefined}
                         onSaved={(content) =>
                           setPackSlots((current) =>
@@ -183,7 +219,7 @@ export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () =
       onCancel={onClose}
       destroyOnHidden
     >
-      <Tabs items={items} />
+      <Tabs items={items} activeKey={activeSettingsTab} onChange={setActiveSettingsTab} />
     </Modal>
   )
 }

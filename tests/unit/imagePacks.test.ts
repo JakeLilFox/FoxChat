@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   ALL_ACCOUNT_IMAGE_PACKS_KEY,
   allAccountImagePacksEnabled,
@@ -15,12 +15,14 @@ import {
   preferNonEmptyPack,
   readRecent,
   rememberRecent,
+  roomImagePacksFromStateEvents,
   serializeImagePackItems,
   setAllAccountImagePacksEnabled,
+  splitImagePackContent,
   uniquePackName,
   type MatrixEmotePack,
 } from '../../src/lib/emojiData'
-import { MatrixClientService } from '../../src/matrix/MatrixClientService'
+import { IMAGE_PACK_LIST_TTL_MS, MatrixClientService } from '../../src/matrix/MatrixClientService'
 
 describe('matchesPickerSearch', () => {
   it('matches every normalized search term across item and pack labels', () => {
@@ -57,6 +59,107 @@ describe('preferNonEmptyPack', () => {
     expect(preferNonEmptyPack([first, last])).toBe(last)
     expect(preferNonEmptyPack([undefined, last])).toBe(last)
     expect(preferNonEmptyPack([first, undefined])).toBeUndefined()
+  })
+})
+
+describe('room image-pack discovery', () => {
+  it('keeps every state-keyed pack while collapsing stable and legacy copies of one pack', () => {
+    const packs = roomImagePacksFromStateEvents([
+      {
+        type: 'm.image_pack',
+        state_key: 'foxes',
+        content: {
+          pack: { display_name: 'Foxes' },
+          images: { fox: { url: 'mxc://example.org/fox' } },
+        },
+      },
+      {
+        type: 'im.ponies.room_emotes',
+        state_key: 'foxes',
+        content: { pack: { display_name: 'Old Foxes' }, images: {} },
+      },
+      {
+        type: 'im.ponies.room_emotes',
+        state_key: 'birds',
+        content: {
+          pack: { display_name: 'Birds' },
+          images: { bird: { url: 'mxc://example.org/bird' } },
+        },
+      },
+    ])
+
+    expect(packs.map(({ stateKey }) => stateKey)).toEqual(['birds', 'foxes'])
+    expect(packs.find(({ stateKey }) => stateKey === 'foxes')?.pack.pack?.display_name).toBe(
+      'Foxes',
+    )
+  })
+
+  it('recombines transparent state fragments into one editable pack', () => {
+    const splitPack = (part: number, images: MatrixEmotePack['images']) => ({
+      type: 'm.image_pack',
+      state_key: part === 1 ? 'large' : `large.foxchat-part.${part}`,
+      content: {
+        pack: { display_name: 'Large pack' },
+        images,
+        'chat.foxchat.split_pack': { root_state_key: 'large', part, total: 2 },
+      },
+    })
+
+    const packs = roomImagePacksFromStateEvents([
+      splitPack(2, { second: { url: 'mxc://example.org/second' } }),
+      splitPack(1, { first: { url: 'mxc://example.org/first' } }),
+    ])
+
+    expect(packs).toHaveLength(1)
+    expect(packs[0].stateKey).toBe('large')
+    expect(packs[0].pack.images).toEqual({
+      first: { url: 'mxc://example.org/first' },
+      second: { url: 'mxc://example.org/second' },
+    })
+    expect(packs[0].pack['chat.foxchat.split_pack']).toBeUndefined()
+  })
+
+  it('refreshes room pack metadata only after its one-hour cache expires', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const roomState = vi.fn().mockResolvedValue([
+      {
+        type: 'im.ponies.room_emotes',
+        state_key: 'first',
+        content: { images: { first: { url: 'mxc://example.org/first' } } },
+      },
+    ])
+    const client = { roomState, getRoom: () => undefined }
+    const service = new MatrixClientService()
+
+    await service.roomImagePacks('!room:example.org', client as never)
+    await service.roomImagePacks('!room:example.org', client as never)
+    expect(roomState).toHaveBeenCalledTimes(1)
+
+    now.mockReturnValue(1_000 + IMAGE_PACK_LIST_TTL_MS + 1)
+    await service.roomImagePacks('!room:example.org', client as never)
+    expect(roomState).toHaveBeenCalledTimes(2)
+    now.mockRestore()
+  })
+})
+
+describe('room image-pack state sizing', () => {
+  it('splits oversized image maps without losing or duplicating stickers', () => {
+    const content = {
+      pack: { display_name: 'Large pack' },
+      images: Object.fromEntries(
+        ['one', 'two', 'three'].map((name) => [
+          name,
+          { url: `mxc://example.org/${name}`, body: 'x'.repeat(80) },
+        ]),
+      ),
+    }
+
+    const chunks = splitImagePackContent(content, 220)
+
+    expect(chunks.length).toBeGreaterThan(1)
+    expect(Object.assign({}, ...chunks.map((chunk) => chunk.images))).toEqual(content.images)
+    for (const chunk of chunks)
+      expect(new TextEncoder().encode(JSON.stringify(chunk)).byteLength).toBeLessThanOrEqual(220)
   })
 })
 
@@ -263,7 +366,7 @@ describe('image-pack recents', () => {
 })
 
 describe('saveRoomImagePack / savePersonalImagePack', () => {
-  it('writes the room pack as im.ponies.room_emotes state through the selected account', async () => {
+  it('keeps the room pack state type when writing through the selected account', async () => {
     const sendStateEvent = async (
       _roomId: string,
       _type: string,
@@ -273,6 +376,7 @@ describe('saveRoomImagePack / savePersonalImagePack', () => {
     let captured: [string, string, unknown, string] | undefined
     const client = {
       getRoom: () => ({ maySendMessage: () => true }),
+      roomState: vi.fn().mockResolvedValue([]),
       sendStateEvent: (...args: [string, string, unknown, string]) => {
         captured = args
         return sendStateEvent(...args)
@@ -288,9 +392,10 @@ describe('saveRoomImagePack / savePersonalImagePack', () => {
     internals.availableAccounts = () => [account]
 
     const content = { pack: { display_name: 'Room stickers and emoji' }, images: {} }
-    await service.saveRoomImagePack('!room:example.org', content)
+    await service.saveRoomImagePack('!room:example.org', content, '', 'm.image_pack')
 
-    expect(captured).toEqual(['!room:example.org', 'im.ponies.room_emotes', content, ''])
+    expect(captured).toEqual(['!room:example.org', 'm.image_pack', content, ''])
+    expect(client.roomState).toHaveBeenCalledWith('!room:example.org')
   })
 
   it('writes the personal pack as im.ponies.user_emotes account data on the primary client', async () => {
@@ -307,6 +412,72 @@ describe('saveRoomImagePack / savePersonalImagePack', () => {
     await service.savePersonalImagePack(content)
 
     expect(captured).toEqual(['im.ponies.user_emotes', content])
+  })
+
+  it('writes an oversized room pack across deterministic state keys', async () => {
+    const sent: Array<[string, Record<string, unknown>]> = []
+    const client = {
+      getRoom: () => undefined,
+      roomState: vi.fn().mockResolvedValue([]),
+      sendStateEvent: (
+        _roomId: string,
+        _type: string,
+        content: Record<string, unknown>,
+        stateKey: string,
+      ) => {
+        sent.push([stateKey, content])
+        return Promise.resolve({ event_id: `$${sent.length}` })
+      },
+    }
+    const service = new MatrixClientService()
+    const internals = service as unknown as {
+      roomAccounts: (roomId: string) => Array<{ id: string; userId: string; client: typeof client }>
+      availableAccounts: () => Array<{ id: string; userId: string; client: typeof client }>
+    }
+    const account = { id: 'account', userId: '@user:example.org', client }
+    internals.roomAccounts = () => [account]
+    internals.availableAccounts = () => [account]
+    const images = Object.fromEntries(
+      ['one', 'two', 'three'].map((name) => [
+        name,
+        { url: `mxc://example.org/${name}`, body: name.repeat(10_000) },
+      ]),
+    )
+
+    await service.saveRoomImagePack(
+      '!room:example.org',
+      { pack: { display_name: 'Large pack' }, images },
+      'large',
+    )
+
+    expect(sent.map(([stateKey]) => stateKey)).toEqual([
+      'large',
+      'large.foxchat-part.2',
+      'large.foxchat-part.3',
+    ])
+    expect(Object.assign({}, ...sent.map(([, content]) => content.images))).toEqual(images)
+    expect(
+      sent.map(([, content]) => (content['chat.foxchat.split_pack'] as { part: number }).part),
+    ).toEqual([1, 2, 3])
+  })
+
+  it('favorites the whole room instead of pinning only currently known state keys', async () => {
+    const saved: Array<[string, unknown]> = []
+    const service = new MatrixClientService()
+    ;(service as unknown as { client: unknown }).client = {
+      getAccountData: () => undefined,
+      setAccountData: (type: string, content: unknown) => {
+        saved.push([type, content])
+        return Promise.resolve({})
+      },
+    }
+
+    await service.addFavoriteImagePack('!packs:example.org')
+
+    expect(saved).toEqual([
+      ['m.image_pack.rooms', { rooms: { '!packs:example.org': {} } }],
+      ['im.ponies.emote_rooms', { rooms: { '!packs:example.org': {} } }],
+    ])
   })
 
   it('stores picker pack order in private account data and filters invalid saved keys', async () => {

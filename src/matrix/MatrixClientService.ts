@@ -53,6 +53,14 @@ import { isServerEventId } from '../lib/matrixIdentifiers'
 import { applyPermissionLevels } from '../lib/powerLevelPaths'
 import { DEVICE_DELETE_ACTION } from '../lib/accountManagement'
 import { GALLERY_EVENT_FIELD } from '../lib/gallery'
+import {
+  findRoomImagePacks,
+  roomImagePackTypes,
+  roomImagePacksFromStateEvents,
+  splitImagePackContent,
+  type RoomImagePackLocation,
+  type RoomImagePackStateEvent,
+} from '../lib/emojiData'
 
 declare global {
   interface Window {
@@ -148,6 +156,7 @@ export type SyncObserver = {
   onEvent?: (event: MatrixEvent, room?: Room) => void
   onSync?: (state: string) => void
   onVerificationRequest?: (request: VerificationRequest) => void
+  onImagePacksChanged?: (roomId: string, client: MatrixClient) => void
 }
 
 const SESSION_KEY = 'foxchat.matrix.session'
@@ -164,6 +173,7 @@ const PRESENCE_MODES_KEY = 'foxchat.matrix.presenceModes'
 const LOCAL_ROOM_NAMES_KEY = 'foxchat.matrix.localRoomNames'
 const REACTION_PARENT_CACHE_KEY = 'foxchat.matrix.reactionParents'
 const IMAGE_PACK_ORDER_EVENT = 'chat.foxchat.image_pack_order'
+export const IMAGE_PACK_LIST_TTL_MS = 60 * 60 * 1000
 const REACTION_PARENT_CACHE_LIMIT = 2_000
 const PRESENCE_IDLE_MS = 5 * 60 * 1000
 const normalizedPowerLevel = (value: unknown) =>
@@ -246,6 +256,14 @@ export class MatrixClientService {
   private presenceQueues = new WeakMap<MatrixClient, Promise<void>>()
   private verificationRequests = new Set<VerificationRequest>()
   private trackedVerificationRequests = new WeakSet<VerificationRequest>()
+  private imagePackLists = new WeakMap<
+    MatrixClient,
+    Map<string, { loadedAt: number; packs: RoomImagePackLocation[] }>
+  >()
+  private imagePackListLoads = new WeakMap<
+    MatrixClient,
+    Map<string, Promise<RoomImagePackLocation[]>>
+  >()
   private resumeSyncRetryUntil = 0
   private readonly secondary: boolean
   private readonly ephemeral: boolean
@@ -940,6 +958,19 @@ export class MatrixClientService {
       this.observers.forEach((x) => x.onRoom?.(room))
     })
     client.on(RoomStateEvent.Events, (event) => {
+      if (roomImagePackTypes.includes(event.getType() as (typeof roomImagePackTypes)[number])) {
+        const roomId = event.getRoomId()
+        if (roomId) {
+          this.invalidateRoomImagePacks(roomId, client)
+          this.observers.forEach((observer) => observer.onImagePacksChanged?.(roomId, client))
+        }
+        const room = roomId ? client.getRoom(roomId) : undefined
+        if (room) {
+          this.trackEventOwner(client, event, room)
+          this.observers.forEach((observer) => observer.onRoom?.(room))
+        }
+        return
+      }
       if (
         ['m.room.avatar', 'm.room.name', 'm.room.canonical_alias', EventType.SpaceChild].includes(
           event.getType(),
@@ -1027,6 +1058,10 @@ export class MatrixClientService {
               const owner = service.matrixClient
               if (owner) this.trackRoomOwner(owner, room)
               this.observers.forEach((observer) => observer.onRoom?.(room))
+            },
+            onImagePacksChanged: (roomId, owner) => {
+              this.invalidateRoomImagePacks(roomId, owner)
+              this.observers.forEach((observer) => observer.onImagePacksChanged?.(roomId, owner))
             },
             onEvent: (event, room) => {
               const owner = service.matrixClient
@@ -2705,15 +2740,89 @@ export class MatrixClientService {
     )
   }
 
-  async saveRoomImagePack(roomId: string, content: Record<string, unknown>, stateKey = '') {
+  async saveRoomImagePack(
+    roomId: string,
+    content: Record<string, unknown>,
+    stateKey = '',
+    eventType: (typeof roomImagePackTypes)[number] = 'im.ponies.room_emotes',
+  ) {
     const client = this.clientForRoom(roomId)
     if (!client) throw new Error('Matrix client is not ready')
-    await client.sendStateEvent(
-      roomId,
-      'im.ponies.room_emotes' as never,
-      content as never,
-      stateKey,
+    const chunks = splitImagePackContent(content)
+    const partPrefix = `${stateKey || 'default'}.foxchat-part.`
+    const existing = await client.roomState(roomId)
+    const nextStateKeys = chunks.map((_, index) =>
+      index === 0 ? stateKey : `${partPrefix}${index + 1}`,
     )
+    for (const [index, chunk] of chunks.entries()) {
+      const splitChunk =
+        chunks.length === 1
+          ? chunk
+          : {
+              ...chunk,
+              'chat.foxchat.split_pack': {
+                root_state_key: stateKey,
+                part: index + 1,
+                total: chunks.length,
+              },
+            }
+      await client.sendStateEvent(
+        roomId,
+        eventType as never,
+        splitChunk as never,
+        nextStateKeys[index],
+      )
+    }
+    const obsoleteParts = existing
+      .filter((event) => event.type === eventType)
+      .map((event) => event.state_key ?? '')
+      .filter(
+        (existingStateKey) =>
+          existingStateKey.startsWith(partPrefix) && !nextStateKeys.includes(existingStateKey),
+      )
+    for (const obsoleteStateKey of obsoleteParts)
+      await client.sendStateEvent(roomId, eventType as never, {} as never, obsoleteStateKey)
+    this.invalidateRoomImagePacks(roomId, client)
+    await this.roomImagePacks(roomId, client, true)
+  }
+
+  invalidateRoomImagePacks(roomId: string, client = this.clientForRoom(roomId)) {
+    if (!client) return
+    this.imagePackLists.get(client)?.delete(roomId)
+  }
+
+  async roomImagePacks(
+    roomId: string,
+    client = this.clientForRoom(roomId),
+    force = false,
+  ): Promise<RoomImagePackLocation[]> {
+    if (!client) return []
+    const cache = this.imagePackLists.get(client) ?? new Map()
+    if (!this.imagePackLists.has(client)) this.imagePackLists.set(client, cache)
+    const cached = cache.get(roomId)
+    if (!force && cached && Date.now() - cached.loadedAt < IMAGE_PACK_LIST_TTL_MS)
+      return cached.packs
+
+    const loads = this.imagePackListLoads.get(client) ?? new Map()
+    if (!this.imagePackListLoads.has(client)) this.imagePackListLoads.set(client, loads)
+    const pending = loads.get(roomId)
+    if (pending)
+      return force ? pending.then(() => this.roomImagePacks(roomId, client, true)) : pending
+
+    const load = client
+      .roomState(roomId)
+      .then((events) => {
+        const packs = roomImagePacksFromStateEvents(events as RoomImagePackStateEvent[])
+        cache.set(roomId, { loadedAt: Date.now(), packs })
+        return packs
+      })
+      .catch(() => {
+        const known = client.getRoom(roomId)
+        return cached?.packs ?? (known ? findRoomImagePacks(known) : [])
+      })
+      .finally(() => loads.delete(roomId))
+    loads.set(roomId, load)
+    return load
   }
 
   async saveSpaceRoles(
@@ -2976,21 +3085,13 @@ export class MatrixClientService {
       ? (await this.client.getRoomIdForAlias(value)).room_id
       : value
     if (!roomId.startsWith('!')) throw new Error('Enter a Matrix room ID or room alias')
-    const room = this.client.getRoom(roomId)
-    const stateKeys = ['m.image_pack', 'im.ponies.room_emotes'].flatMap(
-      (type) =>
-        room?.currentState.getStateEvents(type).map((event) => event.getStateKey() ?? '') ?? [],
-    )
-    const enabled = Object.fromEntries(
-      (stateKeys.length ? stateKeys : ['']).map((stateKey) => [stateKey, {}]),
-    )
     for (const type of ['m.image_pack.rooms', 'im.ponies.emote_rooms']) {
       const current = this.client.getAccountData(type as never)?.getContent() as
         | { rooms?: Record<string, unknown> }
         | undefined
       await this.client.setAccountData(
         type as never,
-        { ...current, rooms: { ...(current?.rooms ?? {}), [roomId]: enabled } } as never,
+        { ...current, rooms: { ...(current?.rooms ?? {}), [roomId]: {} } } as never,
       )
     }
     return roomId

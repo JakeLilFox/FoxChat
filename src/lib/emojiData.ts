@@ -24,6 +24,11 @@ export type MatrixEmotePack = {
       order?: string
     }
   >
+  'chat.foxchat.split_pack'?: {
+    root_state_key: string
+    part: number
+    total: number
+  }
 }
 export type NamedEmotePack = {
   id: string
@@ -179,6 +184,39 @@ export const serializeImagePackItems = (
     }),
   )
 }
+export const IMAGE_PACK_STATE_TARGET_BYTES = 52 * 1024
+const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength
+export const splitImagePackContent = (
+  content: Record<string, unknown>,
+  maxBytes = IMAGE_PACK_STATE_TARGET_BYTES,
+) => {
+  if (jsonBytes(content) <= maxBytes) return [content]
+  const images =
+    content.images && typeof content.images === 'object'
+      ? (content.images as Record<string, unknown>)
+      : {}
+  const base = { ...content, images: {} }
+  if (jsonBytes(base) > maxBytes)
+    throw new Error('This image pack metadata is too large even without its images')
+
+  const chunks: Array<Record<string, unknown>> = []
+  let current: Record<string, unknown> = {}
+  for (const [name, image] of Object.entries(images)) {
+    const candidate = { ...current, [name]: image }
+    if (jsonBytes({ ...base, images: candidate }) <= maxBytes) {
+      current = candidate
+      continue
+    }
+    if (!Object.keys(current).length)
+      throw new Error(`Sticker “${name}” has too much metadata to fit in a Matrix state event`)
+    chunks.push({ ...base, images: current })
+    current = { [name]: image }
+    if (jsonBytes({ ...base, images: current }) > maxBytes)
+      throw new Error(`Sticker “${name}” has too much metadata to fit in a Matrix state event`)
+  }
+  if (Object.keys(current).length || !chunks.length) chunks.push({ ...base, images: current })
+  return chunks
+}
 export const roomImagePackTypes = ['m.image_pack', 'im.ponies.room_emotes'] as const
 export const preferNonEmptyPack = (
   candidates: (MatrixEmotePack | undefined)[],
@@ -189,6 +227,11 @@ export type RoomImagePackLocation = {
   type: (typeof roomImagePackTypes)[number]
   stateKey: string
   pack: MatrixEmotePack
+}
+export type RoomImagePackStateEvent = {
+  type: string
+  state_key?: string
+  content?: MatrixEmotePack
 }
 const choosePackLocation = (
   candidates: RoomImagePackLocation[],
@@ -211,26 +254,77 @@ const packHasContent = (pack: MatrixEmotePack) =>
 // A room can hold multiple m.room.image_pack/im.ponies.room_emotes state events, one per
 // state_key, each representing a distinct pack (MSC2545). Group by state_key so both the
 // stable and unstable type for the same pack collapse into a single entry.
-export const findRoomImagePacks = (room: Room): RoomImagePackLocation[] => {
+export const roomImagePacksFromStateEvents = (
+  events: RoomImagePackStateEvent[],
+): RoomImagePackLocation[] => {
   const byStateKey = new Map<string, RoomImagePackLocation[]>()
-  for (const type of roomImagePackTypes) {
-    for (const event of room.currentState.getStateEvents(type)) {
-      const stateKey = event.getStateKey() ?? ''
-      const location: RoomImagePackLocation = {
-        type,
-        stateKey,
-        pack: event.getContent<MatrixEmotePack>(),
-      }
-      byStateKey.set(stateKey, [...(byStateKey.get(stateKey) ?? []), location])
+  for (const event of events) {
+    if (!roomImagePackTypes.includes(event.type as (typeof roomImagePackTypes)[number])) continue
+    const stateKey = event.state_key ?? ''
+    const location: RoomImagePackLocation = {
+      type: event.type as (typeof roomImagePackTypes)[number],
+      stateKey,
+      pack: event.content ?? {},
     }
+    byStateKey.set(stateKey, [...(byStateKey.get(stateKey) ?? []), location])
   }
-  return [...byStateKey.values()]
+  const selected = [...byStateKey.values()]
     .map((candidates) => choosePackLocation(candidates)!)
     .filter((location) => packHasContent(location.pack))
-    .sort((a, b) =>
-      (a.pack.pack?.display_name ?? '').localeCompare(b.pack.pack?.display_name ?? ''),
-    )
+  const complete: RoomImagePackLocation[] = []
+  const split = new Map<string, RoomImagePackLocation[]>()
+  for (const location of selected) {
+    const metadata = location.pack['chat.foxchat.split_pack']
+    if (
+      !metadata ||
+      typeof metadata.root_state_key !== 'string' ||
+      !Number.isInteger(metadata.part) ||
+      metadata.part < 1 ||
+      !Number.isInteger(metadata.total) ||
+      metadata.total < 2
+    ) {
+      complete.push(location)
+      continue
+    }
+    split.set(metadata.root_state_key, [...(split.get(metadata.root_state_key) ?? []), location])
+  }
+  for (const [rootStateKey, fragments] of split) {
+    const preferredType = fragments.some(({ type }) => type === 'm.image_pack')
+      ? 'm.image_pack'
+      : 'im.ponies.room_emotes'
+    const matching = fragments
+      .filter(({ type }) => type === preferredType)
+      .sort(
+        (a, b) =>
+          (a.pack['chat.foxchat.split_pack']?.part ?? 0) -
+          (b.pack['chat.foxchat.split_pack']?.part ?? 0),
+      )
+    const primary = matching.find(({ pack }) => pack['chat.foxchat.split_pack']?.part === 1)
+    const { ['chat.foxchat.split_pack']: _splitMetadata, ...primaryPack } = (primary ?? matching[0])
+      .pack
+    complete.push({
+      type: preferredType,
+      stateKey: rootStateKey,
+      pack: {
+        ...primaryPack,
+        images: Object.assign({}, ...matching.map(({ pack }) => pack.images ?? {})),
+      },
+    })
+  }
+  return complete.sort((a, b) =>
+    (a.pack.pack?.display_name ?? '').localeCompare(b.pack.pack?.display_name ?? ''),
+  )
 }
+export const findRoomImagePacks = (room: Room): RoomImagePackLocation[] =>
+  roomImagePacksFromStateEvents(
+    roomImagePackTypes.flatMap((type) =>
+      room.currentState.getStateEvents(type).map((event) => ({
+        type,
+        state_key: event.getStateKey() ?? '',
+        content: event.getContent<MatrixEmotePack>(),
+      })),
+    ),
+  )
 export const imagePackRoomsTypes = ['m.image_pack.rooms', 'im.ponies.emote_rooms'] as const
 export const accountImagePackTypes = ['m.image_pack', 'im.ponies.user_emotes'] as const
 export const recentStorage = {

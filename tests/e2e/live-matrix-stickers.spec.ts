@@ -6,6 +6,7 @@ import JSZip from 'jszip'
 import { liveMatrixConfig } from './support/env'
 import {
   cleanTestRoom,
+  getAccountData,
   getRoomState,
   removeOtherDevices,
   setAccountData,
@@ -19,6 +20,7 @@ import {
   closeDialog,
   addAccount,
   openChannelInSpace,
+  openAppSettings,
   openRoomActions,
   openRoomRow,
   openRoomSettings,
@@ -550,12 +552,18 @@ test.describe('live sticker pack journey', () => {
     const roomName = `${live.roomPrefix} Named Pack ${runId}`
     const initialStickerName = `named-${runId}`
     const renamedStickerName = `named-renamed-${runId}`
+    const secondStickerName = `named-second-${runId}`
+    const destinationName = `${live.roomPrefix} Favorite Pack Destination ${runId}`
     const packStateKey = 'Fox'
+    const secondPackStateKey = 'Fox 2'
 
     let context
     let page: Page | undefined
     let roomId: string | undefined
+    let destinationRoomId: string | undefined
     let account1Id: string | undefined
+    let contentUri: string | undefined
+    let favoriteAccountData: Record<string, Record<string, unknown> | undefined> | undefined
     let journeyError: unknown
 
     try {
@@ -588,7 +596,7 @@ test.describe('live sticker pack journey', () => {
 
       await test.step("seed a pack under a custom state_key via the raw API, bypassing the app's own write path", async () => {
         const session = (await storedSessions(page!)).at(-1)!
-        const contentUri = await uploadMedia(
+        contentUri = await uploadMedia(
           session,
           readFileSync(FAVICON_PATH),
           'favicon.png',
@@ -598,7 +606,7 @@ test.describe('live sticker pack journey', () => {
           pack: { display_name: 'Fox' },
           images: {
             [initialStickerName]: {
-              url: contentUri,
+              url: contentUri!,
               info: { mimetype: 'image/png' },
             },
           },
@@ -611,6 +619,19 @@ test.describe('live sticker pack journey', () => {
           timeout: 30_000,
         })
         await closeDialog(page!)
+      })
+
+      await test.step('add a second pack through the raw API before editing the first pack', async () => {
+        const session = (await storedSessions(page!)).at(-1)!
+        await setRoomState(session, roomId!, 'im.ponies.room_emotes', secondPackStateKey, {
+          pack: { display_name: 'Fox 2' },
+          images: {
+            [secondStickerName]: {
+              url: contentUri!,
+              info: { mimetype: 'image/png' },
+            },
+          },
+        })
       })
 
       await test.step('editing and saving writes back to the same state_key, not a new "" one', async () => {
@@ -632,11 +653,51 @@ test.describe('live sticker pack journey', () => {
         expect(emptyKeyEvent).toBeUndefined()
       })
 
-      await test.step('the renamed sticker shows in the picker', async () => {
+      await test.step('the picker shows both the renamed and second room packs', async () => {
         await openEmojiPicker(page!)
         await expect(packButton(page!, renamedStickerName)).toBeVisible({
           timeout: 30_000,
         })
+        await expect(packButton(page!, secondStickerName)).toBeVisible({
+          timeout: 30_000,
+        })
+        await closeEmojiPicker(page!)
+      })
+
+      await test.step('favoriting the room exposes all of its packs in another room', async () => {
+        const session = (await storedSessions(page!)).at(-1)!
+        favoriteAccountData = Object.fromEntries(
+          await Promise.all(
+            ['m.image_pack.rooms', 'im.ponies.emote_rooms'].map(async (type) => [
+              type,
+              await getAccountData(session, type),
+            ]),
+          ),
+        )
+
+        const settings = await openAppSettings(page!, 'Stickers & emoji')
+        const panel = settings.getByRole('tabpanel', { name: 'Stickers & emoji' })
+        await panel.getByRole('combobox').click()
+        await page!.getByText(new RegExp(roomName)).last().click()
+        await panel.getByRole('button', { name: 'Add pack' }).click()
+        await expect(page!.getByText('Favorite pack added').last()).toBeVisible()
+        await closeDialog(page!)
+
+        await openRoomActions(page!)
+        await page!.getByRole('menu').getByText('Create a room', { exact: true }).click()
+        const createDialog = page!.getByRole('dialog', { name: 'Create a room' })
+        await createDialog.getByLabel('Account').click()
+        await page!.getByText(account1Id!, { exact: true }).last().click()
+        await createDialog.getByLabel('Room name').fill(destinationName)
+        await createDialog.getByRole('button', { name: 'Create room' }).click()
+        await expect(
+          page!.getByTestId('room-header').getByRole('heading', { name: destinationName }),
+        ).toBeVisible({ timeout: 60_000 })
+        destinationRoomId = new URL(page!.url()).searchParams.get('room') ?? undefined
+
+        await openEmojiPicker(page!)
+        await expect(packButton(page!, renamedStickerName)).toBeVisible({ timeout: 30_000 })
+        await expect(packButton(page!, secondStickerName)).toBeVisible({ timeout: 30_000 })
         await closeEmojiPicker(page!)
       })
     } catch (error) {
@@ -646,6 +707,11 @@ test.describe('live sticker pack journey', () => {
       try {
         const sessions: StoredSession[] = []
         if (page && !page.isClosed()) sessions.push(...(await storedSessions(page).catch(() => [])))
+        const session = sessions.filter((s) => s.userId === account1Id).at(-1)
+        if (session && favoriteAccountData)
+          for (const [type, content] of Object.entries(favoriteAccountData))
+            await setAccountData(session, type, content ?? {})
+        if (destinationRoomId) await cleanTestRoom(destinationRoomId, sessions)
         if (roomId) await cleanTestRoom(roomId, sessions)
         if (account1Id) {
           const current = sessions.filter((s) => s.userId === account1Id).at(-1)

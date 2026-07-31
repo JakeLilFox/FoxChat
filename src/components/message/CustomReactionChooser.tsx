@@ -3,15 +3,16 @@ import {
   type MatrixEmote,
   type MatrixEmotePack,
   type NamedEmotePack,
+  type RoomImagePackLocation,
   accountImagePackTypes,
+  findRoomImagePacks,
   imagePackRoomsTypes,
-  roomImagePackTypes,
 } from '../../lib/emojiData'
 import { containingSpacePath } from '../../lib/spaceHelpers'
 import { EmojiGrid, PackCollection } from '../../styles'
 import { useEffect, useState } from 'react'
 import { Empty } from 'antd'
-import { EventType, Room } from 'matrix-js-sdk'
+import { Room } from 'matrix-js-sdk'
 import { matrixService } from '../../matrix/MatrixClientService'
 
 export function CustomReactionChooser({
@@ -23,6 +24,9 @@ export function CustomReactionChooser({
 }) {
   const client = matrixService.clientForRoomInstance(room)
   const [remotePacks, setRemotePacks] = useState<NamedEmotePack[]>([])
+  const [refreshedRoomPacks, setRefreshedRoomPacks] = useState<
+    Array<{ roomId: string; packs: RoomImagePackLocation[] }>
+  >([])
   const favoriteRooms = client
     ? Object.assign(
         {},
@@ -45,37 +49,14 @@ export function CustomReactionChooser({
     void Promise.allSettled(
       Object.keys(config).map(async (roomId) => {
         const known = client.getRoom(roomId)
-        const configuredKeys = Object.keys(config[roomId] ?? {})
-        const accepts = (key: string | undefined) =>
-          !configuredKeys.length || configuredKeys.includes(key ?? '')
-        const local = roomImagePackTypes
-          .flatMap((type) => known?.currentState.getStateEvents(type) ?? [])
-          .filter((event) => accepts(event.getStateKey()))
-        if (local.length)
-          return local.map((event, index) => ({
-            id: `favorite-${roomId}-${event.getStateKey() || index}`,
-            label: `Favorite · ${event.getContent<MatrixEmotePack>().pack?.display_name || known?.name || roomId}`,
-            pack: event.getContent<MatrixEmotePack>(),
+        return (await matrixService.roomImagePacks(roomId, client)).map(
+          ({ pack, stateKey }, index) => ({
+            id: `favorite-${roomId}-${stateKey || index}`,
+            label: `Favorite · ${pack.pack?.display_name || known?.name || roomId}`,
+            pack,
             client,
-          }))
-        const state = await client.roomState(roomId)
-        const roomName = String(
-          state.find((event) => event.type === EventType.RoomName)?.content.name ||
-            known?.name ||
-            roomId,
+          }),
         )
-        return state
-          .filter(
-            (event) =>
-              roomImagePackTypes.includes(event.type as (typeof roomImagePackTypes)[number]) &&
-              accepts(event.state_key),
-          )
-          .map((event, index) => ({
-            id: `favorite-${roomId}-${event.state_key || index}`,
-            label: `Favorite · ${event.content.pack?.display_name || roomName}`,
-            pack: event.content as MatrixEmotePack,
-            client,
-          }))
       }),
     ).then((results) => {
       if (!cancelled)
@@ -87,6 +68,30 @@ export function CustomReactionChooser({
       cancelled = true
     }
   }, [client, favoriteKey])
+  useEffect(() => {
+    if (!client) {
+      setRefreshedRoomPacks([])
+      return
+    }
+    let cancelled = false
+    const rooms = [
+      ...containingSpacePath(room.roomId, client)
+        .map((id) => client.getRoom(id))
+        .filter((value): value is Room => !!value),
+      client.getRoom(room.roomId) ?? room,
+    ]
+    void Promise.all(
+      rooms.map(async (source) => ({
+        roomId: source.roomId,
+        packs: await matrixService.roomImagePacks(source.roomId, client),
+      })),
+    ).then((packs) => {
+      if (!cancelled) setRefreshedRoomPacks(packs)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [client, room])
   if (!client)
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No custom emoji available" />
   const rooms = [
@@ -111,17 +116,17 @@ export function CustomReactionChooser({
     }),
     ...remotePacks,
     ...rooms.flatMap((source) =>
-      roomImagePackTypes.flatMap((type) =>
-        source.currentState.getStateEvents(type).map((event, index) => {
-          const pack = event.getContent<MatrixEmotePack>()
-          return {
-            id: `${source.roomId}-${type}-${event.getStateKey() || index}`,
-            label: pack.pack?.display_name || source.name,
-            pack,
-            client,
-          }
-        }),
-      ),
+      (
+        refreshedRoomPacks.find((entry) => entry.roomId === source.roomId)?.packs ??
+        findRoomImagePacks(source)
+      ).map(({ pack, stateKey }, index) => {
+        return {
+          id: `${source.roomId}-${stateKey || index}`,
+          label: pack.pack?.display_name || source.name,
+          pack,
+          client,
+        }
+      }),
     ),
   ]
   const groups = packs

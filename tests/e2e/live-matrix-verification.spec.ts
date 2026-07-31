@@ -7,14 +7,14 @@ const live = liveMatrixConfig()
 
 const openSecurityTab = async (page: Page) => {
   const settings = page.getByRole('dialog', { name: 'Settings' })
+  const openSettings = page
+    .getByTestId('account-menu')
+    .getByRole('button', { name: 'Open settings', exact: true })
 
-  if (!(await settings.isVisible())) {
-    await page
-      .getByTestId('account-menu')
-      .getByRole('button', { name: 'Open settings', exact: true })
-      .click()
-    await expect(settings).toBeVisible()
-  }
+  await expect(async () => {
+    if (!(await settings.isVisible())) await openSettings.click({ timeout: 2_000 })
+    await expect(settings).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 15_000 })
   await settings.getByRole('tab', { name: 'Security' }).click()
   return settings
 }
@@ -143,6 +143,8 @@ test.describe('live device verification journey', () => {
         ).toBeVisible({ timeout: 30_000 })
         await verifiedDialog.getByRole('button', { name: 'Done' }).click()
         await newDialog.getByRole('button', { name: 'Done' }).click()
+        await expect(verifiedDialog).toBeHidden()
+        await expect(newDialog).toBeHidden()
       })
 
       await test.step("device B now shows as verified in device A's device list", async () => {
@@ -292,6 +294,8 @@ test.describe('live device verification journey', () => {
         ).toBeVisible({ timeout: 30_000 })
         await combinedDialog.getByRole('button', { name: 'Done' }).click()
         await newDialog.getByRole('button', { name: 'Done' }).click()
+        await expect(combinedDialog).toBeHidden()
+        await expect(newDialog).toBeHidden()
       })
 
       await test.step("device B sees itself as verified - account 1's real trust state, unaffected by account 3 being active", async () => {

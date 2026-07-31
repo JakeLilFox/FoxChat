@@ -5,6 +5,7 @@ import {
   forgetRecents,
   orderedImageEntries,
   recentStorage,
+  roomImagePackTypes,
   serializeImagePackItems,
   uniquePackName,
 } from '../lib/emojiData'
@@ -80,12 +81,14 @@ export function ImagePackEditor({
   pack,
   roomId,
   stateKey,
+  eventType,
   defaultName,
   onSaved,
 }: {
   pack?: MatrixEmotePack
   roomId?: string
   stateKey?: string
+  eventType?: (typeof roomImagePackTypes)[number]
   defaultName?: string
   onSaved?: (content: MatrixEmotePack) => void
 }) {
@@ -236,7 +239,7 @@ export function ImagePackEditor({
         },
         images,
       }
-      if (roomId) await matrixService.saveRoomImagePack(roomId, content, stateKey)
+      if (roomId) await matrixService.saveRoomImagePack(roomId, content, stateKey, eventType)
       else await matrixService.savePersonalImagePack(content)
       const currentUrls = new Set(items.map((item) => item.url))
       const removedUrls = new Set([...savedUrls.current].filter((url) => !currentUrls.has(url)))

@@ -352,6 +352,22 @@ export async function setAccountData(
   )
 }
 
+export async function getAccountData<T extends Record<string, unknown>>(
+  session: StoredSession,
+  eventType: string,
+): Promise<T | undefined> {
+  const response = await fetch(
+    `${session.baseUrl}/_matrix/client/v3/user/${encodeURIComponent(session.userId)}/account_data/${encodeURIComponent(eventType)}`,
+    { headers: { Authorization: `Bearer ${session.accessToken}` } },
+  )
+  if (response.status === 404) return undefined
+  if (!response.ok)
+    throw new Error(
+      `Could not get Matrix account data ${eventType} for ${session.userId}: ${response.status} ${await response.text()}`,
+    )
+  return (await response.json()) as T
+}
+
 export async function setRoomState(
   session: StoredSession,
   roomId: string,
