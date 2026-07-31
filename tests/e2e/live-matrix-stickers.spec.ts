@@ -43,6 +43,31 @@ const closeEmojiPicker = async (page: Page) => {
   await page.keyboard.press('Escape')
 }
 
+const favoriteImagePack = async (page: Page, roomName: string) => {
+  const settings = await openAppSettings(page, 'Stickers & emoji')
+  const panel = settings.getByRole('tabpanel', { name: 'Stickers & emoji' })
+  await panel.getByRole('combobox').click()
+  await page.getByText(new RegExp(roomName)).last().click()
+  await panel.getByRole('button', { name: 'Add pack' }).click()
+  await expect(page.getByText('Favorite pack added').last()).toBeVisible()
+  await closeDialog(page)
+}
+
+const favoriteAccountDataTypes = ['m.image_pack.rooms', 'im.ponies.emote_rooms'] as const
+const snapshotFavoritePacks = async (session: StoredSession) =>
+  Object.fromEntries(
+    await Promise.all(
+      favoriteAccountDataTypes.map(async (type) => [type, await getAccountData(session, type)]),
+    ),
+  ) as Record<(typeof favoriteAccountDataTypes)[number], Record<string, unknown> | undefined>
+const restoreFavoritePacks = async (
+  session: StoredSession,
+  snapshot: Record<string, Record<string, unknown> | undefined>,
+) => {
+  for (const [type, content] of Object.entries(snapshot))
+    await setAccountData(session, type, content ?? {})
+}
+
 const switchAccount = async (page: Page, userId: string) => {
   await page.getByTestId('account-menu').click()
   await page.getByText('Switch accounts', { exact: true }).click()
@@ -140,6 +165,7 @@ test.describe('live sticker pack journey', () => {
     let spaceId: string | undefined
     let channelId: string | undefined
     let account1Id: string | undefined
+    let favoriteAccountData: Record<string, Record<string, unknown> | undefined> | undefined
     let journeyError: unknown
 
     try {
@@ -148,7 +174,9 @@ test.describe('live sticker pack journey', () => {
 
       await test.step('sign in', async () => {
         await signIn(page!, account1)
-        account1Id = (await storedSessions(page!)).at(-1)?.userId
+        const session = (await storedSessions(page!)).at(-1)!
+        account1Id = session.userId
+        favoriteAccountData = await snapshotFavoritePacks(session)
         expect(account1Id).toMatch(/^@[^:]+:.+/)
       })
 
@@ -246,7 +274,11 @@ test.describe('live sticker pack journey', () => {
         await closeDialog(page!)
       })
 
-      await test.step('room sticker: shows in the sticker picker and sends into the room', async () => {
+      await test.step('room sticker: stays hidden until its room is favorited, then sends', async () => {
+        await openEmojiPicker(page!)
+        await expect(packButton(page!, roomStickerName)).toHaveCount(0)
+        await closeEmojiPicker(page!)
+        await favoriteImagePack(page!, roomName)
         await openEmojiPicker(page!)
         const stickerButton = packButton(page!, roomStickerName)
         await expect(stickerButton).toBeVisible({ timeout: 30_000 })
@@ -320,13 +352,17 @@ test.describe('live sticker pack journey', () => {
         await closeDialog(page!)
       })
 
-      await test.step('space sticker: shows in the picker from a channel inside the space, and sends', async () => {
+      await test.step('space sticker: stays hidden until its space is favorited, then sends', async () => {
         await openChannelInSpace(page!, spaceName, channelName)
         await expect(
           page!.getByTestId('room-header').getByRole('heading', {
             name: channelName,
           }),
         ).toBeVisible({ timeout: 60_000 })
+        await openEmojiPicker(page!)
+        await expect(packButton(page!, spaceStickerName)).toHaveCount(0)
+        await closeEmojiPicker(page!)
+        await favoriteImagePack(page!, spaceName)
         await openEmojiPicker(page!)
         const stickerButton = packButton(page!, spaceStickerName)
         await expect(stickerButton).toBeVisible({ timeout: 30_000 })
@@ -356,6 +392,8 @@ test.describe('live sticker pack journey', () => {
       try {
         const sessions: StoredSession[] = []
         if (page && !page.isClosed()) sessions.push(...(await storedSessions(page).catch(() => [])))
+        const session = sessions.filter((s) => s.userId === account1Id).at(-1)
+        if (session && favoriteAccountData) await restoreFavoritePacks(session, favoriteAccountData)
         if (roomId) await cleanTestRoom(roomId, sessions)
         if (channelId) await cleanTestRoom(channelId, sessions)
         if (spaceId) await cleanTestRoom(spaceId, sessions)
@@ -653,35 +691,17 @@ test.describe('live sticker pack journey', () => {
         expect(emptyKeyEvent).toBeUndefined()
       })
 
-      await test.step('the picker shows both the renamed and second room packs', async () => {
+      await test.step('unfavorited room packs do not appear automatically', async () => {
         await openEmojiPicker(page!)
-        await expect(packButton(page!, renamedStickerName)).toBeVisible({
-          timeout: 30_000,
-        })
-        await expect(packButton(page!, secondStickerName)).toBeVisible({
-          timeout: 30_000,
-        })
+        await expect(packButton(page!, renamedStickerName)).toHaveCount(0)
+        await expect(packButton(page!, secondStickerName)).toHaveCount(0)
         await closeEmojiPicker(page!)
       })
 
       await test.step('favoriting the room exposes all of its packs in another room', async () => {
         const session = (await storedSessions(page!)).at(-1)!
-        favoriteAccountData = Object.fromEntries(
-          await Promise.all(
-            ['m.image_pack.rooms', 'im.ponies.emote_rooms'].map(async (type) => [
-              type,
-              await getAccountData(session, type),
-            ]),
-          ),
-        )
-
-        const settings = await openAppSettings(page!, 'Stickers & emoji')
-        const panel = settings.getByRole('tabpanel', { name: 'Stickers & emoji' })
-        await panel.getByRole('combobox').click()
-        await page!.getByText(new RegExp(roomName)).last().click()
-        await panel.getByRole('button', { name: 'Add pack' }).click()
-        await expect(page!.getByText('Favorite pack added').last()).toBeVisible()
-        await closeDialog(page!)
+        favoriteAccountData = await snapshotFavoritePacks(session)
+        await favoriteImagePack(page!, roomName)
 
         await openRoomActions(page!)
         await page!.getByRole('menu').getByText('Create a room', { exact: true }).click()
@@ -708,9 +728,7 @@ test.describe('live sticker pack journey', () => {
         const sessions: StoredSession[] = []
         if (page && !page.isClosed()) sessions.push(...(await storedSessions(page).catch(() => [])))
         const session = sessions.filter((s) => s.userId === account1Id).at(-1)
-        if (session && favoriteAccountData)
-          for (const [type, content] of Object.entries(favoriteAccountData))
-            await setAccountData(session, type, content ?? {})
+        if (session && favoriteAccountData) await restoreFavoritePacks(session, favoriteAccountData)
         if (destinationRoomId) await cleanTestRoom(destinationRoomId, sessions)
         if (roomId) await cleanTestRoom(roomId, sessions)
         if (account1Id) {
@@ -741,6 +759,7 @@ test.describe('live sticker pack journey', () => {
     let roomId: string | undefined
     let account1Id: string | undefined
     let session: StoredSession | undefined
+    let favoriteAccountData: Record<string, Record<string, unknown> | undefined> | undefined
     let scratchDir: string | undefined
     let journeyError: unknown
     const telegramRequests: URL[] = []
@@ -770,6 +789,7 @@ test.describe('live sticker pack journey', () => {
         session = (await storedSessions(page!)).at(-1)
         account1Id = session?.userId
         expect(account1Id).toMatch(/^@[^:]+:.+/)
+        favoriteAccountData = await snapshotFavoritePacks(session!)
 
         await openRoomActions(page!)
         await page!.getByText('Create a room', { exact: true }).click()
@@ -820,7 +840,7 @@ test.describe('live sticker pack journey', () => {
         await closeEmojiPicker(page!)
       })
 
-      await test.step('import, save, and use the same Telegram pack as a room pack', async () => {
+      await test.step('the imported room pack becomes usable only after favoriting its room', async () => {
         const panel = await openRoomSettings(page!, roomName, 'Stickers & emoji')
         await importTelegramPack(page!, panel)
         await saveChanges(page!, panel)
@@ -830,6 +850,11 @@ test.describe('live sticker pack journey', () => {
         await expect(reopened.getByLabel('Pack name')).toHaveValue(TELEGRAM_PACK_NAME)
         await expect(reopened.getByLabel('Sticker name')).toHaveCount(3)
         await closeDialog(page!)
+        await openEmojiPicker(page!)
+        for (const name of ['pfp1', 'pfp2', 'pfp3'])
+          await expect(packButton(page!, name)).toHaveCount(0)
+        await closeEmojiPicker(page!)
+        await favoriteImagePack(page!, roomName)
         await openEmojiPicker(page!)
         for (const name of ['pfp1', 'pfp2', 'pfp3'])
           await expect(packButton(page!, name)).toBeVisible({ timeout: 30_000 })
@@ -864,6 +889,7 @@ test.describe('live sticker pack journey', () => {
       let cleanupError: unknown
       try {
         if (scratchDir) rmSync(scratchDir, { recursive: true, force: true })
+        if (session && favoriteAccountData) await restoreFavoritePacks(session, favoriteAccountData)
         if (session)
           await setAccountData(session, 'im.ponies.user_emotes', {
             pack: { display_name: 'Personal stickers' },

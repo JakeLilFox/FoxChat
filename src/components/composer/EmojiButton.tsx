@@ -8,7 +8,6 @@ import {
   accountImagePackTypes,
   deduplicateFavoritePacks,
   deduplicateRoomPacks,
-  findRoomImagePacks,
   imagePackAccounts,
   imagePackRoomsTypes,
   matchesPickerSearch,
@@ -21,7 +20,6 @@ import {
   useAllAccountImagePacks,
   useRecents,
 } from '../../lib/emojiData'
-import { containingSpacePath } from '../../lib/spaceHelpers'
 import {
   emojiPickerSourceTab,
   matrixPickerContentTab,
@@ -33,7 +31,7 @@ import { EmojiGrid, EmojiPanel, IconBtn, PackCollection, PackJumpBar } from '../
 import { useEffect, useRef, useState } from 'react'
 import { App as AntApp, Empty, Input, Popover, Tabs, Tooltip } from 'antd'
 import { SearchOutlined, SmileOutlined } from '@ant-design/icons'
-import { Room, RoomType } from 'matrix-js-sdk'
+import { Room } from 'matrix-js-sdk'
 import { type ImageInfo } from 'matrix-js-sdk/lib/@types/media'
 import { matrixService } from '../../matrix/MatrixClientService'
 
@@ -260,13 +258,6 @@ export function EmojiButton({
   const recentStickers = useRecents<StoredEmote>(recentStorage.stickers)
   const allAccountPacksEnabled = useAllAccountImagePacks()
   const [remoteFavoritePacks, setRemoteFavoritePacks] = useState<NamedEmotePack[]>([])
-  const [refreshedContextPacks, setRefreshedContextPacks] = useState<
-    Array<{
-      client: ReturnType<typeof matrixService.clientForRoom>
-      roomId: string
-      packs: RoomImagePackLocation[]
-    }>
-  >([])
   const client = matrixService.clientForRoom(room.roomId)
   const [packOrder, setPackOrder] = useState(() => matrixService.imagePackOrder(client))
   const packOrderRef = useRef(packOrder)
@@ -314,64 +305,6 @@ export function EmojiButton({
         : []
     }),
   )
-  const contextualRooms = client
-    ? [
-        ...containingSpacePath(room.roomId, client)
-          .map((id) => client.getRoom(id))
-          .filter((value): value is Room => !!value),
-        client.getRoom(room.roomId) ?? room,
-      ]
-    : [room]
-  useEffect(() => {
-    if (!open || !client) return
-    let cancelled = false
-    const rooms = [
-      ...containingSpacePath(room.roomId, client)
-        .map((id) => client.getRoom(id))
-        .filter((value): value is Room => !!value),
-      client.getRoom(room.roomId) ?? room,
-    ]
-    void Promise.all(
-      rooms.map(async (contextRoom) => ({
-        client,
-        roomId: contextRoom.roomId,
-        packs: await matrixService.roomImagePacks(contextRoom.roomId, client),
-      })),
-    ).then((packs) => {
-      if (!cancelled) setRefreshedContextPacks(packs)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [open, client, room])
-  useEffect(
-    () =>
-      matrixService.subscribe({
-        onImagePacksChanged: (roomId, changedClient) =>
-          setRefreshedContextPacks((current) =>
-            current.filter((entry) => entry.roomId !== roomId || entry.client !== changedClient),
-          ),
-      }),
-    [],
-  )
-  const contextualPacks: NamedEmotePack[] = client
-    ? contextualRooms.flatMap((contextRoom) =>
-        (
-          refreshedContextPacks.find(
-            (entry) => entry.client === client && entry.roomId === contextRoom.roomId,
-          )?.packs ?? findRoomImagePacks(contextRoom)
-        ).map(({ stateKey, pack }, index) => ({
-          id: `context-${contextRoom.roomId}-${stateKey || index}`,
-          roomPackKey: `${contextRoom.roomId}\u0000${stateKey}`,
-          orderKey: `room\u0000${contextRoom.roomId}\u0000${stateKey}`,
-          label:
-            pack.pack?.display_name ||
-            `${contextRoom.name} ${contextRoom.getType() === RoomType.Space ? 'Space' : 'channel'}`,
-          pack,
-          client,
-        })),
-      )
-    : []
   const favoriteRoomKey = JSON.stringify(
     packAccounts.map((account) => ({
       id: account.id,
@@ -442,7 +375,7 @@ export function EmojiButton({
     }
   }, [open, client, favoriteRoomKey, mergingAccounts])
   const namedPacks = orderImagePacks(
-    deduplicateRoomPacks([...accountPacks, ...remoteFavoritePacks, ...contextualPacks]),
+    deduplicateRoomPacks([...accountPacks, ...remoteFavoritePacks]),
     packOrder,
   )
   const groups = namedPacks
