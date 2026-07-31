@@ -257,7 +257,7 @@
           },
           {
             "type": "asset",
-            "id": "bbcd75ff-e0d4-4db7-aa04-90dcaf0d3562",
+            "id": "4178e8fb-7831-4d5e-a583-5998381002f7",
             "files": [
               "dist/"
             ],
@@ -947,5 +947,35 @@
         ]
       }
     }
+  },
+  {
+    "type": "worker",
+    "id": "75cc5e13-8c27-430f-9a2f-df3f547991f8",
+    "name": "Git-Release",
+    "children": [
+      {
+        "type": "release",
+        "id": "f0ef1fbe-cb47-4f6b-bad9-2159213b26f0",
+        "tag": "${version}",
+        "title": "${version} - ${commitIdShort}",
+        "content": "${commitMessage}",
+        "files": [
+          "windows/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/",
+          "windows/bridge/dist/FoxChatBridge-windows-x86_64.exe",
+          "desktop/src-tauri/target/release/bundle/appimage/",
+          "desktop/src-tauri/target/release/bundle/deb/",
+          "desktop/src-tauri/target/release/bundle/rpm/",
+          "desktop/bridge/dist/FoxChatBridge-linux-x86_64",
+          "android/src-tauri/gen/android/app/build/outputs/"
+        ]
+      }
+    ],
+    "depends": [
+      "Test",
+      "Web",
+      "Desktop",
+      "Android"
+    ],
+    "deployment": true
   }
 ]

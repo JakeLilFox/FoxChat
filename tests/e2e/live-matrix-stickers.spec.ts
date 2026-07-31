@@ -926,6 +926,7 @@ test.describe('live sticker pack journey', () => {
     let roomId: string | undefined
     let account1Id: string | undefined
     let scratchDir: string | undefined
+    let favoriteAccountData: Record<string, Record<string, unknown> | undefined> | undefined
     let journeyError: unknown
 
     try {
@@ -934,7 +935,9 @@ test.describe('live sticker pack journey', () => {
 
       await test.step('sign in', async () => {
         await signIn(page!, account1)
-        account1Id = (await storedSessions(page!)).at(-1)?.userId
+        const session = (await storedSessions(page!)).at(-1)!
+        account1Id = session.userId
+        favoriteAccountData = await snapshotFavoritePacks(session)
         expect(account1Id).toMatch(/^@[^:]+:.+/)
       })
 
@@ -983,6 +986,14 @@ test.describe('live sticker pack journey', () => {
         await closeDialog(page!)
       })
 
+      await test.step('imported pack stays hidden until its room is favorited', async () => {
+        await openEmojiPicker(page!)
+        for (const name of STICKER_ZIP_ASSETS.map((asset) => asset.replace(/\.png$/, '')))
+          await expect(packButton(page!, name)).toHaveCount(0)
+        await closeEmojiPicker(page!)
+        await favoriteImagePack(page!, roomName)
+      })
+
       await test.step('all three imported stickers show in the picker and can be sent', async () => {
         await openEmojiPicker(page!)
         for (const name of STICKER_ZIP_ASSETS.map((asset) => asset.replace(/\.png$/, ''))) {
@@ -1021,6 +1032,8 @@ test.describe('live sticker pack journey', () => {
         if (scratchDir) rmSync(scratchDir, { recursive: true, force: true })
         const sessions: StoredSession[] = []
         if (page && !page.isClosed()) sessions.push(...(await storedSessions(page).catch(() => [])))
+        const session = sessions.filter((s) => s.userId === account1Id).at(-1)
+        if (session && favoriteAccountData) await restoreFavoritePacks(session, favoriteAccountData)
         if (roomId) await cleanTestRoom(roomId, sessions)
         if (account1Id) {
           const current = sessions.filter((s) => s.userId === account1Id).at(-1)
