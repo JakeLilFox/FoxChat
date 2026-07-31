@@ -8,6 +8,8 @@
     "core:webview:allow-create-webview-window",
     "core:webview:allow-set-webview-background-color",
     "core:window:allow-create",
+    "core:window:allow-set-badge-count",
+    "core:window:allow-set-overlay-icon",
     "notification:default",
     "remote-push:default"
   ]

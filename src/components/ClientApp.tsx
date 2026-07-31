@@ -48,6 +48,7 @@ import {
   listenForNotificationNavigation,
   notifyMatrixEvent,
 } from '../platform/notifications'
+import { updateDesktopUnreadBadge } from '../platform/desktopBadge'
 import { isAndroidApp } from '../platform/nativeBackground'
 
 const MessageSearchOverlay = lazy(() =>
@@ -93,6 +94,14 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
   }, [desktopDetails, desktopInfo])
   const [rooms, setRooms] = useState<Room[]>(() => matrixService.rooms())
   const [matrixRevision, setMatrixRevision] = useState(0)
+  const desktopUnreadCount = useMemo(
+    () => rooms.reduce((total, room) => total + matrixService.effectiveUnreadCount(room.roomId), 0),
+    [rooms],
+  )
+  useEffect(() => {
+    void updateDesktopUnreadBadge(desktopUnreadCount)
+  }, [desktopUnreadCount])
+  useEffect(() => () => void updateDesktopUnreadBadge(0), [])
   const [lastChangedRoomIds, setLastChangedRoomIds] = useState<ReadonlySet<string>>(
     () => new Set(['*']),
   )

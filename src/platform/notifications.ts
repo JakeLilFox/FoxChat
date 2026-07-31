@@ -46,6 +46,22 @@ const notified = new Set<string>()
 const pendingNotifications = new Set<string>()
 const activeGroups = new Set<string>()
 const NOTIFICATION_DECRYPTION_GRACE_MS = 5_000
+const DESKTOP_NOTIFICATION_DEBOUNCE_MS = 1_500
+type PendingDesktopNotification = {
+  eventId: string
+  title: string
+  body: string
+  sender: string
+  roomId: string
+  roomName: string
+  groupId: string
+  silent: boolean
+  native: NativeNotifications
+  resolve: () => void
+  reject: (error: unknown) => void
+}
+const desktopNotificationQueue: PendingDesktopNotification[] = []
+let desktopNotificationTimer: number | undefined
 const notificationId = (value: string) =>
   [...value].reduce(
     (hash, character) => Math.imul(hash ^ character.charCodeAt(0), 16777619),
@@ -211,6 +227,74 @@ async function showClickableDesktopNotification(title: string, body: string, roo
   }
 }
 
+function summarizeDesktopNotifications(batch: PendingDesktopNotification[]) {
+  const latest = batch.at(-1)!
+  if (batch.length === 1) return { title: latest.title, body: latest.body, roomId: latest.roomId }
+  const roomCount = new Set(batch.map((notification) => notification.roomId)).size
+  if (roomCount === 1)
+    return {
+      title: `${batch.length} new messages in ${latest.roomName}`,
+      body: `Latest from ${latest.sender}: ${latest.body}`,
+      roomId: latest.roomId,
+    }
+  return {
+    title: `${batch.length} new messages in ${roomCount} chats`,
+    body: `Latest: ${latest.sender} in ${latest.roomName}: ${latest.body}`,
+    roomId: latest.roomId,
+  }
+}
+
+async function flushDesktopNotifications() {
+  desktopNotificationTimer = undefined
+  const batch = desktopNotificationQueue.splice(0)
+  if (!batch.length) return
+  const latest = batch.at(-1)!
+  const summary = summarizeDesktopNotifications(batch)
+  try {
+    const sent = await showClickableDesktopNotification(summary.title, summary.body, summary.roomId)
+    if (!sent) {
+      await latest.native
+        .createChannel?.({
+          id: 'messages',
+          name: 'New messages',
+          importance: 4,
+          vibration: true,
+        })
+        .catch(() => undefined)
+      await latest.native.sendNotification({
+        id: notificationId(latest.eventId),
+        title: summary.title,
+        body: summary.body,
+        channelId: 'messages',
+        sound: undefined,
+        group: `foxchat.room.${summary.roomId}`,
+        extra: { roomId: summary.roomId },
+        autoCancel: true,
+      })
+    }
+    if (batch.some((notification) => !notification.silent)) playNotificationSound()
+    for (const notification of batch) {
+      activeGroups.add(notification.groupId)
+      notification.resolve()
+    }
+  } catch (error) {
+    for (const notification of batch) notification.reject(error)
+  }
+}
+
+function queueDesktopNotification(
+  notification: Omit<PendingDesktopNotification, 'resolve' | 'reject'>,
+) {
+  return new Promise<void>((resolve, reject) => {
+    desktopNotificationQueue.push({ ...notification, resolve, reject })
+    if (desktopNotificationTimer === undefined)
+      desktopNotificationTimer = window.setTimeout(
+        () => void flushDesktopNotifications(),
+        DESKTOP_NOTIFICATION_DEBOUNCE_MS,
+      )
+  })
+}
+
 function notificationGroup(room: Room) {
   return room.roomId
 }
@@ -304,44 +388,26 @@ export async function notifyMatrixEvent(event: MatrixEvent, room?: Room) {
     if (!(await permissionGranted(native))) return
     if (native) {
       const title = `${sender} in ${room.name}`
-      const sent = await showClickableDesktopNotification(title, body, room.roomId)
-      if (!sent) {
-        await native
-          .createChannel?.({
-            id: 'messages',
-            name: 'New messages',
-            importance: 4,
-            vibration: true,
-          })
-          .catch(() => undefined)
-        await native
-          .createChannel?.({
-            id: 'messages_silent',
-            name: 'Additional unread messages',
-            importance: 3,
-            vibration: false,
-          })
-          .catch(() => undefined)
-        await native.sendNotification({
-          id: notificationId(eventId),
-          title,
-          body,
-          channelId: silent ? 'messages_silent' : 'messages',
-          sound: undefined,
-          group: `foxchat.room.${room.roomId}`,
-          extra: { roomId: room.roomId },
-          autoCancel: true,
-        })
-      }
+      await queueDesktopNotification({
+        eventId,
+        title,
+        body,
+        sender,
+        roomId: room.roomId,
+        roomName: room.name,
+        groupId,
+        silent,
+        native,
+      })
     } else {
       const notification = new Notification(`${sender} in ${room.name}`, { body, tag: eventId })
       notification.onclick = () => {
         notification.close()
         openNotificationRoom(room.roomId)
       }
+      if (!silent) playNotificationSound()
+      activeGroups.add(groupId)
     }
-    if (!silent) playNotificationSound()
-    activeGroups.add(groupId)
   } finally {
     pendingNotifications.delete(eventId)
   }

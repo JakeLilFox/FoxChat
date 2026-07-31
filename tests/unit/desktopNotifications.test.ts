@@ -73,6 +73,54 @@ describe('desktop notifications', () => {
     expect(play).toHaveBeenCalledOnce()
   })
 
+  it('coalesces a desktop notification burst into one Windows-friendly summary', async () => {
+    const room = fakeRoom({ roomId: '!burst:example.org', name: 'Busy room' })
+    const client = fakeClient([room], '@me:example.org')
+    const internals = matrixService as unknown as ServiceInternals
+    internals.client = client
+    internals.availableAccounts = () => [{ id: 'me', userId: '@me:example.org', client }]
+    internals.room = () => undefined
+
+    const invoke = vi.fn(async (command: string) => {
+      if (command === 'plugin:notification|is_permission_granted') return true
+      if (command === 'show_desktop_notification') return undefined
+      throw new Error(`Unexpected command: ${command}`)
+    })
+    window.__TAURI__ = {
+      core: {
+        invoke: invoke as <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
+      },
+    }
+    const play = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('Audio', function Audio(this: { play: () => Promise<void> }) {
+      this.play = play
+    })
+
+    const notifications = ['First message', 'Latest message'].map((body, index) =>
+      notifyMatrixEvent(
+        fakeEvent({
+          id: `$desktop-burst-${index}`,
+          roomId: room.roomId,
+          type: EventType.RoomMessage,
+          sender: '@carol:example.org',
+          ts: Date.now(),
+          notify: true,
+          content: { msgtype: 'm.text', body },
+        }),
+        room,
+      ),
+    )
+    await Promise.all(notifications)
+
+    expect(invoke).toHaveBeenCalledTimes(3)
+    expect(invoke).toHaveBeenCalledWith('show_desktop_notification', {
+      title: '2 new messages in Busy room',
+      body: 'Latest from @carol:example.org: Latest message',
+      roomId: room.roomId,
+    })
+    expect(play).toHaveBeenCalledOnce()
+  })
+
   it('waits for late message keys before showing an encrypted notification', async () => {
     const room = fakeRoom({ roomId: '!encrypted:example.org', name: 'Encrypted room' })
     const client = fakeClient([room], '@me:example.org')
@@ -180,6 +228,7 @@ describe('desktop notifications', () => {
 
     const notification = notifyMatrixEvent(event, room)
     await vi.advanceTimersByTimeAsync(5_000)
+    await vi.advanceTimersByTimeAsync(1_500)
     await notification
 
     expect(invoke).toHaveBeenCalledWith('show_desktop_notification', {
