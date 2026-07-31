@@ -8,6 +8,8 @@ import {
   deduplicateRoomPacks,
   forgetRecents,
   imagePackAccounts,
+  IMAGE_PACK_STATE_TARGET_BYTES,
+  jsonByteLength,
   matchesPickerSearch,
   moveImagePackOrder,
   orderedImageEntries,
@@ -440,7 +442,7 @@ describe('saveRoomImagePack / savePersonalImagePack', () => {
     const images = Object.fromEntries(
       ['one', 'two', 'three'].map((name) => [
         name,
-        { url: `mxc://example.org/${name}`, body: name.repeat(10_000) },
+        { url: `mxc://example.org/${name}`, body: 'x'.repeat(20_000) },
       ]),
     )
 
@@ -459,6 +461,8 @@ describe('saveRoomImagePack / savePersonalImagePack', () => {
     expect(
       sent.map(([, content]) => (content['chat.foxchat.split_pack'] as { part: number }).part),
     ).toEqual([1, 2, 3])
+    for (const [, content] of sent)
+      expect(jsonByteLength(content)).toBeLessThanOrEqual(IMAGE_PACK_STATE_TARGET_BYTES)
   })
 
   it('favorites the whole room instead of pinning only currently known state keys', async () => {

@@ -184,26 +184,29 @@ export const serializeImagePackItems = (
     }),
   )
 }
-export const IMAGE_PACK_STATE_TARGET_BYTES = 52 * 1024
-const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength
+export const IMAGE_PACK_STATE_TARGET_BYTES = 32_768
+export const jsonByteLength = (value: unknown) =>
+  new TextEncoder().encode(JSON.stringify(value)).byteLength
 export const splitImagePackContent = (
   content: Record<string, unknown>,
   maxBytes = IMAGE_PACK_STATE_TARGET_BYTES,
+  sizingFields: Record<string, unknown> = {},
 ) => {
-  if (jsonBytes(content) <= maxBytes) return [content]
+  if (jsonByteLength(content) <= maxBytes) return [content]
   const images =
     content.images && typeof content.images === 'object'
       ? (content.images as Record<string, unknown>)
       : {}
   const base = { ...content, images: {} }
-  if (jsonBytes(base) > maxBytes)
+  const sized = (images: Record<string, unknown>) => ({ ...base, ...sizingFields, images })
+  if (jsonByteLength(sized({})) > maxBytes)
     throw new Error('This image pack metadata is too large even without its images')
 
   const chunks: Array<Record<string, unknown>> = []
   let current: Record<string, unknown> = {}
   for (const [name, image] of Object.entries(images)) {
     const candidate = { ...current, [name]: image }
-    if (jsonBytes({ ...base, images: candidate }) <= maxBytes) {
+    if (jsonByteLength(sized(candidate)) <= maxBytes) {
       current = candidate
       continue
     }
@@ -211,7 +214,7 @@ export const splitImagePackContent = (
       throw new Error(`Sticker “${name}” has too much metadata to fit in a Matrix state event`)
     chunks.push({ ...base, images: current })
     current = { [name]: image }
-    if (jsonBytes({ ...base, images: current }) > maxBytes)
+    if (jsonByteLength(sized(current)) > maxBytes)
       throw new Error(`Sticker “${name}” has too much metadata to fit in a Matrix state event`)
   }
   if (Object.keys(current).length || !chunks.length) chunks.push({ ...base, images: current })

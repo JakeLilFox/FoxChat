@@ -54,7 +54,9 @@ import { applyPermissionLevels } from '../lib/powerLevelPaths'
 import { DEVICE_DELETE_ACTION } from '../lib/accountManagement'
 import { GALLERY_EVENT_FIELD } from '../lib/gallery'
 import {
+  IMAGE_PACK_STATE_TARGET_BYTES,
   findRoomImagePacks,
+  jsonByteLength,
   roomImagePackTypes,
   roomImagePacksFromStateEvents,
   splitImagePackContent,
@@ -2748,7 +2750,14 @@ export class MatrixClientService {
   ) {
     const client = this.clientForRoom(roomId)
     if (!client) throw new Error('Matrix client is not ready')
-    const chunks = splitImagePackContent(content)
+    const splitSizingFields = {
+      'chat.foxchat.split_pack': {
+        root_state_key: stateKey,
+        part: Number.MAX_SAFE_INTEGER,
+        total: Number.MAX_SAFE_INTEGER,
+      },
+    }
+    const chunks = splitImagePackContent(content, IMAGE_PACK_STATE_TARGET_BYTES, splitSizingFields)
     const partPrefix = `${stateKey || 'default'}.foxchat-part.`
     const existing = await client.roomState(roomId)
     const nextStateKeys = chunks.map((_, index) =>
@@ -2766,6 +2775,8 @@ export class MatrixClientService {
                 total: chunks.length,
               },
             }
+      if (jsonByteLength(splitChunk) > IMAGE_PACK_STATE_TARGET_BYTES)
+        throw new Error(`Image pack state fragment exceeds ${IMAGE_PACK_STATE_TARGET_BYTES} bytes`)
       await client.sendStateEvent(
         roomId,
         eventType as never,
