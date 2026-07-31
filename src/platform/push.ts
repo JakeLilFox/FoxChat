@@ -163,10 +163,13 @@ export async function syncNativeCryptoNow(client: MatrixClient) {
     deviceId,
     homeserver: client.getHomeserverUrl(),
     accessToken,
+    refreshToken: client.getRefreshToken() ?? undefined,
     roomKeys,
     rooms,
     backupVersion: backupRecoveryKey ? backupVersion : undefined,
     backupRecoveryKey,
+    pushClearToken: clearToken(),
+    pushGatewayUrl: GATEWAY_URL,
     notificationPreferences: JSON.stringify(timelineAppearanceSettings()),
   })
   const setupDeadline = Date.now() + NATIVE_CRYPTO_SETUP_TIMEOUT_MS

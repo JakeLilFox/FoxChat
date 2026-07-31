@@ -8,6 +8,7 @@ const COMMANDS: &[&str] = &[
   "update_notification",
   "sync_native_crypto",
   "native_crypto_status",
+  "native_session_tokens",
   "test_native_crypto",
   "test_android_auto_notification",
 ];

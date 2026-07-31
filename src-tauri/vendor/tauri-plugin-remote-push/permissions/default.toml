@@ -7,6 +7,7 @@ permissions = [
   "allow-update-notification",
   "allow-sync-native-crypto",
   "allow-native-crypto-status",
+  "allow-native-session-tokens",
   "allow-test-native-crypto",
   "allow-test-android-auto-notification",
 ]

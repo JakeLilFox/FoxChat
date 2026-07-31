@@ -32,13 +32,20 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    NativeCryptoBridge.webViewActive = true
     getSharedPreferences("foxchat_boot_diagnostics", Context.MODE_PRIVATE).edit()
       .putString("stage", "MainActivity.onCreate entered")
       .putLong("at", System.currentTimeMillis()).commit()
-    NativeCryptoBridge.sync = { userId, deviceId, homeserver, accessToken, roomKeys, rooms, backupVersion, backupRecoveryKey ->
-      NativeNotificationCrypto.stageSync(applicationContext, userId, deviceId, homeserver, accessToken, roomKeys, rooms, backupVersion, backupRecoveryKey)
+    NativeCryptoBridge.sync = { userId, deviceId, homeserver, accessToken, refreshToken, roomKeys, rooms, backupVersion, backupRecoveryKey, pushClearToken, pushGatewayUrl ->
+      NativeNotificationCrypto.stageSync(
+        applicationContext, userId, deviceId, homeserver, accessToken, refreshToken, roomKeys, rooms,
+        backupVersion, backupRecoveryKey, pushClearToken, pushGatewayUrl,
+      )
     }
     NativeCryptoBridge.status = { NativeNotificationCrypto.status(applicationContext).toString() }
+    NativeCryptoBridge.sessionTokens = { userId ->
+      NativeNotificationCrypto.nativeSessionTokens(applicationContext, userId).toString()
+    }
     NativeCryptoBridge.test = { roomId, eventId ->
       val result = NativeNotificationCrypto.decrypt(applicationContext, roomId, eventId)
       NativeNotificationCrypto.setEnabled(applicationContext, true)
@@ -247,6 +254,7 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onDestroy() {
+    NativeCryptoBridge.webViewActive = false
     unregisterReceiver(notificationReplyReceiver)
     shareExecutor.shutdownNow()
     super.onDestroy()

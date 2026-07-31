@@ -16,6 +16,7 @@ import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.IconCompat
 import app.tauri.remotepush.NotificationDecryptionBridge
+import app.tauri.remotepush.PushNotificationPlugin
 import app.tauri.remotepush.RoomNotificationStore
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -78,6 +79,15 @@ class FoxChatMessagingService : FirebaseMessagingService() {
                 channelId, silent, timestamp,
             )
         }
+    }
+
+    override fun onNewToken(token: String) {
+        // The plugin's own FirebaseMessagingService is removed from the merged
+        // manifest so FoxChat can own notification rendering. Forward token
+        // rotations to the plugin too, otherwise Matrix keeps the previous FCM
+        // token until the next full app start.
+        NativePushTokenManager.schedule(applicationContext, token)
+        PushNotificationPlugin.instance?.handleNewToken(token)
     }
 }
 

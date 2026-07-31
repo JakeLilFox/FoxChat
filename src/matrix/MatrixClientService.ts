@@ -804,6 +804,7 @@ export class MatrixClientService {
 
   private async startClient(session?: MatrixSession) {
     if (!session) throw new Error('No Matrix session is available')
+    await this.applyNativeSessionTokens(session)
 
     const storeIdentity = `${session.userId}-${session.deviceId}`
     const store = new IndexedDBStore({
@@ -985,6 +986,30 @@ export class MatrixClientService {
     if (!this.secondary && this.combinedAccountsEnabled()) await this.startSecondaryAccounts()
     if (!this.secondary && !this.ephemeral) this.startPresenceTracking()
     return client
+  }
+
+  private async applyNativeSessionTokens(session: MatrixSession) {
+    const invoke = window.__TAURI_INTERNALS__?.invoke
+    if (!invoke || !/Android/i.test(navigator.userAgent)) return
+    try {
+      const native = await invoke<{
+        accessToken?: string
+        refreshToken?: string
+        accessTokenExpiresAt?: number
+        refreshedAt?: number
+      }>('plugin:remote-push|native_session_tokens', { userId: session.userId })
+      if (!native.refreshedAt || !native.accessToken) return
+      session.accessToken = native.accessToken
+      session.refreshToken = native.refreshToken ?? session.refreshToken
+      session.accessTokenExpiresAt = native.accessTokenExpiresAt || undefined
+      if (!this.ephemeral) this.persistSession(session)
+      console.info('[push] Applied Matrix credentials refreshed by the Android background job', {
+        userId: session.userId,
+        refreshedAt: native.refreshedAt,
+      })
+    } catch (error) {
+      console.warn('[push] Could not apply Android background Matrix credentials', error)
+    }
   }
 
   private async startSecondaryAccounts() {
@@ -3708,39 +3733,66 @@ export class MatrixClientService {
   }
 
   private notificationDecryptListenerRegistered = false
+  private pushTokenListenerRegistered = false
 
   async listenForNotificationDecryptRequests() {
-    if (this.notificationDecryptListenerRegistered) return
     const invoke = window.__TAURI_INTERNALS__?.invoke
     if (!invoke) return
-    this.notificationDecryptListenerRegistered = true
-    try {
-      const { addPluginListener } = await import('@tauri-apps/api/core')
-      await addPluginListener<{ roomId: string; eventId: string }>(
-        'remote-push',
-        'notification-decrypt-request',
-        ({ roomId, eventId }) => {
-          void this.decryptForNotification(roomId, eventId)
-            .then((decrypted) => {
-              if (!decrypted) return undefined
-              return invoke('plugin:remote-push|update_notification', {
-                roomId,
-                eventId,
-                ...decrypted,
+    const { addPluginListener } = await import('@tauri-apps/api/core')
+    if (!this.notificationDecryptListenerRegistered) {
+      this.notificationDecryptListenerRegistered = true
+      try {
+        await addPluginListener<{ roomId: string; eventId: string }>(
+          'remote-push',
+          'notification-decrypt-request',
+          ({ roomId, eventId }) => {
+            void this.decryptForNotification(roomId, eventId)
+              .then((decrypted) => {
+                if (!decrypted) return undefined
+                return invoke('plugin:remote-push|update_notification', {
+                  roomId,
+                  eventId,
+                  ...decrypted,
+                })
               })
-            })
-            .catch((error) =>
-              console.warn('[push] Notification decrypt round-trip failed', {
-                roomId,
-                eventId,
-                error,
-              }),
-            )
-        },
-      )
-    } catch (error) {
-      this.notificationDecryptListenerRegistered = false
-      console.warn('[push] Could not register notification decrypt listener', error)
+              .catch((error) =>
+                console.warn('[push] Notification decrypt round-trip failed', {
+                  roomId,
+                  eventId,
+                  error,
+                }),
+              )
+          },
+        )
+      } catch (error) {
+        this.notificationDecryptListenerRegistered = false
+        console.warn('[push] Could not register notification decrypt listener', error)
+      }
+    }
+    if (!this.pushTokenListenerRegistered) {
+      this.pushTokenListenerRegistered = true
+      try {
+        await addPluginListener<{ token: string }>('remote-push', 'token-received', ({ token }) => {
+          const accounts = this.availableAccounts()
+          console.info('[push] Firebase token rotated; refreshing Matrix pushers', {
+            accounts: accounts.length,
+            tokenSuffix: token.slice(-8),
+          })
+          void Promise.allSettled(accounts.map(({ client }) => registerMatrixPush(client))).then(
+            (results) => {
+              const failed = results.filter((result) => result.status === 'rejected').length
+              if (failed)
+                console.warn('[push] Some Matrix pushers rejected the rotated Firebase token', {
+                  failed,
+                  accounts: results.length,
+                })
+            },
+          )
+        })
+      } catch (error) {
+        this.pushTokenListenerRegistered = false
+        console.warn('[push] Could not register Firebase token listener', error)
+      }
     }
   }
 

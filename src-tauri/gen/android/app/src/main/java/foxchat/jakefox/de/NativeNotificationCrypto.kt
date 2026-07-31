@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import app.tauri.remotepush.NativeCryptoBridge
 import org.json.JSONArray
 import org.json.JSONObject
 import org.matrix.rustcomponents.sdk.crypto.BackupRecoveryKey
@@ -25,6 +26,7 @@ import java.io.FileOutputStream
 import java.security.SecureRandom
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.Locale
 
 data class NativeDecryptedNotification(
     val senderId: String,
@@ -44,6 +46,13 @@ private class MatrixRequestException(
         if (!matrixErrorCode.isNullOrBlank()) append(" ($matrixErrorCode)")
         if (!matrixErrorMessage.isNullOrBlank()) append(": $matrixErrorMessage")
     },
+)
+
+private class NativePusherRequestException(
+    val httpStatus: Int,
+    details: String,
+) : IllegalStateException(
+    "Matrix pusher request failed with HTTP $httpStatus${if (details.isBlank()) "" else ": $details"}",
 )
 
 /** Decrypts notifications locally with secrets protected by Android Keystore. */
@@ -111,6 +120,20 @@ object NativeNotificationCrypto {
         context.getSharedPreferences(STATE_PREFS, Context.MODE_PRIVATE).edit().putBoolean("enabled", enabled).commit()
     }
 
+    fun storePendingPushToken(context: Context, token: String) {
+        preferences(context).edit().putString("pendingPushToken", token).commit()
+    }
+
+    fun pendingPushToken(context: Context): String? =
+        preferences(context).getString("pendingPushToken", null)
+
+    fun clearPendingPushToken(context: Context, expectedToken: String) {
+        val prefs = preferences(context)
+        if (prefs.getString("pendingPushToken", null) == expectedToken) {
+            prefs.edit().remove("pendingPushToken").commit()
+        }
+    }
+
     fun isOwnUser(context: Context, userId: String): Boolean {
         if (userId.isBlank()) return false
         val prefs = preferences(context)
@@ -119,14 +142,28 @@ object NativeNotificationCrypto {
     }
 
     /** Stages secrets for background import. */
-    fun stageSync(context: Context, userId: String, deviceId: String, homeserver: String, accessToken: String, roomKeys: String, rooms: String, backupVersion: String?, backupRecoveryKey: String?) {
+    fun stageSync(
+        context: Context,
+        userId: String,
+        deviceId: String,
+        homeserver: String,
+        accessToken: String,
+        refreshToken: String?,
+        roomKeys: String,
+        rooms: String,
+        backupVersion: String?,
+        backupRecoveryKey: String?,
+        pushClearToken: String?,
+        pushGatewayUrl: String?,
+    ) {
         synchronized(lockFor(userId)) {
             val prefs = preferences(context)
             val setup = "setup.$userId"
-            prefs.edit()
+            val editor = prefs.edit()
                 .putString("$setup.deviceId", deviceId)
                 .putString("$setup.homeserver", homeserver)
                 .putString("$setup.accessToken", accessToken)
+                .putString("$setup.refreshToken", refreshToken)
                 .putString("$setup.roomKeys", roomKeys)
                 .putString("$setup.rooms", rooms)
                 .putString("$setup.backupVersion", backupVersion)
@@ -137,7 +174,17 @@ object NativeNotificationCrypto {
                 .putString("$setup.state", "pending")
                 .remove("$setup.error")
                 .remove("$setup.errorDetails")
-                .commit()
+            if (!pushClearToken.isNullOrBlank() && !pushGatewayUrl.isNullOrBlank()) {
+                editor
+                    .putString("$setup.pushClearToken", pushClearToken)
+                    .putString("$setup.pushGatewayUrl", pushGatewayUrl.trimEnd('/'))
+                    // Persist push metadata before the slower room-key import. Token
+                    // rotation must still work if crypto setup is interrupted later.
+                    .putString("$userId.pushClearToken", pushClearToken)
+                    .putString("$userId.pushGatewayUrl", pushGatewayUrl.trimEnd('/'))
+            }
+            editor.commit()
+            pendingPushToken(context)?.let { NativePushTokenManager.schedule(context, it) }
             val intent = Intent(context, NativeCryptoSetupService::class.java).putExtra("user_id", userId)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ContextCompat.startForegroundService(context, intent)
             else context.startService(intent)
@@ -163,10 +210,13 @@ object NativeNotificationCrypto {
                     prefs.getString("$setup.deviceId", null) ?: error("Staged device ID is missing"),
                     prefs.getString("$setup.homeserver", null) ?: error("Staged homeserver is missing"),
                     prefs.getString("$setup.accessToken", null) ?: error("Staged access token is missing"),
+                    prefs.getString("$setup.refreshToken", null),
                     prefs.getString("$setup.roomKeys", null) ?: error("Staged room keys are missing"),
                     prefs.getString("$setup.rooms", null) ?: error("Staged room metadata is missing"),
                     prefs.getString("$setup.backupVersion", null),
                     prefs.getString("$setup.backupRecoveryKey", null),
+                    prefs.getString("$setup.pushClearToken", null),
+                    prefs.getString("$setup.pushGatewayUrl", null),
                 )
                 setEnabled(context, true)
                 prefs.edit().putString("$setup.state", "ready").putString("$setup.phase", "ready")
@@ -188,7 +238,20 @@ object NativeNotificationCrypto {
         }
     }
 
-    fun sync(context: Context, userId: String, deviceId: String, homeserver: String, accessToken: String, roomKeys: String, rooms: String, backupVersion: String?, backupRecoveryKey: String?) {
+    fun sync(
+        context: Context,
+        userId: String,
+        deviceId: String,
+        homeserver: String,
+        accessToken: String,
+        refreshToken: String?,
+        roomKeys: String,
+        rooms: String,
+        backupVersion: String?,
+        backupRecoveryKey: String?,
+        pushClearToken: String?,
+        pushGatewayUrl: String?,
+    ) {
         synchronized(lockFor(userId)) {
             val prefs = preferences(context)
             val exported = JSONArray(roomKeys)
@@ -196,10 +259,17 @@ object NativeNotificationCrypto {
                 .putString("$userId.device", deviceId)
                 .putString("$userId.homeserver", homeserver.trimEnd('/'))
                 .putString("$userId.token", accessToken)
+                .putString("$userId.refreshToken", refreshToken)
+                .remove("$userId.nativeSessionRefreshAt")
             if (!backupVersion.isNullOrBlank() && !backupRecoveryKey.isNullOrBlank()) {
                 credentialEditor
                     .putString("$userId.backupVersion", backupVersion)
                     .putString("$userId.backupRecoveryKey", backupRecoveryKey)
+            }
+            if (!pushClearToken.isNullOrBlank() && !pushGatewayUrl.isNullOrBlank()) {
+                credentialEditor
+                    .putString("$userId.pushClearToken", pushClearToken)
+                    .putString("$userId.pushGatewayUrl", pushGatewayUrl.trimEnd('/'))
             }
             credentialEditor.apply()
             val machine = machine(context, userId, deviceId)
@@ -321,6 +391,203 @@ object NativeNotificationCrypto {
             } catch (error: Exception) {
                 Log.w("FoxChatNativeCrypto", "Could not cache avatar for $roomId", error)
             }
+        }
+    }
+
+    /** Updates this installation's Matrix pusher for every stored account. */
+    fun refreshPushersForToken(context: Context, firebaseToken: String): Boolean {
+        if (firebaseToken.isBlank()) return true
+        val prefs = preferences(context)
+        val userIds = prefs.all.keys
+            .filter { it.endsWith(".device") }
+            .map { it.removeSuffix(".device") }
+            .distinct()
+            .sorted()
+        var allSucceeded = true
+        for (userId in userIds) {
+            try {
+                refreshPusherForAccount(prefs, userId, firebaseToken)
+                prefs.edit()
+                    .putLong("$userId.lastPushTokenRefreshAt", System.currentTimeMillis())
+                    .remove("$userId.lastPushTokenRefreshError")
+                    .commit()
+            } catch (error: Exception) {
+                allSucceeded = false
+                prefs.edit()
+                    .putLong("$userId.lastPushTokenRefreshAt", System.currentTimeMillis())
+                    .putString(
+                        "$userId.lastPushTokenRefreshError",
+                        (error.message ?: error.javaClass.simpleName).take(1_000),
+                    )
+                    .commit()
+                Log.w("FoxChatPushToken", "Could not refresh pusher for ${privateRef("user", userId)}", error)
+            }
+        }
+        return allSucceeded
+    }
+
+    private fun refreshPusherForAccount(
+        prefs: android.content.SharedPreferences,
+        userId: String,
+        firebaseToken: String,
+    ) = synchronized(lockFor(userId)) {
+        val deviceId = prefs.getString("$userId.device", null)
+            ?: error("Native device ID is missing")
+        val homeserver = prefs.getString("$userId.homeserver", null)
+            ?: error("Native homeserver is missing")
+        var accessToken = prefs.getString("$userId.token", null)
+            ?: error("Native access token is missing")
+        val clearToken = prefs.getString("$userId.pushClearToken", null)
+            ?: error("Native push clear token is not cached yet")
+        val gatewayUrl = prefs.getString("$userId.pushGatewayUrl", null)
+            ?.trimEnd('/')
+            ?: error("Native push gateway URL is not cached yet")
+        try {
+            updatePusherForAccount(
+                homeserver, accessToken, deviceId, clearToken, gatewayUrl, firebaseToken,
+            )
+        } catch (error: NativePusherRequestException) {
+            if (error.httpStatus != 401) throw error
+            // The Matrix SDK owns token refresh while its WebView is alive. Let
+            // the persisted job retry instead of racing and rotating the same
+            // refresh token in two independent clients.
+            if (NativeCryptoBridge.webViewActive) throw error
+            accessToken = refreshNativeSession(prefs, userId, homeserver)
+            updatePusherForAccount(
+                homeserver, accessToken, deviceId, clearToken, gatewayUrl, firebaseToken,
+            )
+        }
+    }
+
+    private fun updatePusherForAccount(
+        homeserver: String,
+        accessToken: String,
+        deviceId: String,
+        clearToken: String,
+        gatewayUrl: String,
+        firebaseToken: String,
+    ) {
+        val pushers = matrixJsonRequest(
+            "$homeserver/_matrix/client/v3/pushers",
+            accessToken,
+            "GET",
+        ).optJSONArray("pushers") ?: JSONArray()
+        for (index in 0 until pushers.length()) {
+            val pusher = pushers.optJSONObject(index) ?: continue
+            if (
+                pusher.optString("app_id") != "foxchat.jakefox.de" ||
+                pusher.optString("kind") != "http" ||
+                pusher.optString("profile_tag") != deviceId ||
+                pusher.optString("pushkey") == firebaseToken
+            ) continue
+            matrixJsonRequest(
+                "$homeserver/_matrix/client/v3/pushers/set",
+                accessToken,
+                "POST",
+                JSONObject()
+                    .put("app_id", "foxchat.jakefox.de")
+                    .put("pushkey", pusher.getString("pushkey"))
+                    .put("kind", JSONObject.NULL),
+            )
+        }
+        matrixJsonRequest(
+            "$homeserver/_matrix/client/v3/pushers/set",
+            accessToken,
+            "POST",
+            JSONObject()
+                .put("app_id", "foxchat.jakefox.de")
+                .put("pushkey", firebaseToken)
+                .put("kind", "http")
+                .put("app_display_name", "FoxChat")
+                .put("device_display_name", "FoxChat Android")
+                .put("lang", Locale.getDefault().toLanguageTag())
+                .put("profile_tag", deviceId)
+                .put("append", true)
+                .put(
+                    "data",
+                    JSONObject()
+                        .put("url", "$gatewayUrl/_matrix/push/v1/notify")
+                        .put("format", "event_id_only")
+                        .put("client_name", "FoxChat android")
+                        .put("data_message", "android")
+                        .put("clear_token", clearToken),
+                ),
+        )
+    }
+
+    private fun refreshNativeSession(
+        prefs: android.content.SharedPreferences,
+        userId: String,
+        homeserver: String,
+    ): String {
+        val refreshToken = prefs.getString("$userId.refreshToken", null)
+            ?: error("Native Matrix access token expired and no refresh token is cached")
+        val response = matrixJsonRequest(
+            "$homeserver/_matrix/client/v3/refresh",
+            accessToken = null,
+            method = "POST",
+            body = JSONObject().put("refresh_token", refreshToken),
+        )
+        val accessToken = response.optString("access_token")
+            .takeIf { it.isNotBlank() }
+            ?: error("Matrix session refresh returned no access token")
+        val nextRefreshToken = response.optString("refresh_token")
+            .takeIf { it.isNotBlank() }
+            ?: refreshToken
+        val expiresIn = response.optLong("expires_in_ms", 0L)
+        prefs.edit()
+            .putString("$userId.token", accessToken)
+            .putString("$userId.refreshToken", nextRefreshToken)
+            .putLong(
+                "$userId.accessTokenExpiresAt",
+                if (expiresIn > 0) System.currentTimeMillis() + expiresIn else 0L,
+            )
+            .putLong("$userId.nativeSessionRefreshAt", System.currentTimeMillis())
+            .commit()
+        return accessToken
+    }
+
+    fun nativeSessionTokens(context: Context, userId: String): JSONObject {
+        val prefs = preferences(context)
+        val refreshedAt = prefs.getLong("$userId.nativeSessionRefreshAt", 0L)
+        if (refreshedAt <= 0) return JSONObject()
+        return JSONObject()
+            .put("accessToken", prefs.getString("$userId.token", null))
+            .put("refreshToken", prefs.getString("$userId.refreshToken", null))
+            .put("accessTokenExpiresAt", prefs.getLong("$userId.accessTokenExpiresAt", 0L))
+            .put("refreshedAt", refreshedAt)
+    }
+
+    private fun matrixJsonRequest(
+        url: String,
+        accessToken: String?,
+        method: String,
+        body: JSONObject? = null,
+    ): JSONObject {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = method
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
+            if (!accessToken.isNullOrBlank()) {
+                connection.setRequestProperty("Authorization", "Bearer $accessToken")
+            }
+            connection.setRequestProperty("Content-Type", "application/json")
+            if (body != null) {
+                connection.doOutput = true
+                connection.outputStream.bufferedWriter().use { it.write(body.toString()) }
+            }
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                val details = connection.errorStream?.bufferedReader()?.use { it.readText() }
+                    ?.take(500)
+                    .orEmpty()
+                throw NativePusherRequestException(status, details)
+            }
+            val response = connection.inputStream.bufferedReader().use { it.readText() }
+            return if (response.isBlank()) JSONObject() else JSONObject(response)
+        } finally {
+            connection.disconnect()
         }
     }
 
@@ -632,6 +899,12 @@ object NativeNotificationCrypto {
             .put("importedSessions", prefs.getLong("$userId.imported", 0))
             .put("importTotal", prefs.getLong("$userId.importTotal", 0))
             .put("lastDecryptAt", prefs.getLong("$userId.lastDecryptAt", 0))
+            .put("lastPushTokenRefreshAt", prefs.getLong("$userId.lastPushTokenRefreshAt", 0))
+            .put(
+                "lastPushTokenRefreshError",
+                prefs.getString("$userId.lastPushTokenRefreshError", null),
+            )
+            .put("nativeSessionRefreshAt", prefs.getLong("$userId.nativeSessionRefreshAt", 0))
             .put("lastSyncError", prefs.getString("$userId.lastSyncError", null))
             .put(
                 "lastDecryptError",

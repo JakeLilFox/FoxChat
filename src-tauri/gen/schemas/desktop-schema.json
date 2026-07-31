@@ -6345,10 +6345,10 @@
           "markdownDescription": "Denies the restart command without any pre-configured scope."
         },
         {
-          "description": "Allows FoxChat remote-push registration, notification updates, and native crypto diagnostics.\n#### This default permission set includes:\n\n- `allow-get-token`\n- `allow-request-permission`\n- `allow-clear-room-notification`\n- `allow-update-notification`\n- `allow-sync-native-crypto`\n- `allow-native-crypto-status`\n- `allow-test-native-crypto`\n- `allow-test-android-auto-notification`",
+          "description": "Allows FoxChat remote-push registration, notification updates, and native crypto diagnostics.\n#### This default permission set includes:\n\n- `allow-get-token`\n- `allow-request-permission`\n- `allow-clear-room-notification`\n- `allow-update-notification`\n- `allow-sync-native-crypto`\n- `allow-native-crypto-status`\n- `allow-native-session-tokens`\n- `allow-test-native-crypto`\n- `allow-test-android-auto-notification`",
           "type": "string",
           "const": "remote-push:default",
-          "markdownDescription": "Allows FoxChat remote-push registration, notification updates, and native crypto diagnostics.\n#### This default permission set includes:\n\n- `allow-get-token`\n- `allow-request-permission`\n- `allow-clear-room-notification`\n- `allow-update-notification`\n- `allow-sync-native-crypto`\n- `allow-native-crypto-status`\n- `allow-test-native-crypto`\n- `allow-test-android-auto-notification`"
+          "markdownDescription": "Allows FoxChat remote-push registration, notification updates, and native crypto diagnostics.\n#### This default permission set includes:\n\n- `allow-get-token`\n- `allow-request-permission`\n- `allow-clear-room-notification`\n- `allow-update-notification`\n- `allow-sync-native-crypto`\n- `allow-native-crypto-status`\n- `allow-native-session-tokens`\n- `allow-test-native-crypto`\n- `allow-test-android-auto-notification`"
         },
         {
           "description": "Enables the clear_room_notification command without any pre-configured scope.",
@@ -6367,6 +6367,12 @@
           "type": "string",
           "const": "remote-push:allow-native-crypto-status",
           "markdownDescription": "Enables the native_crypto_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_session_tokens command without any pre-configured scope.",
+          "type": "string",
+          "const": "remote-push:allow-native-session-tokens",
+          "markdownDescription": "Enables the native_session_tokens command without any pre-configured scope."
         },
         {
           "description": "Enables the request_permission command without any pre-configured scope.",
@@ -6415,6 +6421,12 @@
           "type": "string",
           "const": "remote-push:deny-native-crypto-status",
           "markdownDescription": "Denies the native_crypto_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_session_tokens command without any pre-configured scope.",
+          "type": "string",
+          "const": "remote-push:deny-native-session-tokens",
+          "markdownDescription": "Denies the native_session_tokens command without any pre-configured scope."
         },
         {
           "description": "Denies the request_permission command without any pre-configured scope.",

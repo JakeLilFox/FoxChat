@@ -10,6 +10,7 @@ Allows FoxChat remote-push registration, notification updates, and native crypto
 - `allow-update-notification`
 - `allow-sync-native-crypto`
 - `allow-native-crypto-status`
+- `allow-native-session-tokens`
 - `allow-test-native-crypto`
 - `allow-test-android-auto-notification`
 
@@ -96,6 +97,32 @@ Enables the native_crypto_status command without any pre-configured scope.
 <td>
 
 Denies the native_crypto_status command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`remote-push:allow-native-session-tokens`
+
+</td>
+<td>
+
+Enables the native_session_tokens command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`remote-push:deny-native-session-tokens`
+
+</td>
+<td>
+
+Denies the native_session_tokens command without any pre-configured scope.
 
 </td>
 </tr>
