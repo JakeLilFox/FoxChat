@@ -17,7 +17,8 @@ import {
 } from '../../styles'
 import { createPortal } from 'react-dom'
 import { useEffect, useMemo, useState } from 'react'
-import { Spin, Tooltip } from 'antd'
+import { App as AntApp, Spin, Tooltip } from 'antd'
+import { saveBlobDownload, saveUrlDownload } from '../../platform/downloads'
 import {
   CheckOutlined,
   CloseOutlined,
@@ -182,6 +183,7 @@ export function JsonFilePreview({
   size?: number
   source?: string
 }) {
+  const { message } = AntApp.useApp()
   const [raw, setRaw] = useState<string>()
   const [parsed, setParsed] = useState<unknown>()
   const [error, setError] = useState<string>()
@@ -248,6 +250,19 @@ export function JsonFilePreview({
     }
   }
 
+  const download = async () => {
+    try {
+      if (url) {
+        await saveUrlDownload(url, filename)
+        return
+      }
+      if (raw !== undefined)
+        await saveBlobDownload(new Blob([raw], { type: 'application/json' }), filename)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Could not download JSON file')
+    }
+  }
+
   const toolbarActions = (
     <span className="actions">
       <Tooltip title={copied ? 'Copied' : 'Copy JSON'}>
@@ -260,9 +275,16 @@ export function JsonFilePreview({
           {copied ? <CheckOutlined /> : <CopyOutlined />}
         </button>
       </Tooltip>
-      {url && (
+      {(url || raw !== undefined) && (
         <Tooltip title="Download">
-          <a href={url} download={filename}>
+          <a
+            href={url}
+            download={filename}
+            onClick={(event) => {
+              event.preventDefault()
+              void download()
+            }}
+          >
             <DownloadOutlined />
           </a>
         </Tooltip>
@@ -328,9 +350,16 @@ export function JsonFilePreview({
                       {copied ? <CheckOutlined /> : <CopyOutlined />}
                     </button>
                   </Tooltip>
-                  {url && (
+                  {(url || raw !== undefined) && (
                     <Tooltip title="Download">
-                      <a href={url} download={filename}>
+                      <a
+                        href={url}
+                        download={filename}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          void download()
+                        }}
+                      >
                         <DownloadOutlined />
                       </a>
                     </Tooltip>

@@ -10,6 +10,8 @@
     "core:window:allow-create",
     "core:window:allow-set-badge-count",
     "core:window:allow-set-overlay-icon",
+    "dialog:allow-save",
+    "fs:allow-write-file",
     "notification:default",
     "remote-push:default"
   ]

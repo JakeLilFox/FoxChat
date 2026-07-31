@@ -197,6 +197,8 @@ fn load_matrix_accounts(app: tauri::AppHandle) -> Result<Option<String>, String>
 pub fn run() {
     let builder = tauri::Builder::default()
         .manage(automation_api::AutomationApiState::default())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_remote_push::init())
         .plugin(tauri_plugin_notification::init());
     #[cfg(desktop)]

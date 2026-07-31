@@ -32,6 +32,7 @@ import {
 } from '../../lib/urlState'
 import { showVideoViewer } from '../../lib/media'
 import { isAndroidApp } from '../../platform/nativeBackground'
+import { saveBlobDownload, saveUrlDownload, safeDownloadFilename } from '../../platform/downloads'
 import {
   Author,
   AvatarSpace,
@@ -399,17 +400,9 @@ export const Message = memo(function Message({
     try {
       const blob = await imageBlob()
       const extension = blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
-      const invalid = '<>:"/\\|?*'
-      const wanted = [...(body || 'image')]
-        .map((char) => (char.charCodeAt(0) < 32 || invalid.includes(char) ? '_' : char))
-        .join('')
+      const wanted = safeDownloadFilename(body || 'image', 'image')
       const filename = /\.[a-z0-9]{2,5}$/i.test(wanted) ? wanted : `${wanted}.${extension}`
-      const url = URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = filename
-      anchor.click()
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      await saveBlobDownload(blob, filename)
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Could not save image')
     }
@@ -971,9 +964,16 @@ export const Message = memo(function Message({
     content = (
       <a
         href={mediaUrl ?? undefined}
-        target="_blank"
         rel="noreferrer"
         download={c.filename ?? body}
+        onClick={(event) => {
+          event.preventDefault()
+          if (!mediaUrl) return
+          void saveUrlDownload(mediaUrl, String(c.filename ?? body ?? 'Attachment')).catch(
+            (error) =>
+              message.error(error instanceof Error ? error.message : 'Could not download file'),
+          )
+        }}
         style={{ color: 'inherit', textDecoration: 'none' }}
       >
         <FileCard>

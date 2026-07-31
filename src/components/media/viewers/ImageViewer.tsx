@@ -3,6 +3,7 @@ import { ImageViewerLayer, ViewerContextMenu } from '../../../styles'
 import { type TouchList, useEffect, useRef, useState } from 'react'
 import { App as AntApp } from 'antd'
 import { CloseOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons'
+import { saveBlobDownload, safeDownloadFilename } from '../../../platform/downloads'
 
 const GALLERY_SWIPE_DISTANCE = 60
 
@@ -373,18 +374,9 @@ export function ImageViewer({
     try {
       const blob = await sourceBlob()
       const extension = blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
-      const base =
-        [...image.alt]
-          .map((char) => (char.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(char) ? '_' : char))
-          .join('')
-          .trim() || 'image'
+      const base = safeDownloadFilename(image.alt, 'image')
       const filename = /\.[a-z0-9]{2,5}$/i.test(base) ? base : `${base}.${extension}`
-      const url = URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = filename
-      anchor.click()
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      await saveBlobDownload(blob, filename)
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Could not download image')
     }

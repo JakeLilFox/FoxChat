@@ -21,6 +21,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["image-png"] }
 tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 tauri-plugin-remote-push = { path = "vendor/tauri-plugin-remote-push" }
 futures-util = "0.3"
 tokio = { version = "1", features = ["macros", "net", "sync", "time"] }

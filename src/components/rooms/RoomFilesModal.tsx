@@ -5,6 +5,7 @@ import { App as AntApp, Button, Empty, Modal, Spin } from 'antd'
 import { Attachment, EncryptedAttachment } from '@matrix-org/matrix-sdk-crypto-wasm'
 import { EventType, MatrixClient, MatrixEvent, Room } from 'matrix-js-sdk'
 import { matrixService } from '../../matrix/MatrixClientService'
+import { saveBlobDownload } from '../../platform/downloads'
 
 function RoomFile({ event, client }: { event: MatrixEvent; client?: MatrixClient }) {
   const { message } = AntApp.useApp()
@@ -72,20 +73,15 @@ function RoomFile({ event, client }: { event: MatrixEvent; client?: MatrixClient
           clear.byteOffset + clear.byteLength,
         ) as ArrayBuffer
       }
-      const objectUrl = URL.createObjectURL(
+      await saveBlobDownload(
         new Blob([bytes], {
           type:
             content.info?.mimetype ??
             response.headers.get('content-type') ??
             'application/octet-stream',
         }),
+        filename,
       )
-      const link = document.createElement('a')
-      link.href = objectUrl
-      link.download = filename
-      link.rel = 'noreferrer'
-      link.click()
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000)
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Could not download file')
     } finally {
