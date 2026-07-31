@@ -5,6 +5,7 @@ import { CloseOutlined, CopyOutlined } from '@ant-design/icons'
 import { highlightCode } from '../../lib/codeHighlight'
 import { openRoomReference, roomReferenceFromHref } from '../../lib/messageText'
 import { preprocessMarkdown } from '../../lib/markdownPreprocess'
+import { isExternalUrl } from '../../platform/externalLinks'
 import { JsonFilePreview } from './JsonFilePreview'
 import {
   formatTimestamp,
@@ -224,6 +225,7 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
         const date = timestampDate(timestamp.seconds)!
         return `<time class="foxchat-timestamp" datetime="${date.toISOString()}" title="${safeHtml(timestampTitle(timestamp.seconds))}" data-timestamp-seconds="${timestamp.seconds}" data-timestamp-style="${timestamp.style}">${safeHtml(formatTimestamp(timestamp.seconds, timestamp.style))}</time>`
       }
+      if (!href || !isExternalUrl(href)) return safeHtml(text ?? href ?? '')
       const safeHref = safeHtml(href ?? '')
       return `<a href="${safeHref}" target="_blank" rel="noopener noreferrer" style="color:#ff8a3d!important">${safeHtml(text ?? '')}</a>`
     }

@@ -395,6 +395,25 @@ export async function getRoomState(
   return response.json()
 }
 
+export async function createRoom(
+  session: StoredSession,
+  options: Record<string, unknown>,
+): Promise<string> {
+  return withRetry(
+    `Matrix create room for ${session.userId}`,
+    () =>
+      fetch(`${session.baseUrl}/_matrix/client/v3/createRoom`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(options),
+      }),
+    async (response) => ((await response.json()) as { room_id: string }).room_id,
+  )
+}
+
 export async function joinRoomAs(session: StoredSession, roomId: string) {
   await withRetry(
     `Matrix join ${roomId}`,
@@ -525,29 +544,40 @@ export async function sendFillerMessages(
   roomId: string,
   count: number,
   label: string,
+  options: { refreshSession?: () => Promise<StoredSession> } = {},
 ): Promise<string[]> {
   const eventIds: string[] = []
+  let activeSession = session
   for (let index = 0; index < count; index++) {
     const txnId = `foxchat-e2e-filler-${Date.now()}-${index}`
-    const eventId = await withRetry(
-      `Matrix send filler message ${index + 1}/${count} to ${roomId}`,
-      () =>
-        fetch(
-          `${session.baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${encodeURIComponent(txnId)}`,
-          {
-            method: 'PUT',
-            headers: {
-              Authorization: `Bearer ${session.accessToken}`,
-              'Content-Type': 'application/json',
+    const send = () =>
+      withRetry(
+        `Matrix send filler message ${index + 1}/${count} to ${roomId}`,
+        () =>
+          fetch(
+            `${activeSession.baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${encodeURIComponent(txnId)}`,
+            {
+              method: 'PUT',
+              headers: {
+                Authorization: `Bearer ${activeSession.accessToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                msgtype: 'm.text',
+                body: `${label} ${index + 1}`,
+              }),
             },
-            body: JSON.stringify({
-              msgtype: 'm.text',
-              body: `${label} ${index + 1}`,
-            }),
-          },
-        ),
-      async (response) => ((await response.json()) as { event_id: string }).event_id,
-    )
+          ),
+        async (response) => ((await response.json()) as { event_id: string }).event_id,
+      )
+    let eventId: string
+    try {
+      eventId = await send()
+    } catch (error) {
+      if (!options.refreshSession || !String(error).includes('M_UNKNOWN_TOKEN')) throw error
+      activeSession = await options.refreshSession()
+      eventId = await send()
+    }
     eventIds.push(eventId)
     await new Promise((resolve) => setTimeout(resolve, 150))
   }
