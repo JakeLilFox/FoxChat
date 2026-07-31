@@ -357,7 +357,7 @@
         "type": "cmd",
         "id": "449a8c9c-e315-4efe-b832-abf3fe252499",
         "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_ACCOUNT=1 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04-recovery && export APPIMAGE_E2E_RECOVERY_ONLY=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu-recovery && npm run test:e2e:appimage:host"
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_ACCOUNT=1 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04-recovery && export APPIMAGE_E2E_RECOVERY_ONLY=1 && export APPIMAGE_E2E_VERIFICATION=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu-recovery && npm run test:e2e:appimage:host"
         ],
         "flags": [
           "ignore-errors"
@@ -368,7 +368,7 @@
         "type": "cmd",
         "id": "2919d04d-e8c9-449b-9e11-41f23533064a",
         "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_PATH=src-tauri/target/release/foxchat && export APPIMAGE_E2E_ACCOUNT=2 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04 && export APPIMAGE_E2E_SKIP_RECOVERY=1 && export APPIMAGE_E2E_FAKE_MIC=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu && npm run test:e2e:appimage:host"
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_PATH=src-tauri/target/release/foxchat && export APPIMAGE_E2E_ACCOUNT=2 && export APPIMAGE_E2E_NOTIFICATION_SENDER_ACCOUNT=3 && export APPIMAGE_E2E_NOTIFICATIONS=1 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04 && export APPIMAGE_E2E_SKIP_RECOVERY=1 && export APPIMAGE_E2E_FAKE_MIC=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu && npm run test:e2e:appimage:host"
         ],
         "flags": [
           "ignore-errors"

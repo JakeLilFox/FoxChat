@@ -80,6 +80,19 @@ if (process.env.APPIMAGE_E2E_CALLS === '1') {
     mapped[`MATRIX_E2E_CALL_RECEIVER_${suffix}`] = value
   }
 }
+const notificationSenderAccount = process.env.APPIMAGE_E2E_NOTIFICATION_SENDER_ACCOUNT?.trim()
+if (process.env.APPIMAGE_E2E_NOTIFICATIONS === '1') {
+  if (!notificationSenderAccount)
+    throw new Error(
+      'APPIMAGE_E2E_NOTIFICATION_SENDER_ACCOUNT is required when notification testing is enabled',
+    )
+  for (const suffix of ['HOMESERVER', 'USER', 'PASSWORD']) {
+    const value = loaded.parsed?.[`MATRIX_E2E_ACCOUNT_${notificationSenderAccount}_${suffix}`]
+    if (!value)
+      throw new Error(`Missing notification sender account ${notificationSenderAccount} ${suffix}`)
+    mapped[`MATRIX_E2E_NOTIFICATION_SENDER_${suffix}`] = value
+  }
+}
 const generatedEnv = resolve(outputDirectory, '.arch-e2e.env')
 const callTesting = process.env.APPIMAGE_E2E_CALLS === '1'
 const buildInContainer = process.env.APPIMAGE_E2E_BUILD_IN_CONTAINER === '1'
@@ -107,6 +120,8 @@ writeFileSync(
     `APPIMAGE_E2E_FAKE_MIC=${process.env.APPIMAGE_E2E_FAKE_MIC ?? '1'}`,
     `APPIMAGE_E2E_SKIP_MIC_TEST=${process.env.APPIMAGE_E2E_SKIP_MIC_TEST ?? '0'}`,
     `APPIMAGE_E2E_CALLS=${process.env.APPIMAGE_E2E_CALLS ?? '0'}`,
+    `APPIMAGE_E2E_VERIFICATION=${process.env.APPIMAGE_E2E_VERIFICATION ?? '0'}`,
+    `APPIMAGE_E2E_NOTIFICATIONS=${process.env.APPIMAGE_E2E_NOTIFICATIONS ?? '0'}`,
     ...(callTesting
       ? [
           `APPIMAGE_E2E_PROJECT_ROOT=${projectMountRoot}`,

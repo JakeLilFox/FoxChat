@@ -57,6 +57,19 @@ if (process.env.APPIMAGE_E2E_CALLS === '1') {
     mapped[`MATRIX_E2E_CALL_RECEIVER_${suffix}`] = value
   }
 }
+const notificationSenderAccount = process.env.APPIMAGE_E2E_NOTIFICATION_SENDER_ACCOUNT?.trim()
+if (process.env.APPIMAGE_E2E_NOTIFICATIONS === '1') {
+  if (!notificationSenderAccount)
+    throw new Error(
+      'APPIMAGE_E2E_NOTIFICATION_SENDER_ACCOUNT is required when notification testing is enabled',
+    )
+  for (const suffix of ['HOMESERVER', 'USER', 'PASSWORD']) {
+    const value = loaded.parsed?.[`MATRIX_E2E_ACCOUNT_${notificationSenderAccount}_${suffix}`]
+    if (!value)
+      throw new Error(`Missing notification sender account ${notificationSenderAccount} ${suffix}`)
+    mapped[`MATRIX_E2E_NOTIFICATION_SENDER_${suffix}`] = value
+  }
+}
 
 const runtimeRoot = mkdtempSync(resolve(tmpdir(), 'foxchat-appimage-e2e-'))
 mkdirSync(outputDirectory, { recursive: true })

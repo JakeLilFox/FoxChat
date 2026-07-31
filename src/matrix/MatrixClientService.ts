@@ -31,6 +31,7 @@ import {
 } from 'matrix-js-sdk'
 import {
   CryptoEvent,
+  VerificationPhase,
   VerificationRequestEvent,
   type VerificationRequest,
 } from 'matrix-js-sdk/lib/crypto-api'
@@ -1029,7 +1030,11 @@ export class MatrixClientService {
     this.observers.add(observer)
     if (observer.onVerificationRequest) {
       for (const request of this.verificationRequests) {
-        if (request.pending) observer.onVerificationRequest(request)
+        if (
+          request.phase !== VerificationPhase.Done &&
+          request.phase !== VerificationPhase.Cancelled
+        )
+          observer.onVerificationRequest(request)
       }
     }
     return () => {
@@ -1038,15 +1043,24 @@ export class MatrixClientService {
   }
 
   private publishVerificationRequest(request: VerificationRequest) {
+    if (request.phase === VerificationPhase.Done || request.phase === VerificationPhase.Cancelled)
+      return
     this.verificationRequests.add(request)
     if (!this.trackedVerificationRequests.has(request)) {
       this.trackedVerificationRequests.add(request)
-      const removeFinished = () => {
-        if (request.pending) return
-        this.verificationRequests.delete(request)
-        request.off(VerificationRequestEvent.Change, removeFinished)
+      const requestChanged = () => {
+        if (
+          request.phase === VerificationPhase.Done ||
+          request.phase === VerificationPhase.Cancelled
+        ) {
+          this.verificationRequests.delete(request)
+          request.off(VerificationRequestEvent.Change, requestChanged)
+          return
+        }
+        if (request.pending)
+          this.observers.forEach((observer) => observer.onVerificationRequest?.(request))
       }
-      request.on(VerificationRequestEvent.Change, removeFinished)
+      request.on(VerificationRequestEvent.Change, requestChanged)
     }
     this.observers.forEach((observer) => observer.onVerificationRequest?.(request))
   }

@@ -43,6 +43,12 @@ export WEBKIT_GST_DISABLE_WEBRTC_NETWORK_SANDBOX=1
 # The test container is ephemeral and otherwise prevents WebKit from reaching its renderer.
 export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
 
+if [[ "${APPIMAGE_E2E_NOTIFICATIONS:-0}" == "1" ]]; then
+  export FOXCHAT_E2E_NOTIFICATION_FILE="${APPIMAGE_E2E_OUTPUT_DIR}/desktop-notification.json"
+  export FOXCHAT_E2E_NOTIFICATION_AUTO_OPEN=1
+  rm -f "${FOXCHAT_E2E_NOTIFICATION_FILE}"
+fi
+
 gstreamer_plugin_paths=()
 for plugin_path in /usr/lib/*/gstreamer-1.0 /usr/lib/gstreamer-1.0; do
   if [[ -d "${plugin_path}" ]]; then
@@ -142,8 +148,8 @@ dbus-run-session -- xvfb-run \
         >"${APPIMAGE_E2E_OUTPUT_DIR}/microphone-tone.log" 2>&1 &
       tone_pid=$!
     fi
-    if [[ "${APPIMAGE_E2E_CALLS:-0}" == "1" ]]; then
-      : "${APPIMAGE_E2E_PROJECT_ROOT:?APPIMAGE_E2E_PROJECT_ROOT is required for call testing}"
+    if [[ "${APPIMAGE_E2E_CALLS:-0}" == "1" || "${APPIMAGE_E2E_VERIFICATION:-0}" == "1" ]]; then
+      : "${APPIMAGE_E2E_PROJECT_ROOT:?APPIMAGE_E2E_PROJECT_ROOT is required for browser-assisted desktop testing}"
       export APPIMAGE_E2E_CALL_RECEIVER_URL="${APPIMAGE_E2E_CALL_RECEIVER_URL:-http://127.0.0.1:4173}"
       (
         cd "${APPIMAGE_E2E_PROJECT_ROOT}"
@@ -157,14 +163,14 @@ dbus-run-session -- xvfb-run \
           break
         fi
         if ! kill -0 "${preview_pid}" >/dev/null 2>&1; then
-          echo "Call receiver preview server exited before becoming ready" >&2
+          echo "Desktop E2E preview server exited before becoming ready" >&2
           cat "${APPIMAGE_E2E_OUTPUT_DIR}/call-preview.log" >&2
           exit 1
         fi
         sleep 0.5
       done
       if [[ "${preview_ready}" != "1" ]]; then
-        echo "Call receiver preview server did not become ready" >&2
+        echo "Desktop E2E preview server did not become ready" >&2
         cat "${APPIMAGE_E2E_OUTPUT_DIR}/call-preview.log" >&2
         exit 1
       fi

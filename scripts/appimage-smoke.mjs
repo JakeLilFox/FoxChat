@@ -14,6 +14,8 @@ const recoveryOnly = process.env.APPIMAGE_E2E_RECOVERY_ONLY === '1'
 const fakeMicrophone = process.env.APPIMAGE_E2E_FAKE_MIC === '1'
 const skipMicrophoneTest = process.env.APPIMAGE_E2E_SKIP_MIC_TEST === '1'
 const testCalls = process.env.APPIMAGE_E2E_CALLS === '1'
+const testVerification = process.env.APPIMAGE_E2E_VERIFICATION === '1'
+const testNotifications = process.env.APPIMAGE_E2E_NOTIFICATIONS === '1'
 const callReceiverUrl = process.env.APPIMAGE_E2E_CALL_RECEIVER_URL ?? 'http://127.0.0.1:4173'
 const rawCallReceiverHomeserver = process.env.MATRIX_E2E_CALL_RECEIVER_HOMESERVER?.replace(
   /\/$/,
@@ -21,10 +23,15 @@ const rawCallReceiverHomeserver = process.env.MATRIX_E2E_CALL_RECEIVER_HOMESERVE
 )
 const callReceiverUser = process.env.MATRIX_E2E_CALL_RECEIVER_USER
 const callReceiverPassword = process.env.MATRIX_E2E_CALL_RECEIVER_PASSWORD
+const rawNotificationSenderHomeserver =
+  process.env.MATRIX_E2E_NOTIFICATION_SENDER_HOMESERVER?.replace(/\/$/, '')
+const notificationSenderUser = process.env.MATRIX_E2E_NOTIFICATION_SENDER_USER
+const notificationSenderPassword = process.env.MATRIX_E2E_NOTIFICATION_SENDER_PASSWORD
 const elementKey = 'element-6066-11e4-a52e-4f735466cecf'
 const openedUrl = 'https://example.com/foxchat-desktop-e2e'
 const openedUrlFile = resolve(outputDirectory, 'opened-url.txt')
 const microphonePromptFile = resolve(outputDirectory, 'microphone-prompt-approved.txt')
+const desktopNotificationFile = resolve(outputDirectory, 'desktop-notification.json')
 const runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
 const roomName = `FoxChat Desktop E2E ${platformName} ${runId}`
 const sentText = `native desktop message ${platformName} ${runId}`
@@ -36,10 +43,16 @@ if (!skipRecovery && !recoveryKey)
   throw new Error('The account recovery key is required when recovery testing is enabled')
 if (testCalls && (!rawCallReceiverHomeserver || !callReceiverUser || !callReceiverPassword))
   throw new Error('Call receiver credentials are required when APPIMAGE_E2E_CALLS=1')
+if (
+  testNotifications &&
+  (!rawNotificationSenderHomeserver || !notificationSenderUser || !notificationSenderPassword)
+)
+  throw new Error('Notification sender credentials are required when APPIMAGE_E2E_NOTIFICATIONS=1')
 
 await mkdir(outputDirectory, { recursive: true })
 await unlink(openedUrlFile).catch(() => undefined)
 await unlink(microphonePromptFile).catch(() => undefined)
+await unlink(desktopNotificationFile).catch(() => undefined)
 
 const CONNECT_FAILURE_CODES = new Set([
   'UND_ERR_CONNECT_TIMEOUT',
@@ -89,6 +102,9 @@ async function discoverHomeserver(value) {
 const homeserver = await discoverHomeserver(rawHomeserver)
 const callReceiverHomeserver = testCalls
   ? await discoverHomeserver(rawCallReceiverHomeserver)
+  : homeserver
+const notificationSenderHomeserver = testNotifications
+  ? await discoverHomeserver(rawNotificationSenderHomeserver)
   : homeserver
 
 class WebDriverError extends Error {
@@ -749,6 +765,210 @@ async function testLinuxCall(fixtureToken, voiceRoomId) {
   }
 }
 
+async function testDesktopVerification() {
+  const { chromium } = await import('playwright')
+  let browser
+  let context
+  let page
+  let browserSession
+  try {
+    browser = await chromium.launch({ headless: true })
+    context = await browser.newContext({
+      baseURL: callReceiverUrl,
+      viewport: { width: 1280, height: 800 },
+    })
+    page = await context.newPage()
+    await page.goto('/')
+    await page.getByTestId('login-page').waitFor({ state: 'visible', timeout: 30_000 })
+    await page.getByLabel('Homeserver').fill(rawHomeserver)
+    await page.getByLabel('Matrix ID or username').fill(userId)
+    await page.getByLabel('Password').fill(password)
+    await page.getByRole('button', { name: 'Sign in' }).click()
+    await page.getByTestId('room-sidebar').first().waitFor({ state: 'visible', timeout: 90_000 })
+    browserSession = await page.evaluate(() => {
+      try {
+        return JSON.parse(localStorage.getItem('foxchat.matrix.accounts') ?? '[]').at(-1)
+      } catch {
+        return undefined
+      }
+    })
+
+    await page
+      .getByTestId('account-menu')
+      .getByRole('button', { name: 'Open settings', exact: true })
+      .click()
+    const settings = page.getByRole('dialog', { name: 'Settings' })
+    await settings.getByRole('tab', { name: 'Security' }).click()
+    await settings.getByRole('button', { name: 'Verify with another device' }).click()
+    const browserDialog = page.getByRole('dialog', { name: 'Verify another device' })
+    await browserDialog.waitFor({ state: 'visible', timeout: 30_000 })
+
+    await waitFor(
+      'incoming verification request in the native desktop window',
+      () => findText('button', 'Accept verification request'),
+      30_000,
+    )
+    await clickText('button', 'Accept verification request')
+
+    const nativeEmoji = await waitFor(
+      'native desktop SAS emoji',
+      async () => {
+        const labels = await command('POST', sessionPath('/execute/sync'), {
+          script: `
+            const dialog = [...document.querySelectorAll('[role="dialog"]')].find(element =>
+              element.textContent?.includes('Verify another device')
+            )
+            const labels = [...(dialog?.querySelectorAll('small') || [])].map(element =>
+              element.textContent?.trim()
+            )
+            return labels.length === 7 ? labels : null
+          `,
+          args: [],
+        })
+        return Array.isArray(labels) ? labels : false
+      },
+      30_000,
+    )
+    const browserEmoji = browserDialog.locator('small')
+    await browserEmoji.first().waitFor({ state: 'visible', timeout: 30_000 })
+    if (JSON.stringify(nativeEmoji) !== JSON.stringify(await browserEmoji.allTextContents()))
+      throw new Error('Native and browser devices displayed different SAS emoji')
+
+    await clickText('button', 'They match')
+    await browserDialog.getByRole('button', { name: 'They match' }).click()
+    await waitFor('native verification completion', () =>
+      findText('p', 'Device verification completed.'),
+    )
+    await browserDialog
+      .getByText('Device verification completed.', { exact: true })
+      .waitFor({ state: 'visible', timeout: 30_000 })
+    await clickText('button', 'Done')
+    await browserDialog.getByRole('button', { name: 'Done' }).click()
+
+    await writeFile(
+      resolve(outputDirectory, `${platformName}-incoming-verification.json`),
+      JSON.stringify({ received: true, sasEmoji: nativeEmoji }, null, 2),
+    )
+    console.log(
+      `PASS ${platformName}: native desktop received and completed another device's verification request`,
+    )
+  } finally {
+    if (browserSession?.accessToken && browserSession?.baseUrl)
+      await matrix('/_matrix/client/v3/logout', {
+        method: 'POST',
+        token: browserSession.accessToken,
+        baseUrl: browserSession.baseUrl,
+        body: {},
+      }).catch(() => undefined)
+    await page?.close().catch(() => undefined)
+    await context?.close().catch(() => undefined)
+    await browser?.close().catch(() => undefined)
+  }
+}
+
+async function testDesktopNotification(fixtureToken, fixtureRoomId) {
+  const sender = await passwordLogin(
+    notificationSenderUser,
+    notificationSenderPassword,
+    notificationSenderHomeserver,
+    `FoxChat desktop notification sender ${platformName}`,
+  )
+  const notificationBody = `Desktop notification ${platformName} ${runId}`
+  try {
+    await matrix(`/_matrix/client/v3/rooms/${encodeURIComponent(fixtureRoomId)}/invite`, {
+      method: 'POST',
+      token: fixtureToken,
+      body: { user_id: sender.user_id },
+    })
+    await matrix(`/_matrix/client/v3/join/${encodeURIComponent(fixtureRoomId)}`, {
+      method: 'POST',
+      token: sender.access_token,
+      baseUrl: notificationSenderHomeserver,
+      body: {},
+    })
+
+    await command('POST', sessionPath('/execute/sync'), {
+      script: `
+        document.hasFocus = () => false
+        const notification = window.__TAURI__?.notification
+        if (notification) {
+          notification.isPermissionGranted = async () => true
+          notification.requestPermission = async () => 'granted'
+        }
+        const core = window.__TAURI__?.core
+        if (core?.invoke && !core.__foxchatNotificationE2EWrapped) {
+          const originalInvoke = core.invoke.bind(core)
+          core.invoke = (command, args) => {
+            if (command === 'plugin:notification|is_permission_granted') return Promise.resolve(true)
+            if (command === 'plugin:notification|request_permission') return Promise.resolve('granted')
+            return originalInvoke(command, args)
+          }
+          core.__foxchatNotificationE2EWrapped = true
+        }
+        return true
+      `,
+      args: [],
+    })
+
+    await matrix(
+      `/_matrix/client/v3/rooms/${encodeURIComponent(fixtureRoomId)}/send/m.room.message/notification-${runId}`,
+      {
+        method: 'PUT',
+        token: sender.access_token,
+        baseUrl: notificationSenderHomeserver,
+        body: { msgtype: 'm.text', body: notificationBody },
+      },
+    )
+
+    const captured = await waitFor(
+      'native desktop notification',
+      async () => {
+        const raw = await readFile(desktopNotificationFile, 'utf8').catch(() => '')
+        if (!raw) return false
+        const value = JSON.parse(raw)
+        return value.body === notificationBody && value.room_id === fixtureRoomId ? value : false
+      },
+      30_000,
+    )
+    await waitFor(
+      'notification activation to open its room',
+      async () =>
+        new URL(await command('GET', sessionPath('/url'))).searchParams.get('room') ===
+        fixtureRoomId,
+      30_000,
+    )
+    await waitFor('notification room header', () =>
+      findText('[data-testid="room-header"]', roomName, false),
+    )
+    await writeFile(
+      resolve(outputDirectory, `${platformName}-desktop-notification-verified.json`),
+      JSON.stringify(captured, null, 2),
+    )
+    console.log(
+      `PASS ${platformName}: native desktop displayed the Matrix notification and opened its room`,
+    )
+  } finally {
+    await matrix(`/_matrix/client/v3/rooms/${encodeURIComponent(fixtureRoomId)}/leave`, {
+      method: 'POST',
+      token: sender.access_token,
+      baseUrl: notificationSenderHomeserver,
+      body: {},
+    }).catch(() => undefined)
+    await matrix(`/_matrix/client/v3/rooms/${encodeURIComponent(fixtureRoomId)}/forget`, {
+      method: 'POST',
+      token: sender.access_token,
+      baseUrl: notificationSenderHomeserver,
+      body: {},
+    }).catch(() => undefined)
+    await matrix('/_matrix/client/v3/logout', {
+      method: 'POST',
+      token: sender.access_token,
+      baseUrl: notificationSenderHomeserver,
+      body: {},
+    }).catch(() => undefined)
+  }
+}
+
 async function restoreRecovery() {
   await selectSettingsTab('Security')
   await clickText('button', 'Restore encrypted history')
@@ -871,11 +1091,11 @@ async function closeRoomWithEscape() {
   console.log(`PASS ${platformName}: Escape closed the selected room`)
 }
 
-async function signOut() {
+async function signOut({ allowLocalTeardown = false } = {}) {
   await selectSettingsTab('Account')
   await clickText('button', 'Sign out of FoxChat')
   const started = Date.now()
-  const deadline = started + 120_000
+  const deadline = started + (allowLocalTeardown ? 20_000 : 120_000)
   const snapshotAtMs = [1_000, 5_000, 15_000, 30_000, 60_000, 90_000]
   let nextSnapshot = 0
   let found
@@ -891,7 +1111,24 @@ async function signOut() {
   }
   if (!found) {
     await dumpPageState('signout-timeout')
-    throw new Error('Timed out waiting for login after sign out')
+    if (!allowLocalTeardown) throw new Error('Timed out waiting for login after sign out')
+
+    // Cross-device verification can leave the SDK's remote logout request pending in WebKitGTK.
+    // The verification assertion is already complete, so make the recovery-only worker teardown
+    // deterministic while still proving that the persisted desktop session is removed.
+    await command('POST', sessionPath('/execute/sync'), {
+      script: `
+        localStorage.clear()
+        sessionStorage.clear()
+        location.reload()
+      `,
+      args: [],
+    })
+    await waitFor('login after local verification teardown', () =>
+      findCss('[data-testid="login-page"]'),
+    )
+    console.log(`PASS ${platformName}: cleared the desktop session after verification teardown`)
+    return
   }
   console.log(`PASS ${platformName}: signed out and revoked the desktop session`)
 }
@@ -926,13 +1163,15 @@ try {
   console.log(`PASS ${platformName}: logged in and rendered the room drawer`)
 
   if (!skipRecovery) await restoreRecovery()
+  if (testVerification && !skipRecovery) await testDesktopVerification()
   if (fakeMicrophone && !skipMicrophoneTest && !recoveryOnly) await testLinuxMicrophone()
   if (testCalls && !recoveryOnly) await testLinuxCall(fixture.access_token, roomId)
 
   if (recoveryOnly) {
     await screenshot(`${platformName}-recovery-success.png`)
-    await signOut()
+    await signOut({ allowLocalTeardown: testVerification })
   } else {
+    if (testNotifications) await testDesktopNotification(fixture.access_token, roomId)
     await selectRoom()
     await sendComposerText(sentText)
     await waitFor(

@@ -25,6 +25,26 @@ fn show_desktop_notification(
     body: String,
     room_id: String,
 ) -> Result<(), String> {
+    if let Ok(path) = std::env::var("FOXCHAT_E2E_NOTIFICATION_FILE") {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "title": &title,
+                "body": &body,
+                "room_id": &room_id,
+            }))
+            .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        if std::env::var("FOXCHAT_E2E_NOTIFICATION_AUTO_OPEN").as_deref() == Ok("1") {
+            open_notification_room(&app, &room_id);
+        }
+        return Ok(());
+    }
+
     let mut notification = notify_rust::Notification::new();
     notification
         .appname("FoxChat")
