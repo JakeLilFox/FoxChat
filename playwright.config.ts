@@ -7,6 +7,7 @@ const envFile = resolve("test.env");
 if (existsSync(envFile)) loadEnv({ path: envFile, override: false, quiet: true });
 
 const baseURL = process.env.E2E_BASE_URL || "http://127.0.0.1:4173";
+const devServerPort = new URL(baseURL).port || "4173";
 const timeout = Number(process.env.E2E_TIMEOUT_MS) || 90_000;
 
 export default defineConfig({
@@ -33,7 +34,7 @@ export default defineConfig({
     process.env.E2E_SKIP_WEBSERVER === "true"
       ? undefined
       : {
-          command: "npm run dev -- --host 127.0.0.1 --port 4173",
+          command: `npm run dev -- --host 127.0.0.1 --port ${devServerPort}`,
           url: baseURL,
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,

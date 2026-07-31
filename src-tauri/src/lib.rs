@@ -70,6 +70,73 @@ fn accounts_directory(app: &tauri::AppHandle) -> Result<std::path::PathBuf, Stri
         .join("FoxChat"))
 }
 
+#[cfg(target_os = "linux")]
+fn install_linux_microphone_permission_handler<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> tauri::Result<()> {
+    window.with_webview(|platform_webview| {
+        use gtk::prelude::{DialogExtManual, GtkWindowExt, WidgetExt};
+        use std::{cell::Cell, rc::Rc};
+        use webkit2gtk::{
+            glib::prelude::{Cast, ObjectExt},
+            PermissionRequestExt, UserMediaPermissionRequestExt, WebViewExt,
+        };
+
+        let webview = platform_webview.inner();
+        let parent = webview
+            .toplevel()
+            .and_then(|widget| widget.downcast::<gtk::Window>().ok());
+        let microphone_allowed = Rc::new(Cell::new(false));
+
+        webview.connect_permission_request(move |_, request| {
+            if request.is::<webkit2gtk::DeviceInfoPermissionRequest>() {
+                if microphone_allowed.get() {
+                    request.allow();
+                } else {
+                    request.deny();
+                }
+                return true;
+            }
+
+            let Some(media_request) =
+                request.downcast_ref::<webkit2gtk::UserMediaPermissionRequest>()
+            else {
+                return false;
+            };
+            if !media_request.is_for_audio_device() {
+                return false;
+            }
+            if microphone_allowed.get() {
+                request.allow();
+                return true;
+            }
+
+            let dialog = gtk::MessageDialog::new(
+                parent.as_ref(),
+                gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+                gtk::MessageType::Question,
+                gtk::ButtonsType::YesNo,
+                "Allow FoxChat to use your microphone?",
+            );
+            dialog.set_title("Microphone access");
+
+            let pending_request = request.clone();
+            let microphone_allowed = microphone_allowed.clone();
+            webkit2gtk::glib::MainContext::default().spawn_local(async move {
+                let response = dialog.run_future().await;
+                if response == gtk::ResponseType::Yes {
+                    microphone_allowed.set(true);
+                    pending_request.allow();
+                } else {
+                    pending_request.deny();
+                }
+                dialog.close();
+            });
+            true
+        });
+    })
+}
+
 #[tauri::command]
 fn save_matrix_accounts(app: tauri::AppHandle, data: String) -> Result<(), String> {
     let directory = accounts_directory(&app)?;
@@ -137,6 +204,12 @@ pub fn run() {
                     for window in app.webview_windows().values() {
                         let _ = window.set_icon(icon.clone());
                     }
+                }
+            }
+            #[cfg(target_os = "linux")]
+            {
+                for window in app.webview_windows().values() {
+                    install_linux_microphone_permission_handler(window)?;
                 }
             }
             Ok(())

@@ -320,6 +320,13 @@
       },
       {
         "type": "cmd",
+        "id": "84b9cb51-ea45-4f22-b534-f9c5cd3e04c4",
+        "cmd": [
+          "sudo apt-get update && sudo apt-get install -y --no-install-recommends gstreamer1.0-nice gstreamer1.0-plugins-bad gstreamer1.0-plugins-base gstreamer1.0-pipewire gstreamer1.0-pulseaudio patchelf"
+        ]
+      },
+      {
+        "type": "cmd",
         "id": "c073572c-3772-4c8c-aa36-f3370d793649",
         "cmd": [
           "source /home/ubuntu1/.nvm/nvm.sh && test -s tauri-signing.key && export TAURI_SIGNING_PRIVATE_KEY=\"$PWD/tauri-signing.key\" && export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=\"\" && node scripts/desktop-release.mjs prepare \"${version}\" && export VITE_BUILD_VERSION=${version} && npm run desktop:build"
@@ -329,7 +336,21 @@
         "type": "cmd",
         "id": "0a47062d-8396-4bb8-8fcc-ef9670ac8d43",
         "cmd": [
-          "sudo apt-get update && sudo apt-get install -y --no-install-recommends webkit2gtk-driver xvfb xauth dbus-x11 && if ! command -v tauri-driver >/dev/null 2>&1; then cargo install tauri-driver --locked; fi"
+          "sudo apt-get update && sudo apt-get install -y --no-install-recommends webkit2gtk-driver xvfb xauth dbus-x11 pipewire pipewire-pulse wireplumber pulseaudio-utils gstreamer1.0-tools gstreamer1.0-nice gstreamer1.0-plugins-bad gstreamer1.0-plugins-base gstreamer1.0-pipewire gstreamer1.0-pulseaudio patchelf xdotool && if ! command -v tauri-driver >/dev/null 2>&1; then cargo install tauri-driver --locked; fi"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "dbf29468-481b-451d-82fe-b04056042d12",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && npx playwright install --with-deps chromium"
+        ]
+      },
+      {
+        "type": "cmd",
+        "id": "2f5e3d77-4a8c-4d3f-9c2a-7e6b1f8d5a40",
+        "cmd": [
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && npm run test:e2e:linux-call"
         ]
       },
       {
@@ -347,7 +368,7 @@
         "type": "cmd",
         "id": "2919d04d-e8c9-449b-9e11-41f23533064a",
         "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_ACCOUNT=2 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04 && export APPIMAGE_E2E_SKIP_RECOVERY=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu && npm run test:e2e:appimage:host"
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_PATH=src-tauri/target/release/foxchat && export APPIMAGE_E2E_ACCOUNT=2 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04 && export APPIMAGE_E2E_SKIP_RECOVERY=1 && export APPIMAGE_E2E_FAKE_MIC=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu && npm run test:e2e:appimage:host"
         ],
         "flags": [
           "ignore-errors"
@@ -358,7 +379,7 @@
         "type": "cmd",
         "id": "7de0ee41-bfeb-4217-a53c-fabcadbe6c35",
         "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export DOCKER_BUILDKIT=0 && export APPIMAGE_E2E_DOCKERFILE=tests/appimage/Dockerfile.ci && export APPIMAGE_E2E_DOCKER_NETWORK=host && export APPIMAGE_E2E_TAURI_DRIVER=\"$(command -v tauri-driver)\" && export APPIMAGE_E2E_ACCOUNT=3 && export APPIMAGE_E2E_PLATFORM=arch-linux && export APPIMAGE_E2E_SKIP_RECOVERY=1 && if [ -e /dev/dri/card0 ] && [ -e /dev/dri/renderD128 ]; then export APPIMAGE_E2E_DRI_DEVICES=/dev/dri/card0,/dev/dri/renderD128; fi && npm run test:e2e:appimage"
+          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export DOCKER_BUILDKIT=0 && export APPIMAGE_E2E_DOCKERFILE=tests/appimage/Dockerfile.ci && export APPIMAGE_E2E_DOCKER_NETWORK=host && export APPIMAGE_E2E_TAURI_DRIVER=\"$(command -v tauri-driver)\" && export APPIMAGE_E2E_BUILD_IN_CONTAINER=1 && export APPIMAGE_E2E_ACCOUNT=3 && export APPIMAGE_E2E_PLATFORM=arch-linux && export APPIMAGE_E2E_SKIP_RECOVERY=1 && if [ -e /dev/dri/card0 ] && [ -e /dev/dri/renderD128 ]; then export APPIMAGE_E2E_DRI_DEVICES=/dev/dri/card0,/dev/dri/renderD128; fi && npm run test:e2e:appimage"
         ],
         "flags": [
           "ignore-errors"

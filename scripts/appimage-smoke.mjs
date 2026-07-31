@@ -11,9 +11,20 @@ const password = process.env.MATRIX_E2E_ACCOUNT_1_PASSWORD
 const recoveryKey = process.env.MATRIX_E2E_ACCOUNT_1_RECOVERY_KEY
 const skipRecovery = process.env.APPIMAGE_E2E_SKIP_RECOVERY === '1'
 const recoveryOnly = process.env.APPIMAGE_E2E_RECOVERY_ONLY === '1'
+const fakeMicrophone = process.env.APPIMAGE_E2E_FAKE_MIC === '1'
+const skipMicrophoneTest = process.env.APPIMAGE_E2E_SKIP_MIC_TEST === '1'
+const testCalls = process.env.APPIMAGE_E2E_CALLS === '1'
+const callReceiverUrl = process.env.APPIMAGE_E2E_CALL_RECEIVER_URL ?? 'http://127.0.0.1:4173'
+const rawCallReceiverHomeserver = process.env.MATRIX_E2E_CALL_RECEIVER_HOMESERVER?.replace(
+  /\/$/,
+  '',
+)
+const callReceiverUser = process.env.MATRIX_E2E_CALL_RECEIVER_USER
+const callReceiverPassword = process.env.MATRIX_E2E_CALL_RECEIVER_PASSWORD
 const elementKey = 'element-6066-11e4-a52e-4f735466cecf'
 const openedUrl = 'https://example.com/foxchat-desktop-e2e'
 const openedUrlFile = resolve(outputDirectory, 'opened-url.txt')
+const microphonePromptFile = resolve(outputDirectory, 'microphone-prompt-approved.txt')
 const runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
 const roomName = `FoxChat Desktop E2E ${platformName} ${runId}`
 const sentText = `native desktop message ${platformName} ${runId}`
@@ -23,9 +34,12 @@ if (!rawHomeserver || !userId || !password)
   throw new Error('Account homeserver, user, and password are required')
 if (!skipRecovery && !recoveryKey)
   throw new Error('The account recovery key is required when recovery testing is enabled')
+if (testCalls && (!rawCallReceiverHomeserver || !callReceiverUser || !callReceiverPassword))
+  throw new Error('Call receiver credentials are required when APPIMAGE_E2E_CALLS=1')
 
 await mkdir(outputDirectory, { recursive: true })
 await unlink(openedUrlFile).catch(() => undefined)
+await unlink(microphonePromptFile).catch(() => undefined)
 
 const CONNECT_FAILURE_CODES = new Set([
   'UND_ERR_CONNECT_TIMEOUT',
@@ -73,6 +87,9 @@ async function discoverHomeserver(value) {
 }
 
 const homeserver = await discoverHomeserver(rawHomeserver)
+const callReceiverHomeserver = testCalls
+  ? await discoverHomeserver(rawCallReceiverHomeserver)
+  : homeserver
 
 class WebDriverError extends Error {
   constructor(message, status, value) {
@@ -83,10 +100,22 @@ class WebDriverError extends Error {
 }
 
 async function command(method, path, body) {
+  const requestBody =
+    path.endsWith('/execute/sync') && typeof body?.script === 'string'
+      ? {
+          ...body,
+          script: `
+            const result = (function () {
+              ${body.script}
+            }).apply(null, arguments)
+            return result === undefined || result === null ? true : result
+          `,
+        }
+      : body
   const response = await fetch(`${driverUrl}${path}`, {
     method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: requestBody === undefined ? undefined : { 'content-type': 'application/json' },
+    body: requestBody === undefined ? undefined : JSON.stringify(requestBody),
     signal: AbortSignal.timeout(90_000),
   })
   const payload = await response.json().catch(() => ({}))
@@ -123,8 +152,8 @@ async function waitFor(description, operation, timeout = 90_000) {
   )
 }
 
-async function matrix(path, { method = 'GET', token, body } = {}) {
-  const response = await fetchWithRetry(`${homeserver}${path}`, {
+async function matrix(path, { method = 'GET', token, body, baseUrl = homeserver } = {}) {
+  const response = await fetchWithRetry(`${baseUrl}${path}`, {
     method,
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -143,23 +172,47 @@ async function matrix(path, { method = 'GET', token, body } = {}) {
   return payload
 }
 
-async function fixtureLogin() {
+async function passwordLogin(loginUser, loginPassword, baseUrl, deviceName) {
   return matrix('/_matrix/client/v3/login', {
     method: 'POST',
+    baseUrl,
     body: {
       type: 'm.login.password',
-      identifier: { type: 'm.id.user', user: userId },
-      password,
-      initial_device_display_name: `FoxChat desktop E2E fixture ${platformName}`,
+      identifier: { type: 'm.id.user', user: loginUser },
+      password: loginPassword,
+      initial_device_display_name: deviceName,
     },
   })
 }
 
+async function fixtureLogin() {
+  return passwordLogin(userId, password, homeserver, `FoxChat desktop E2E fixture ${platformName}`)
+}
+
 async function createFixture(token) {
+  const voiceRoomType = 'org.matrix.msc3417.call'
   const created = await matrix('/_matrix/client/v3/createRoom', {
     method: 'POST',
     token,
-    body: { preset: 'private_chat', visibility: 'private', name: roomName },
+    body: {
+      preset: 'private_chat',
+      visibility: 'private',
+      name: roomName,
+      ...(testCalls
+        ? {
+            creation_content: { type: voiceRoomType, 'm.federate': true },
+            room_type: voiceRoomType,
+            power_level_content_override: {
+              events: {
+                'org.matrix.msc3401.call.member': 0,
+                'm.call.member': 0,
+                'org.matrix.msc4143.rtc.member': 0,
+                'm.rtc.member': 0,
+              },
+            },
+          }
+        : {}),
+    },
   })
   if (!created.room_id) throw new Error('Matrix createRoom returned no room_id')
   await matrix(
@@ -186,11 +239,17 @@ const sessionPath = (suffix = '') => `/session/${sessionId}${suffix}`
 const refId = (value) => value?.[elementKey] ?? value?.ELEMENT
 
 async function findCss(selector) {
-  const value = await command('POST', sessionPath('/execute/sync'), {
-    script: 'return document.querySelector(arguments[0])',
-    args: [selector],
-  })
-  return refId(value)
+  try {
+    const value = await command('POST', sessionPath('/element'), {
+      using: 'css selector',
+      value: selector,
+    })
+    return refId(value)
+  } catch (error) {
+    if (error instanceof WebDriverError && error.value?.error === 'no such element')
+      return undefined
+    throw error
+  }
 }
 
 async function findRenderedImage(eventId, body) {
@@ -283,16 +342,12 @@ async function bodyContains(text) {
   })
 }
 
-async function selectRoom() {
-  const room = await waitFor(
-    roomName,
-    () => findText('[data-testid="room-row"]', roomName, false),
-    120_000,
-  )
+async function selectRoom(name = roomName) {
+  const room = await waitFor(name, () => findText('[data-testid="room-row"]', name, false), 120_000)
   await click(room)
   await waitFor(
     'fixture room header',
-    () => findText('[data-testid="room-header"]', roomName, false),
+    () => findText('[data-testid="room-header"]', name, false),
     60_000,
   )
 }
@@ -350,8 +405,15 @@ async function selectSettingsTab(name) {
     tab = await waitFor(`${name} settings tab`, () => findText('[role="tab"]', name))
   }
   await command('POST', sessionPath('/execute/sync'), {
-    script: 'arguments[0].click()',
-    args: [{ [elementKey]: tab }],
+    script: `
+      const clean = value => String(value || '').replace(/\\s+/g, ' ').trim()
+      const target = [...document.querySelectorAll('[role="tab"]')].find(element =>
+        clean(element.textContent) === arguments[0]
+      )
+      if (target) setTimeout(() => target.click(), 0)
+      return !!target
+    `,
+    args: [name],
   })
   await waitFor(`${name} settings panel`, () =>
     command('POST', sessionPath('/execute/sync'), {
@@ -366,6 +428,325 @@ async function selectSettingsTab(name) {
       args: [name],
     }),
   )
+}
+
+async function testLinuxMicrophone() {
+  await selectSettingsTab('Voice')
+  await clickText('label', 'Voice activation')
+  const grantButton = await findText('button', 'Grant microphone access')
+  if (grantButton) await click(grantButton)
+  await waitFor(
+    'native Linux microphone permission prompt',
+    async () =>
+      (await readFile(microphonePromptFile, 'utf8').catch(() => '')).trim() === 'approved',
+    30_000,
+  )
+  if (grantButton) {
+    await waitFor(
+      'microphone permission grant to complete',
+      async () => !(await findText('button', 'Grant microphone access')),
+      30_000,
+    )
+  }
+  const level = await waitFor(
+    'audio from the synthetic microphone',
+    async () => {
+      const value = await command('POST', sessionPath('/execute/sync'), {
+        script: `
+          const meter = document.querySelector('[data-testid="microphone-level"]')
+          const width = Number.parseFloat(meter?.style.width || '0')
+          return width > 1 ? width : 0
+        `,
+        args: [],
+      })
+      return value || false
+    },
+    30_000,
+  )
+  await writeFile(
+    resolve(outputDirectory, `${platformName}-microphone.json`),
+    JSON.stringify({ prompt: 'approved', levelPercent: level }, null, 2),
+  )
+  console.log(
+    `PASS ${platformName}: approved the native microphone prompt and captured synthetic audio`,
+  )
+
+  await clickText('label', 'Continuous')
+  await clickCss('.ant-modal-close')
+  await waitFor('settings dialog to close', async () => !(await findCss('.ant-modal-wrap')))
+}
+
+async function testLinuxCall(fixtureToken, voiceRoomId) {
+  const { chromium } = await import('playwright')
+  const receiver = await passwordLogin(
+    callReceiverUser,
+    callReceiverPassword,
+    callReceiverHomeserver,
+    `FoxChat Linux call receiver ${platformName}`,
+  )
+  const voiceRoomName = roomName
+  await matrix(`/_matrix/client/v3/rooms/${encodeURIComponent(voiceRoomId)}/invite`, {
+    method: 'POST',
+    token: fixtureToken,
+    body: { user_id: receiver.user_id },
+  })
+
+  let browser
+  let context
+  let page
+  try {
+    await matrix(`/_matrix/client/v3/join/${encodeURIComponent(voiceRoomId)}`, {
+      method: 'POST',
+      token: receiver.access_token,
+      baseUrl: callReceiverHomeserver,
+      body: {},
+    })
+
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--autoplay-policy=no-user-gesture-required',
+        '--use-fake-device-for-media-stream',
+        '--use-fake-ui-for-media-stream',
+      ],
+    })
+    context = await browser.newContext({
+      baseURL: callReceiverUrl,
+      viewport: { width: 1280, height: 800 },
+      permissions: ['microphone'],
+    })
+    page = await context.newPage()
+    await page.goto('/')
+    await page.getByTestId('login-page').waitFor({ state: 'visible', timeout: 30_000 })
+    await page.getByLabel('Homeserver').fill(rawCallReceiverHomeserver)
+    await page.getByLabel('Matrix ID or username').fill(callReceiverUser)
+    await page.getByLabel('Password').fill(callReceiverPassword)
+    await page.getByRole('button', { name: 'Sign in' }).click()
+    await page.getByTestId('room-sidebar').first().waitFor({ state: 'visible', timeout: 90_000 })
+
+    await selectRoom(voiceRoomName)
+    const receiverRoom = page.getByTestId('room-row').filter({ hasText: voiceRoomName })
+    await receiverRoom.waitFor({ state: 'visible', timeout: 90_000 })
+    await receiverRoom.click()
+
+    await clickCss('[title="Join voice channel"]')
+    await page.getByTitle('Join voice channel').click()
+    let nativeConnectionError
+    try {
+      await waitFor(
+        'native AppImage call connection',
+        () => findCss('[data-call-status-state="connected"]'),
+        30_000,
+      )
+    } catch (error) {
+      nativeConnectionError = error
+    }
+    const receiverCall = page.frameLocator('iframe[title$="call engine"]')
+    await receiverCall
+      .locator('[data-testid="incall_leave"]')
+      .waitFor({ state: 'visible', timeout: 90_000 })
+
+    const nativeOuterCallState = await command('POST', sessionPath('/execute/sync'), {
+      script: `
+        const frame = document.querySelector('iframe[title$="call engine"]')
+        const target = document.querySelector('[data-call-status-state]')
+        return {
+          frameSrc: frame?.src,
+          status: target?.getAttribute('data-call-status-state'),
+          statusLabel: target?.getAttribute('data-call-status'),
+        }
+      `,
+      args: [],
+    })
+    const nativeFrame = await waitFor('native call engine iframe', () =>
+      findCss('iframe[title$="call engine"]'),
+    )
+    await command('POST', sessionPath('/frame'), {
+      id: { [elementKey]: nativeFrame },
+    })
+    let nativeCallState
+    try {
+      nativeCallState = await command('POST', sessionPath('/execute/sync'), {
+        script: `
+        const media = element => ({
+          muted: element.muted,
+          paused: element.paused,
+          tracks: element.srcObject instanceof MediaStream
+            ? element.srcObject.getTracks().map(track => ({
+                enabled: track.enabled,
+                kind: track.kind,
+                muted: track.muted,
+                readyState: track.readyState,
+              }))
+            : [],
+        })
+        return {
+          body: String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim(),
+          buttons: [...document.querySelectorAll('button')].map(button => ({
+            ariaChecked: button.getAttribute('aria-checked'),
+            ariaLabel: button.getAttribute('aria-label'),
+            testId: button.getAttribute('data-testid'),
+            text: String(button.textContent || '').replace(/\\s+/g, ' ').trim(),
+            title: button.getAttribute('title'),
+          })),
+          audio: [...document.querySelectorAll('audio')].map(media),
+          video: [...document.querySelectorAll('video')].map(media),
+          capabilities: {
+            isSecureContext,
+            mediaDevices: typeof navigator.mediaDevices,
+            getUserMedia: typeof navigator.mediaDevices?.getUserMedia,
+            rtcPeerConnection: typeof RTCPeerConnection,
+            webkitRtcPeerConnection: typeof globalThis.webkitRTCPeerConnection,
+            webSocket: typeof WebSocket,
+          },
+          location: location.href,
+          origin: location.origin,
+          readyState: document.readyState,
+          resources: performance.getEntriesByType('resource').map(entry => ({
+            duration: entry.duration,
+            name: entry.name,
+          })),
+          userAgent: navigator.userAgent,
+        }
+      `,
+        args: [],
+      })
+    } finally {
+      await command('POST', sessionPath('/frame'), { id: null })
+    }
+    const receiverCallState = await receiverCall.locator('body').evaluate((body) => {
+      const media = (element) => ({
+        muted: element.muted,
+        paused: element.paused,
+        tracks:
+          element.srcObject instanceof MediaStream
+            ? element.srcObject.getTracks().map((track) => ({
+                enabled: track.enabled,
+                kind: track.kind,
+                muted: track.muted,
+                readyState: track.readyState,
+              }))
+            : [],
+      })
+      return {
+        body: body.innerText.replace(/\s+/g, ' ').trim(),
+        buttons: [...document.querySelectorAll('button')].map((button) => ({
+          ariaChecked: button.getAttribute('aria-checked'),
+          ariaLabel: button.getAttribute('aria-label'),
+          testId: button.getAttribute('data-testid'),
+          text: button.textContent?.replace(/\s+/g, ' ').trim(),
+          title: button.getAttribute('title'),
+        })),
+        audio: [...document.querySelectorAll('audio')].map(media),
+        video: [...document.querySelectorAll('video')].map(media),
+        userAgent: navigator.userAgent,
+      }
+    })
+    console.log(`Linux native outer call state: ${JSON.stringify(nativeOuterCallState)}`)
+    console.log(`Linux native call state: ${JSON.stringify(nativeCallState)}`)
+    console.log(`Linux receiver call state: ${JSON.stringify(receiverCallState)}`)
+    if (nativeConnectionError) {
+      throw new Error(
+        `${nativeConnectionError.message}; native state: ${JSON.stringify(nativeCallState)}`,
+      )
+    }
+
+    const result = await receiverCall.locator('body').evaluate(async (_, expectedHz) => {
+      const deadline = Date.now() + 30_000
+      let lastSample = { audioCount: 0, peakDb: -Infinity, peakHz: 0 }
+      while (Date.now() < deadline) {
+        const entries = [...document.querySelectorAll('audio')]
+          .map((audio, elementIndex) => {
+            if (
+              !(audio.srcObject instanceof MediaStream) ||
+              !audio.srcObject.getAudioTracks().length
+            )
+              return undefined
+            const context = new AudioContext()
+            const analyser = context.createAnalyser()
+            analyser.fftSize = 8192
+            analyser.smoothingTimeConstant = 0
+            context.createMediaStreamSource(audio.srcObject).connect(analyser)
+            return { analyser, context, elementIndex }
+          })
+          .filter(Boolean)
+        if (entries.length) {
+          const peaks = entries.map(({ elementIndex }) => ({
+            elementIndex,
+            peakHz: 0,
+            peakDb: -Infinity,
+          }))
+          const bins = new Float32Array(4096)
+          const sampleStart = performance.now()
+          while (performance.now() - sampleStart < 2500) {
+            for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+              const { analyser, context } = entries[entryIndex]
+              analyser.getFloatFrequencyData(bins)
+              let maxIndex = 1
+              for (let index = 2; index < bins.length; index++) {
+                if (bins[index] > bins[maxIndex]) maxIndex = index
+              }
+              if (bins[maxIndex] > peaks[entryIndex].peakDb) {
+                peaks[entryIndex] = {
+                  ...peaks[entryIndex],
+                  peakDb: bins[maxIndex],
+                  peakHz: (maxIndex * context.sampleRate) / analyser.fftSize,
+                }
+              }
+            }
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          }
+          for (const { context } of entries) await context.close()
+          const best = peaks.reduce((current, peak) =>
+            peak.peakDb > current.peakDb ? peak : current,
+          )
+          lastSample = { audioCount: entries.length, ...best }
+          if (Math.abs(best.peakHz - expectedHz) <= 30) return { matched: true, ...lastSample }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+      return { matched: false, ...lastSample }
+    }, 440)
+    if (!result.matched)
+      throw new Error(
+        `The browser call receiver did not capture the AppImage 440 Hz microphone: ${JSON.stringify(result)}`,
+      )
+
+    await writeFile(
+      resolve(outputDirectory, `${platformName}-call-audio.json`),
+      JSON.stringify({ expectedHz: 440, ...result }, null, 2),
+    )
+    console.log(
+      `PASS ${platformName}: Linux AppImage sent its synthetic microphone through a voice call`,
+    )
+
+    await clickText('button', 'Leave')
+    await page.getByRole('button', { name: 'Leave' }).click()
+  } finally {
+    await page?.close().catch(() => undefined)
+    await context?.close().catch(() => undefined)
+    await browser?.close().catch(() => undefined)
+    for (const [token, baseUrl] of [[receiver.access_token, callReceiverHomeserver]]) {
+      await matrix(`/_matrix/client/v3/rooms/${encodeURIComponent(voiceRoomId)}/leave`, {
+        method: 'POST',
+        token,
+        baseUrl,
+        body: {},
+      }).catch(() => undefined)
+      await matrix(`/_matrix/client/v3/rooms/${encodeURIComponent(voiceRoomId)}/forget`, {
+        method: 'POST',
+        token,
+        baseUrl,
+        body: {},
+      }).catch(() => undefined)
+    }
+    await matrix('/_matrix/client/v3/logout', {
+      method: 'POST',
+      token: receiver.access_token,
+      baseUrl: callReceiverHomeserver,
+      body: {},
+    }).catch(() => undefined)
+  }
 }
 
 async function restoreRecovery() {
@@ -545,6 +926,8 @@ try {
   console.log(`PASS ${platformName}: logged in and rendered the room drawer`)
 
   if (!skipRecovery) await restoreRecovery()
+  if (fakeMicrophone && !skipMicrophoneTest && !recoveryOnly) await testLinuxMicrophone()
+  if (testCalls && !recoveryOnly) await testLinuxCall(fixture.access_token, roomId)
 
   if (recoveryOnly) {
     await screenshot(`${platformName}-recovery-success.png`)

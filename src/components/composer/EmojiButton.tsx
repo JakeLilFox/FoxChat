@@ -10,6 +10,7 @@ import {
   findRoomImagePacks,
   imagePackAccounts,
   imagePackRoomsTypes,
+  matchesPickerSearch,
   moveImagePackOrder,
   orderedImageEntries,
   orderImagePacks,
@@ -30,8 +31,8 @@ import {
 import { closeEmojiUrl, emojiOpenFromUrl, openEmojiUrl } from '../../lib/urlState'
 import { EmojiGrid, EmojiPanel, IconBtn, PackCollection, PackJumpBar } from '../../styles'
 import { useEffect, useRef, useState } from 'react'
-import { App as AntApp, Empty, Popover, Tabs, Tooltip } from 'antd'
-import { SmileOutlined } from '@ant-design/icons'
+import { App as AntApp, Empty, Input, Popover, Tabs, Tooltip } from 'antd'
+import { SearchOutlined, SmileOutlined } from '@ant-design/icons'
 import { EventType, Room, RoomType } from 'matrix-js-sdk'
 import { type ImageInfo } from 'matrix-js-sdk/lib/@types/media'
 import { matrixService } from '../../matrix/MatrixClientService'
@@ -49,6 +50,7 @@ function MatrixPackBrowser({
   recent,
   client,
   empty,
+  search,
   onSelect,
   onMovePack,
 }: {
@@ -57,6 +59,7 @@ function MatrixPackBrowser({
   recent: StoredEmote[]
   client: ReturnType<typeof matrixService.clientForRoom>
   empty: string
+  search: string
   onSelect: (emote: MatrixEmote) => void
   onMovePack: (source: string, target: string, edge: 'before' | 'after') => void
 }) {
@@ -67,6 +70,7 @@ function MatrixPackBrowser({
     target?: string
     edge?: 'before' | 'after'
   }>()
+  const searching = !!search.trim()
   const packs: Array<PickerPack & { reorderable: boolean }> = [
     ...(recent.length
       ? [
@@ -83,11 +87,30 @@ function MatrixPackBrowser({
       .map((group) => ({
         ...group,
         items: group.items.filter((emote) => !emote.usage || emote.usage.includes(usage)),
-        reorderable: true,
+        reorderable: !searching,
       }))
       .filter((group) => group.items.length),
   ]
-  if (!packs.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty} />
+    .map((pack) => {
+      if (!searching) return pack
+      const packMatches = matchesPickerSearch(search, pack.label)
+      return {
+        ...pack,
+        items: packMatches
+          ? pack.items
+          : pack.items.filter((emote) => matchesPickerSearch(search, emote.name, emote.body)),
+      }
+    })
+    .filter((pack) => pack.items.length)
+  if (!packs.length)
+    return (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description={
+          searching ? `No matching Matrix ${usage === 'sticker' ? 'stickers' : 'emoji'}` : empty
+        }
+      />
+    )
 
   const jumpToPack = (packId: string) => {
     const collection = collectionRef.current
@@ -205,6 +228,7 @@ export function EmojiButton({
 }) {
   const { message } = AntApp.useApp()
   const [open, setOpen] = useState(() => emojiOpenFromUrl())
+  const [search, setSearch] = useState('')
   const [sourceTab, setSourceTab] = useState(emojiPickerSourceTab)
   const [matrixContentTab, setMatrixContentTab] = useState(matrixPickerContentTab)
   const triggerRef = useRef<HTMLSpanElement>(null)
@@ -217,6 +241,7 @@ export function EmojiButton({
   const close = () => {
     closeEmojiUrl()
     setOpen(false)
+    setSearch('')
   }
   // Android WebView needs explicit outside tap handling.
   useEffect(() => {
@@ -472,7 +497,38 @@ export function EmojiButton({
   const stickerCount = allCustom.filter(
     (emote) => !emote.usage || emote.usage.includes('sticker'),
   ).length
-  const unicodeTabs = (
+  const selectUnicode = (emoji: string) => {
+    rememberRecent(recentStorage.unicode, emoji, (item) => item)
+    onUnicode(emoji)
+    close()
+  }
+  const unicodeSearchResults = [
+    ...new Set(
+      unicodeCategories.flatMap((category) =>
+        matchesPickerSearch(search, category.key, category.title)
+          ? category.items
+          : category.items.filter((emoji) => matchesPickerSearch(search, emoji)),
+      ),
+    ),
+  ]
+  const unicodeContent = search.trim() ? (
+    unicodeSearchResults.length ? (
+      <EmojiGrid>
+        {unicodeSearchResults.map((emoji, index) => (
+          <button
+            key={`${emoji}-${index}`}
+            type="button"
+            title={emoji}
+            onClick={() => selectUnicode(emoji)}
+          >
+            {emoji}
+          </button>
+        ))}
+      </EmojiGrid>
+    ) : (
+      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No matching Unicode emoji" />
+    )
+  ) : (
     <Tabs
       size="small"
       items={[
@@ -488,11 +544,7 @@ export function EmojiButton({
                         key={emoji}
                         type="button"
                         title={emoji}
-                        onClick={() => {
-                          rememberRecent(recentStorage.unicode, emoji, (item) => item)
-                          onUnicode(emoji)
-                          close()
-                        }}
+                        onClick={() => selectUnicode(emoji)}
                       >
                         {emoji}
                       </button>
@@ -512,11 +564,7 @@ export function EmojiButton({
                   key={`${emoji}-${index}`}
                   type="button"
                   title={emoji}
-                  onClick={() => {
-                    rememberRecent(recentStorage.unicode, emoji, (item) => item)
-                    onUnicode(emoji)
-                    close()
-                  }}
+                  onClick={() => selectUnicode(emoji)}
                 >
                   {emoji}
                 </button>
@@ -562,6 +610,7 @@ export function EmojiButton({
               recent={recentEmojis}
               client={client}
               empty="No Matrix emoji packs"
+              search={search}
               onSelect={(emote) => selectMatrixItem('emoticon', emote)}
               onMovePack={movePack}
             />
@@ -577,6 +626,7 @@ export function EmojiButton({
               recent={recentStickers}
               client={client}
               empty="No Matrix sticker packs"
+              search={search}
               onSelect={(emote) => selectMatrixItem('sticker', emote)}
               onMovePack={movePack}
             />
@@ -587,6 +637,16 @@ export function EmojiButton({
   )
   const content = (
     <EmojiPanel ref={panelRef}>
+      <Input
+        className="emojiSearch"
+        type="search"
+        value={search}
+        allowClear
+        prefix={<SearchOutlined />}
+        placeholder="Search emoji and stickers"
+        aria-label="Search emoji and stickers"
+        onChange={(event) => setSearch(event.target.value)}
+      />
       <Tabs
         size="small"
         activeKey={sourceTab}
@@ -596,7 +656,7 @@ export function EmojiButton({
           setEmojiPickerSourceTab(tab)
         }}
         items={[
-          { key: 'unicode', label: 'Unicode', children: unicodeTabs },
+          { key: 'unicode', label: 'Unicode', children: unicodeContent },
           {
             key: 'matrix',
             label: `Matrix (${allCustom.length})`,

@@ -2,7 +2,7 @@ import type { Update } from '@tauri-apps/plugin-updater'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   checkForDesktopUpdate,
-  isDesktopApp,
+  desktopUpdateChecksEnabled,
   isDesktopUpdateSkipped,
   skipDesktopUpdate,
 } from '../platform/desktopUpdates'
@@ -19,7 +19,7 @@ export function DesktopUpdateProvider({ children }: { children: ReactNode }) {
   const [autoOpenPending, setAutoOpenPending] = useState(false)
 
   useEffect(() => {
-    if (!isDesktopApp()) return
+    if (!desktopUpdateChecksEnabled()) return
     let disposed = false
 
     const checkForUpdate = async () => {

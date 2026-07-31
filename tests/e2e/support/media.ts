@@ -2,9 +2,9 @@ import { chromium, type Browser } from '@playwright/test'
 
 export type MediaBrowserOptions = {
   fakeAudioWavPath?: string
-
   autoSelectCaptureSourceTitle?: string
   headless?: boolean
+  useSystemMediaDevices?: boolean
 }
 
 const envHeadless = () => {
@@ -18,8 +18,10 @@ export async function launchMediaBrowser({
   fakeAudioWavPath,
   autoSelectCaptureSourceTitle,
   headless,
+  useSystemMediaDevices = false,
 }: MediaBrowserOptions = {}): Promise<Browser> {
-  const args = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream']
+  const args = ['--use-fake-ui-for-media-stream']
+  if (!useSystemMediaDevices) args.push('--use-fake-device-for-media-stream')
   if (fakeAudioWavPath) args.push(`--use-file-for-fake-audio-capture=${fakeAudioWavPath}`)
   if (autoSelectCaptureSourceTitle)
     args.push(`--auto-select-desktop-capture-source=${autoSelectCaptureSourceTitle}`)

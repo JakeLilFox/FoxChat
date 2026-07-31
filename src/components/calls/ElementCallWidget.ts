@@ -389,6 +389,8 @@ export const applyPreferredMicrophoneToActiveCalls = () => {
 }
 
 export const createMicrophoneGate = (iframe: HTMLIFrameElement) => {
+  const gateOriginalTrack =
+    '__TAURI_INTERNALS__' in window && /Linux/i.test(window.navigator.userAgent)
   let patchedWindow: Window | undefined
   const tracks = new Set<MediaStreamTrack>()
   const delayNodes = new Set<DelayNode>()
@@ -433,6 +435,12 @@ export const createMicrophoneGate = (iframe: HTMLIFrameElement) => {
       const stream = await original(effectiveConstraints)
       if (effectiveConstraints?.audio)
         for (const track of stream.getAudioTracks()) {
+          if (gateOriginalTrack) {
+            track.enabled = enabled
+            tracks.add(track)
+            track.addEventListener('ended', () => tracks.delete(track))
+            continue
+          }
           // Build the gate in the iframe realm to match Firefox's sample rate.
           const IframeAudioContext = (win as Window & { AudioContext: typeof AudioContext })
             .AudioContext
@@ -494,6 +502,7 @@ export const createMicrophoneGate = (iframe: HTMLIFrameElement) => {
         closeTimer = undefined
       }
       enabled = next
+      if (gateOriginalTrack) for (const track of tracks) track.enabled = next
       const applyGain = () => {
         for (const gain of gainNodes) {
           const now = gain.context.currentTime

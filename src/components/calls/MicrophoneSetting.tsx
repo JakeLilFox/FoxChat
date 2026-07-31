@@ -134,9 +134,16 @@ export function MicrophoneSetting() {
   }, [testing, monitorReady, inputMode, prerollMs])
 
   const grantAccess = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    for (const track of stream.getTracks()) track.stop()
-    await refresh()
+    setMicrophoneError('')
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      for (const track of stream.getTracks()) track.stop()
+      await refresh()
+    } catch (error) {
+      setMicrophoneError(
+        error instanceof Error ? error.message : 'Microphone permission was not granted',
+      )
+    }
   }
 
   const changeDevice = (value: string) => {
@@ -366,6 +373,7 @@ export function MicrophoneSetting() {
                 }}
               >
                 <div
+                  data-testid="microphone-level"
                   style={{
                     position: 'absolute',
                     inset: 0,

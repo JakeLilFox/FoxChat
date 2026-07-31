@@ -2833,6 +2833,27 @@ export const EmojiPanel = styled.div`
   border-radius: 10px;
   background: ${(p) => p.theme.panel};
   color: ${(p) => p.theme.text};
+  .emojiSearch {
+    margin-bottom: 8px;
+    border-color: ${(p) => p.theme.border};
+    background: ${(p) => p.theme.input};
+    color: ${(p) => p.theme.text};
+  }
+  .emojiSearch input {
+    background: transparent;
+    color: ${(p) => p.theme.text};
+  }
+  .emojiSearch input::placeholder,
+  .emojiSearch .ant-input-prefix,
+  .emojiSearch .ant-input-clear-icon {
+    color: ${(p) => p.theme.muted};
+  }
+  .emojiSearch:hover,
+  .emojiSearch:focus,
+  .emojiSearch.ant-input-affix-wrapper-focused {
+    border-color: ${(p) => p.theme.accent};
+    box-shadow: none;
+  }
   .ant-tabs-tab,
   .ant-tabs-tab-btn,
   .ant-empty-description {

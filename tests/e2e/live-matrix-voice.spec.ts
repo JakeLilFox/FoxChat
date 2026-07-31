@@ -15,6 +15,8 @@ import { pace, retryMutatingRequest } from './support/retry'
 import { openRoomActions, signIn } from './support/ui'
 
 const live = liveMatrixConfig()
+const linuxSystemMicrophone =
+  process.platform === 'linux' && process.env.LINUX_SYSTEM_MIC_E2E === 'true'
 
 const callFrameLocator = (page: Page) => page.frameLocator('iframe[title$="call engine"]')
 
@@ -75,7 +77,7 @@ test.describe('live voice-channel and screenshare journey', () => {
     const account2 = live.account2!
     const runId = `${Date.now()}-${testInfo.retry}-${testInfo.workerIndex}`
     roomName = `${live.roomPrefix} Voice ${runId}`
-    const tone1Hz = 523
+    const tone1Hz = linuxSystemMicrophone ? 440 : 523
     const tone2Hz = 349
     const tone1Path = join(scratchDir, 'tone1.wav')
     const tone2Path = join(scratchDir, 'tone2.wav')
@@ -89,7 +91,9 @@ test.describe('live voice-channel and screenshare journey', () => {
     let journeyError: unknown
 
     try {
-      browser1 = await launchMediaBrowser({ fakeAudioWavPath: tone1Path })
+      browser1 = await launchMediaBrowser(
+        linuxSystemMicrophone ? { useSystemMediaDevices: true } : { fakeAudioWavPath: tone1Path },
+      )
       browser2 = await launchMediaBrowser({ fakeAudioWavPath: tone2Path })
       const context1 = await browser1.newContext({
         baseURL,
@@ -167,6 +171,13 @@ test.describe('live voice-channel and screenshare journey', () => {
       })
 
       await test.step('both join the voice channel', async () => {
+        if (linuxSystemMicrophone)
+          await page1!.evaluate(() => {
+            Object.defineProperty(window, '__TAURI_INTERNALS__', {
+              configurable: true,
+              value: {},
+            })
+          })
         await joinVoiceChannel(page1!)
         await joinVoiceChannel(page2!)
         await waitForCallConnected(page1!)

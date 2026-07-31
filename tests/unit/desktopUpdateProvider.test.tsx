@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const updateMocks = vi.hoisted(() => ({
   checkForDesktopUpdate: vi.fn(),
-  isDesktopApp: vi.fn(() => true),
+  desktopUpdateChecksEnabled: vi.fn(() => true),
   isDesktopUpdateSkipped: vi.fn(() => false),
   skipDesktopUpdate: vi.fn(),
 }))
@@ -33,7 +33,8 @@ describe('desktop update provider', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     updateMocks.checkForDesktopUpdate.mockReset()
-    updateMocks.isDesktopApp.mockClear()
+    updateMocks.desktopUpdateChecksEnabled.mockReset()
+    updateMocks.desktopUpdateChecksEnabled.mockReturnValue(true)
     updateMocks.isDesktopUpdateSkipped.mockClear()
     updateMocks.skipDesktopUpdate.mockClear()
     ;(
@@ -120,6 +121,28 @@ describe('desktop update provider', () => {
       await Promise.resolve()
     })
     expect(updateMocks.checkForDesktopUpdate).toHaveBeenCalledTimes(3)
+
+    await act(async () => root.unmount())
+  })
+
+  it('does not schedule update checks for a development build', async () => {
+    updateMocks.desktopUpdateChecksEnabled.mockReturnValue(false)
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(
+        <DesktopUpdateProvider>
+          <span>Development app</span>
+        </DesktopUpdateProvider>,
+      )
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(2 * 60 * 60 * 1_000)
+      await Promise.resolve()
+    })
+
+    expect(updateMocks.checkForDesktopUpdate).not.toHaveBeenCalled()
 
     await act(async () => root.unmount())
   })

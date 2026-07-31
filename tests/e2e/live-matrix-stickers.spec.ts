@@ -900,6 +900,14 @@ test.describe('live sticker pack journey', () => {
             timeout: 30_000,
           })
         }
+        const search = page!.getByRole('searchbox', { name: 'Search emoji and stickers' })
+        await search.fill('pfp2')
+        await expect(packButton(page!, 'pfp2')).toBeVisible()
+        await expect(packButton(page!, 'pfp1')).toHaveCount(0)
+        await expect(packButton(page!, 'pfp3')).toHaveCount(0)
+        await search.clear()
+        await expect(packButton(page!, 'pfp1')).toBeVisible()
+        await expect(packButton(page!, 'pfp3')).toBeVisible()
         await packButton(page!, 'pfp2').click()
         await expect(page!.locator('[data-event-id^="$"]').last().locator('img')).toHaveAttribute(
           'src',

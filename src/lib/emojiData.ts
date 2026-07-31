@@ -263,6 +263,16 @@ export const rememberRecent = <T>(key: string, value: T, identity: (item: T) => 
   window.dispatchEvent(new CustomEvent('foxchat-recents', { detail: key }))
   return next
 }
+export const matchesPickerSearch = (query: string, ...values: Array<string | undefined>) => {
+  const terms = query.normalize('NFKD').toLocaleLowerCase().trim().split(/\s+/).filter(Boolean)
+  if (!terms.length) return true
+  const searchable = values
+    .filter((value): value is string => !!value)
+    .join(' ')
+    .normalize('NFKD')
+    .toLocaleLowerCase()
+  return terms.every((term) => searchable.includes(term))
+}
 export const forgetRecents = <T>(key: string, shouldForget: (item: T) => boolean) => {
   const current = readRecent<T>(key)
   const next = current.filter((item) => !shouldForget(item))

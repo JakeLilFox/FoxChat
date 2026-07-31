@@ -3,13 +3,13 @@ FROM archlinux:base-devel AS tools
 RUN pacman -Syu --noconfirm --needed cargo
 RUN cargo install tauri-driver --locked --root /opt/tauri-driver
 
-FROM ubuntu:24.04 AS webdriver
+FROM debian:trixie AS webdriver
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends webkit2gtk-driver \
+    && apt-get install -y --no-install-recommends webkitgtk-webdriver \
     && mkdir -p /opt/webkit-webdriver/lib \
     && cp /usr/bin/WebKitWebDriver /opt/webkit-webdriver/WebKitWebDriver \
-    && cp -a /usr/lib/x86_64-linux-gnu/libicu*.so.74* /opt/webkit-webdriver/lib/ \
+    && cp -a /usr/lib/x86_64-linux-gnu/libicu*.so.76* /opt/webkit-webdriver/lib/ \
     && rm -rf /var/lib/apt/lists/*
 
 FROM archlinux:base
@@ -22,26 +22,44 @@ RUN pacman -Syu --noconfirm --needed \
       curl \
       dbus \
       fuse2 \
+      gstreamer \
       gtk3 \
       libappindicator-gtk3 \
       librsvg \
       mesa \
       nodejs \
+      gst-plugins-base \
+      gst-plugins-bad \
+      gst-plugins-good \
+      libnice \
+      gst-plugin-pipewire \
+      pipewire \
+      pipewire-pulse \
+      wireplumber \
       ttf-dejavu \
       webkit2gtk-4.1 \
+      xdotool \
       xorg-server-xvfb \
       xorg-xauth \
     && curl -fsSL \
       https://archive.archlinux.org/packages/l/llvm-libs/llvm-libs-17.0.6-5-x86_64.pkg.tar.zst \
       -o /tmp/llvm17.pkg.tar.zst \
+    && curl -fsSL \
+      https://archive.archlinux.org/packages/l/libxml2/libxml2-2.12.6-2-x86_64.pkg.tar.zst \
+      -o /tmp/libxml2.pkg.tar.zst \
+    && curl -fsSL \
+      https://archive.archlinux.org/packages/i/icu/icu-74.2-2-x86_64.pkg.tar.zst \
+      -o /tmp/icu74.pkg.tar.zst \
     && mkdir -p /opt/llvm17 \
     && bsdtar -xf /tmp/llvm17.pkg.tar.zst -C /opt/llvm17 \
+    && bsdtar -xf /tmp/libxml2.pkg.tar.zst -C /opt/llvm17 \
+    && bsdtar -xf /tmp/icu74.pkg.tar.zst -C /opt/llvm17 \
     && pacman -U --noconfirm \
       https://archive.archlinux.org/packages/m/mesa/mesa-1%3A24.0.7-3-x86_64.pkg.tar.zst \
-    && rm -f /tmp/llvm17.pkg.tar.zst \
+    && rm -f /tmp/llvm17.pkg.tar.zst /tmp/libxml2.pkg.tar.zst /tmp/icu74.pkg.tar.zst \
     && pacman -Scc --noconfirm
 
-ENV LD_LIBRARY_PATH=/opt/llvm17/usr/lib
+ENV LD_LIBRARY_PATH=/opt/llvm17/usr/lib:/opt/webkit-webdriver/lib
 
 COPY --from=tools /opt/tauri-driver/bin/tauri-driver /usr/local/bin/tauri-driver
 COPY --from=webdriver /opt/webkit-webdriver /opt/webkit-webdriver

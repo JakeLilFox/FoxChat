@@ -1,15 +1,15 @@
 import { BUILD_VERSION } from '../../lib/constants'
 import { formatFileSize } from '../../lib/format'
-import {
-  clearMediaCache,
-  mediaCacheUsage,
-  type MediaCacheCategory,
-} from '../../lib/mediaCache'
+import { clearMediaCache, mediaCacheUsage, type MediaCacheCategory } from '../../lib/mediaCache'
 import { Button, Descriptions, Divider, List as AntList, Typography, App as AntApp } from 'antd'
 import { DeleteOutlined } from '@ant-design/icons'
 import { useEffect, useRef, useState } from 'react'
 import type { Update } from '@tauri-apps/plugin-updater'
-import { checkForDesktopUpdate, isDesktopApp } from '../../platform/desktopUpdates'
+import {
+  checkForDesktopUpdate,
+  isDesktopApp,
+  isDevelopmentBuildVersion,
+} from '../../platform/desktopUpdates'
 import { DesktopUpdatePanel } from '../DesktopUpdatePanel'
 
 type CheckStatus =
@@ -39,7 +39,9 @@ function MediaCacheSettings() {
     try {
       await clearMediaCache(category)
       refresh()
-      message.success(category ? `${CACHE_CATEGORY_LABELS[category]} cache cleared` : 'Image cache cleared')
+      message.success(
+        category ? `${CACHE_CATEGORY_LABELS[category]} cache cleared` : 'Image cache cleared',
+      )
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Could not clear the cache')
     } finally {
@@ -61,8 +63,8 @@ function MediaCacheSettings() {
       <h3>Image cache</h3>
       <Typography.Paragraph type="secondary">
         Stickers, message images, link previews, and profile pictures are cached on this device so
-        rooms load without re-downloading everything on every restart. Each kind is kept and
-        cleaned up separately.
+        rooms load without re-downloading everything on every restart. Each kind is kept and cleaned
+        up separately.
       </Typography.Paragraph>
       <AntList
         bordered
@@ -107,6 +109,7 @@ function MediaCacheSettings() {
 
 export function InfoSettings() {
   const desktop = isDesktopApp()
+  const developmentBuild = isDevelopmentBuildVersion()
   const updateRef = useRef<Update | null>(null)
   const [update, setUpdate] = useState<Update | null>(null)
   const [checking, setChecking] = useState(false)
@@ -179,9 +182,11 @@ export function InfoSettings() {
           <Divider />
           <h3>Desktop updates</h3>
           <Typography.Paragraph type="secondary">
-            Check for a signed FoxChat desktop release and install it without leaving the app.
+            {developmentBuild
+              ? 'Update checks are disabled for development builds.'
+              : 'Check for a signed FoxChat desktop release and install it without leaving the app.'}
           </Typography.Paragraph>
-          <Button loading={checking} onClick={() => void checkNow()}>
+          <Button loading={checking} disabled={developmentBuild} onClick={() => void checkNow()}>
             {checking ? 'Checking for updates…' : 'Check for updates'}
           </Button>
           {status.kind === 'current' && (

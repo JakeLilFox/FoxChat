@@ -5,7 +5,9 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { InfoSettings } from '../../src/components/settings/InfoSettings'
 import {
+  desktopUpdateChecksEnabled,
   isDesktopApp,
+  isDevelopmentBuildVersion,
   isDesktopUpdateSkipped,
   SKIPPED_DESKTOP_UPDATE_KEY,
   skipDesktopUpdate,
@@ -49,6 +51,18 @@ describe('desktop update preferences', () => {
     expect(supportsDesktopUpdates('apk')).toBe(false)
   })
 
+  it('disables desktop update checks for development builds', () => {
+    expect(isDevelopmentBuildVersion()).toBe(true)
+    expect(isDevelopmentBuildVersion(' development ')).toBe(true)
+    expect(isDevelopmentBuildVersion('DEVELOPMENT')).toBe(true)
+    expect(isDevelopmentBuildVersion('1.4.2')).toBe(false)
+
+    window.__TAURI_INTERNALS__ = { invoke: vi.fn() }
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('FoxChat Windows')
+    expect(desktopUpdateChecksEnabled()).toBe(false)
+    expect(desktopUpdateChecksEnabled('1.4.2')).toBe(true)
+  })
+
   it('renders the update settings only in the native desktop app', () => {
     expect(renderToStaticMarkup(createElement(InfoSettings))).not.toContain('Desktop updates')
 
@@ -57,6 +71,8 @@ describe('desktop update preferences', () => {
 
     const desktopSettings = renderToStaticMarkup(createElement(InfoSettings))
     expect(desktopSettings).toContain('Desktop updates')
+    expect(desktopSettings).toContain('Update checks are disabled for development builds.')
+    expect(desktopSettings).toContain('disabled')
     expect(desktopSettings).toContain('Check for updates')
   })
 })

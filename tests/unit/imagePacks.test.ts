@@ -8,6 +8,7 @@ import {
   deduplicateRoomPacks,
   forgetRecents,
   imagePackAccounts,
+  matchesPickerSearch,
   moveImagePackOrder,
   orderedImageEntries,
   orderImagePacks,
@@ -20,6 +21,18 @@ import {
   type MatrixEmotePack,
 } from '../../src/lib/emojiData'
 import { MatrixClientService } from '../../src/matrix/MatrixClientService'
+
+describe('matchesPickerSearch', () => {
+  it('matches every normalized search term across item and pack labels', () => {
+    expect(matchesPickerSearch('party parrot', 'Parrot', 'Party animals')).toBe(true)
+    expect(matchesPickerSearch('CAFÉ', 'Cafe\u0301 sticker')).toBe(true)
+    expect(matchesPickerSearch('party missing', 'Party parrot')).toBe(false)
+  })
+
+  it('treats an empty search as a match', () => {
+    expect(matchesPickerSearch('   ', 'Anything')).toBe(true)
+  })
+})
 
 describe('preferNonEmptyPack', () => {
   it('prefers a candidate that actually has images over an earlier empty one', () => {
