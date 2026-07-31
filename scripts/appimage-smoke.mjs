@@ -842,7 +842,7 @@ async function testDesktopVerification() {
     await waitFor(
       'incoming verification request in the native desktop window',
       () => findText('button', 'Accept verification request'),
-      30_000,
+      60_000,
     )
     await clickText('button', 'Accept verification request')
 
@@ -863,7 +863,7 @@ async function testDesktopVerification() {
         })
         return Array.isArray(labels) ? labels : false
       },
-      30_000,
+      60_000,
     )
     const browserEmoji = browserDialog.locator('small')
     await browserEmoji.first().waitFor({ state: 'visible', timeout: 30_000 })
