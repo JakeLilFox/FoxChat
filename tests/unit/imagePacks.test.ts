@@ -52,6 +52,7 @@ describe('inlineEmoteSuggestions', () => {
   it('scores containment at 0.5 and each matching leading character at 1', () => {
     expect(inlineEmoteMatchScore('fox', 'afox')).toBe(0.5)
     expect(inlineEmoteMatchScore('fox', 'firefox')).toBe(1.5)
+    expect(inlineEmoteMatchScore('ffox', 'firefox')).toBe(1.5)
     expect(inlineEmoteMatchScore('fox', 'fox-party')).toBe(3.5)
   })
 
@@ -73,6 +74,12 @@ describe('inlineEmoteSuggestions', () => {
       leading,
       contained,
     ])
+  })
+
+  it('keeps a split leading and contained match eligible for suggestions', () => {
+    const firefox = { name: 'firefox', body: 'Firefox', url: 'mxc://example.org/firefox' }
+
+    expect(inlineEmoteSuggestions('ffox', [firefox], [])).toEqual([firefox])
   })
 
   it('uses the most recently selected image when packs contain the same name', () => {

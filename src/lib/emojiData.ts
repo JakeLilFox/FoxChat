@@ -391,14 +391,15 @@ export const inlineEmoteMatchScore = (query: string, ...values: Array<string | u
     0,
     ...values.map((value) => {
       const normalizedValue = value?.normalize('NFKD').toLocaleLowerCase() ?? ''
-      let score = normalizedValue.includes(normalizedQuery) ? 0.5 : 0
-      for (
-        let index = 0;
-        index < normalizedQuery.length && normalizedValue[index] === normalizedQuery[index];
-        index++
+      let leadingMatches = 0
+      while (
+        leadingMatches < normalizedQuery.length &&
+        normalizedValue[leadingMatches] === normalizedQuery[leadingMatches]
       )
-        score++
-      return score
+        leadingMatches++
+      const remainingQuery = normalizedQuery.slice(leadingMatches)
+      const remainingValue = normalizedValue.slice(leadingMatches)
+      return !remainingQuery || remainingValue.includes(remainingQuery) ? leadingMatches + 0.5 : 0
     }),
   )
 }
@@ -416,7 +417,7 @@ export const inlineEmoteSuggestions = (
       recent: recentPositions.get(emote.url),
       score: inlineEmoteMatchScore(query, emote.name, emote.body),
     }))
-    .filter(({ emote }) => matchesPickerSearch(query, emote.name, emote.body))
+    .filter(({ score }) => !query.trim() || score > 0)
     .sort((first, second) => {
       if (first.score !== second.score) return second.score - first.score
       if (first.recent !== undefined && second.recent !== undefined)
