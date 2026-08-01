@@ -384,6 +384,24 @@ export const matchesPickerSearch = (query: string, ...values: Array<string | und
     .toLocaleLowerCase()
   return terms.every((term) => searchable.includes(term))
 }
+export const inlineEmoteMatchScore = (query: string, ...values: Array<string | undefined>) => {
+  const normalizedQuery = query.normalize('NFKD').toLocaleLowerCase().trim()
+  if (!normalizedQuery) return 0
+  return Math.max(
+    0,
+    ...values.map((value) => {
+      const normalizedValue = value?.normalize('NFKD').toLocaleLowerCase() ?? ''
+      let score = normalizedValue.includes(normalizedQuery) ? 0.5 : 0
+      for (
+        let index = 0;
+        index < normalizedQuery.length && normalizedValue[index] === normalizedQuery[index];
+        index++
+      )
+        score++
+      return score
+    }),
+  )
+}
 export const inlineEmoteSuggestions = (
   query: string,
   emotes: MatrixEmote[],
@@ -392,9 +410,15 @@ export const inlineEmoteSuggestions = (
 ) => {
   const recentPositions = new Map(recent.map((emote, index) => [emote.url, index]))
   const matches = emotes
-    .map((emote, index) => ({ emote, index, recent: recentPositions.get(emote.url) }))
+    .map((emote, index) => ({
+      emote,
+      index,
+      recent: recentPositions.get(emote.url),
+      score: inlineEmoteMatchScore(query, emote.name, emote.body),
+    }))
     .filter(({ emote }) => matchesPickerSearch(query, emote.name, emote.body))
     .sort((first, second) => {
+      if (first.score !== second.score) return second.score - first.score
       if (first.recent !== undefined && second.recent !== undefined)
         return first.recent - second.recent
       if (first.recent !== undefined) return -1

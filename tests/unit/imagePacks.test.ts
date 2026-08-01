@@ -8,6 +8,7 @@ import {
   deduplicateRoomPacks,
   forgetRecents,
   imagePackAccounts,
+  inlineEmoteMatchScore,
   inlineEmoteSuggestions,
   IMAGE_PACK_STATE_TARGET_BYTES,
   jsonByteLength,
@@ -48,6 +49,12 @@ describe('inlineEmoteSuggestions', () => {
     { name: 'party-dog', body: 'Party dog', url: 'mxc://example.org/dog' },
   ]
 
+  it('scores containment at 0.5 and each matching leading character at 1', () => {
+    expect(inlineEmoteMatchScore('fox', 'afox')).toBe(0.5)
+    expect(inlineEmoteMatchScore('fox', 'firefox')).toBe(1.5)
+    expect(inlineEmoteMatchScore('fox', 'fox-party')).toBe(3.5)
+  })
+
   it('filters before sorting matches by most recent use and limiting to three', () => {
     expect(
       inlineEmoteSuggestions('party', emotes, [emotes[2], emotes[0]], 3).map((emote) => emote.name),
@@ -56,6 +63,16 @@ describe('inlineEmoteSuggestions', () => {
 
   it('does not let a recent non-match into the results', () => {
     expect(inlineEmoteSuggestions('fox', emotes, [emotes[0]])).toEqual([emotes[1]])
+  })
+
+  it('ranks a leading character match above a contained match before considering recency', () => {
+    const contained = { name: 'firefox', body: 'Firefox', url: 'mxc://example.org/firefox' }
+    const leading = { name: 'fox-party', body: 'Fox party', url: 'mxc://example.org/fox-party' }
+
+    expect(inlineEmoteSuggestions('fox', [contained, leading], [contained])).toEqual([
+      leading,
+      contained,
+    ])
   })
 
   it('uses the most recently selected image when packs contain the same name', () => {
