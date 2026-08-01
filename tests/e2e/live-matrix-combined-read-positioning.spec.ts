@@ -358,6 +358,13 @@ test.describe('live combined-account read-state positioning journey', () => {
         // sender creates and shares its first Megolm session.
         await waitForParticipantCount(page!, 3)
         await waitForParticipantCount(remotePage!, 3)
+        // Reload the independent sender after all joins so its crypto device list starts from a
+        // sync that already contains every recipient. A participant row only proves membership;
+        // it does not prove that the sender has queried the new devices before creating Megolm.
+        await remotePage!.reload()
+        await expect(roomRow(remotePage!, roomName)).toBeVisible({ timeout: 60_000 })
+        await openRoom(remotePage!, roomName)
+        await waitForParticipantCount(remotePage!, 3)
       })
 
       await test.step('the independent account sends encrypted messages while account 1 reads them and account 2 never views the room', async () => {

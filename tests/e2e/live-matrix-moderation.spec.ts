@@ -33,7 +33,7 @@ const moderateViaContextMenu = async (
 
 const joinRoomById = async (page: Page, roomId: string) => {
   await openRoomActions(page)
-  await page.getByText('Join a room', { exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Join a room', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Join a room' })
   await expect(dialog).toBeVisible()
   await dialog.getByLabel('Room ID or alias').fill(roomId)
@@ -50,7 +50,10 @@ const expectJoinIsBlocked = async (page: Page, roomId: string) => {
   const dialog = await joinRoomById(page, roomId)
   await expect(dialog).toBeVisible({ timeout: 10_000 })
   await expect(page.getByText(/banned/i).last()).toBeVisible({ timeout: 15_000 })
-  await dialog.getByRole('button', { name: /^Close$|^Cancel$/ }).click().catch(() => undefined)
+  await dialog
+    .getByRole('button', { name: /^Close$|^Cancel$/ })
+    .click()
+    .catch(() => undefined)
 }
 
 const unbanViaSettings = async (page: Page, roomName: string, userId: string) => {
@@ -132,9 +135,9 @@ test.describe('live moderation journey', () => {
         await openParticipants(owner!)
         await moderateViaContextMenu(owner!, account2Id!, 'Kick from room')
         await expect(participantRow(owner!, account2Id!)).toHaveCount(0, { timeout: 30_000 })
-        await expect(
-          member!.getByTestId('room-row').filter({ hasText: roomName }),
-        ).toHaveCount(0, { timeout: 60_000 })
+        await expect(member!.getByTestId('room-row').filter({ hasText: roomName })).toHaveCount(0, {
+          timeout: 60_000,
+        })
       })
 
       await test.step('a kick does not block rejoining a public room', async () => {
@@ -148,9 +151,9 @@ test.describe('live moderation journey', () => {
         await openParticipants(owner!)
         await moderateViaContextMenu(owner!, account2Id!, 'Ban from room')
         await expect(participantRow(owner!, account2Id!)).toHaveCount(0, { timeout: 30_000 })
-        await expect(
-          member!.getByTestId('room-row').filter({ hasText: roomName }),
-        ).toHaveCount(0, { timeout: 60_000 })
+        await expect(member!.getByTestId('room-row').filter({ hasText: roomName })).toHaveCount(0, {
+          timeout: 60_000,
+        })
       })
 
       await test.step('a ban blocks rejoining the public room', async () => {
@@ -275,34 +278,36 @@ test.describe('live moderation journey', () => {
       await test.step('the second account joins both the space and its channel directly by ID', async () => {
         await expectJoinSucceeds(member!, spaceId!)
         await expectJoinSucceeds(member!, channelId!)
-        await expect(
-          member!.getByTestId('room-row').filter({ hasText: spaceName }),
-        ).toBeVisible({ timeout: 60_000 })
+        await expect(member!.getByTestId('room-row').filter({ hasText: spaceName })).toBeVisible({
+          timeout: 60_000,
+        })
       })
 
       await test.step('kick the member from the space', async () => {
         await openChannelInSpace(owner!, spaceName, channelName)
         await openParticipants(owner!)
         await moderateViaContextMenu(owner!, account2Id!, 'Kick from Space')
-        await expect(
-          member!.getByTestId('room-row').filter({ hasText: spaceName }),
-        ).toHaveCount(0, { timeout: 60_000 })
+        await expect(member!.getByTestId('room-row').filter({ hasText: spaceName })).toHaveCount(
+          0,
+          { timeout: 60_000 },
+        )
       })
 
       await test.step('a kick does not block rejoining a public space', async () => {
         await expectJoinSucceeds(member!, spaceId!)
-        await expect(
-          member!.getByTestId('room-row').filter({ hasText: spaceName }),
-        ).toBeVisible({ timeout: 60_000 })
+        await expect(member!.getByTestId('room-row').filter({ hasText: spaceName })).toBeVisible({
+          timeout: 60_000,
+        })
       })
 
       await test.step('ban the member from the space', async () => {
         await openChannelInSpace(owner!, spaceName, channelName)
         await openParticipants(owner!)
         await moderateViaContextMenu(owner!, account2Id!, 'Ban from Space')
-        await expect(
-          member!.getByTestId('room-row').filter({ hasText: spaceName }),
-        ).toHaveCount(0, { timeout: 60_000 })
+        await expect(member!.getByTestId('room-row').filter({ hasText: spaceName })).toHaveCount(
+          0,
+          { timeout: 60_000 },
+        )
       })
 
       await test.step('a ban blocks rejoining the public space', async () => {
@@ -312,9 +317,9 @@ test.describe('live moderation journey', () => {
       await test.step('unbanning restores the ability to rejoin the space', async () => {
         await unbanViaSettings(owner!, spaceName, account2Id!)
         await expectJoinSucceeds(member!, spaceId!)
-        await expect(
-          member!.getByTestId('room-row').filter({ hasText: spaceName }),
-        ).toBeVisible({ timeout: 60_000 })
+        await expect(member!.getByTestId('room-row').filter({ hasText: spaceName })).toBeVisible({
+          timeout: 60_000,
+        })
       })
     } catch (error) {
       journeyError = error

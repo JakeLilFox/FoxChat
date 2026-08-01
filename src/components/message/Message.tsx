@@ -1318,11 +1318,13 @@ export const Message = memo(function Message({
         <Dropdown
           destroyOnHidden
           open
+          styles={{ root: { zIndex: 1100 } }}
           onOpenChange={(open) => {
             if (!open) closeMenu()
           }}
           placement="bottomLeft"
           menu={{
+            subMenuCloseDelay: 0.5,
             items: [
               ...(menu?.image
                 ? [

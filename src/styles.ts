@@ -998,7 +998,7 @@ export const MessageReactionAction = styled(MessageReplyAction)`
 export const MessageMenuBackdrop = styled.button`
   position: fixed;
   inset: 0;
-  z-index: 1049;
+  z-index: 1000;
   width: 100%;
   height: 100%;
   margin: 0;
