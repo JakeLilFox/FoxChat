@@ -22,6 +22,10 @@ import { formatFileSize } from '../../lib/format'
 import { useMediaUrl } from '../../lib/hooks'
 import { showImageGallery, showImageViewer, type ViewerImage } from '../../lib/media'
 import { firstPreviewUrl } from '../../lib/messageText'
+import {
+  messageEncryptionTrustPresentation,
+  type MessageEncryptionTrust,
+} from '../../lib/messageEncryptionTrust'
 import { roomRank } from '../../lib/roleHelpers'
 import { fittedMediaSize, messagePosition } from '../../lib/timelineHelpers'
 import {
@@ -166,6 +170,7 @@ function MessageGalleryTile({
 export const Message = memo(function Message({
   event,
   gallery,
+  revision,
 }: {
   event: MatrixEvent
   gallery?: MatrixEvent[]
@@ -175,6 +180,23 @@ export const Message = memo(function Message({
   const savedReactions = useRecents<string>(recentStorage.reactions)
   const quickReactions = [...new Set([...savedReactions, ...QUICK_REACTIONS])].slice(0, 5)
   const client = matrixService.clientForEvent(event)
+  const encrypted = event.isEncrypted()
+  const [encryptionTrust, setEncryptionTrust] = useState<MessageEncryptionTrust>()
+  useEffect(() => {
+    let cancelled = false
+    if (!encrypted) {
+      setEncryptionTrust(undefined)
+      return
+    }
+    setEncryptionTrust(undefined)
+    void matrixService.messageEncryptionTrust(event).then((trust) => {
+      if (!cancelled) setEncryptionTrust(trust)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [encrypted, event, revision])
+  const encryptionTrustDisplay = messageEncryptionTrustPresentation(encryptionTrust)
   const userId = client?.getUserId()
   const ownAccountUserIds = new Set(
     matrixService.availableAccounts().map((account) => account.userId),
@@ -1161,7 +1183,15 @@ export const Message = memo(function Message({
                 minute: '2-digit',
               })}
             </span>
-            {event.isEncrypted() && <LockOutlined style={{ marginLeft: 5 }} />}
+            {encrypted && (
+              <Tooltip title={encryptionTrustDisplay.tooltip}>
+                <LockOutlined
+                  data-testid="message-encryption-trust"
+                  aria-label={encryptionTrustDisplay.tooltip}
+                  style={{ marginLeft: 5, color: encryptionTrustDisplay.color }}
+                />
+              </Tooltip>
+            )}
           </Author>
         )}
         {rendered}

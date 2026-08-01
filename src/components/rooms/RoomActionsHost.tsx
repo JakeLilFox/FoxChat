@@ -81,8 +81,12 @@ export function RoomActionsHost() {
     try {
       if (action === 'join') {
         const joined = await matrixService.joinRoomAs(values.room, values.accountId)
+        // Membership can take another sync to appear in the room list. Preserve the
+        // account used for the join so navigation can open the room immediately.
+        matrixService.selectRoomAccount(joined.roomId, values.accountId, true)
         message.success(`Joined ${joined.name}`)
-        close(true)
+        setRoomActionUrl(undefined, true)
+        writeRoomUrl(joined.roomId, false)
       } else if (action === 'create') {
         const created = await matrixService.createRoomAs(
           values.accountId,

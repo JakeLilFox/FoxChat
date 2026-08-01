@@ -38,6 +38,13 @@ const openRoom = async (page: Page, name: string) => {
   })
 }
 
+const waitForParticipantCount = async (page: Page, count: number) => {
+  const participants = page.getByText(`Participants · ${count}`, { exact: true })
+  if (!(await participants.isVisible()))
+    await page.getByRole('button', { name: 'Room information' }).click()
+  await expect(participants).toBeVisible({ timeout: 60_000 })
+}
+
 const unreadDivider = (page: Page) =>
   page.getByTestId('timeline').getByText('Unread messages', { exact: true })
 
@@ -346,6 +353,11 @@ test.describe('live combined-account read-state positioning journey', () => {
         await joinRoomAs(account3Session!, roomId!)
         await expect(roomRow(remotePage!, roomName)).toBeVisible({ timeout: 60_000 })
         await openRoom(remotePage!, roomName)
+        // Raw joins complete before the long-polling browser clients necessarily process the
+        // membership events. Wait for both sides to load all encryption targets before the
+        // sender creates and shares its first Megolm session.
+        await waitForParticipantCount(page!, 3)
+        await waitForParticipantCount(remotePage!, 3)
       })
 
       await test.step('the independent account sends encrypted messages while account 1 reads them and account 2 never views the room', async () => {

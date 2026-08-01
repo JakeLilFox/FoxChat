@@ -35,10 +35,12 @@ function ThreadRow({ thread, onOpen }: { thread: Thread; onOpen: () => void }) {
 function ThreadReplyPanel({
   room,
   threadRootId,
+  revision,
   onBack,
 }: {
   room: Room
   threadRootId: string
+  revision?: number | string
   onBack: () => void
 }) {
   const { message } = AntApp.useApp()
@@ -84,9 +86,9 @@ function ThreadReplyPanel({
         <b>Thread</b>
       </div>
       <div className="body">
-        {rootEvent && <Message event={rootEvent} />}
+        {rootEvent && <Message event={rootEvent} revision={revision} />}
         {replies.map((event) => (
-          <Message key={event.getId()} event={event} />
+          <Message key={event.getId()} event={event} revision={revision} />
         ))}
       </div>
       <ThreadComposer>
@@ -118,10 +120,12 @@ function ThreadReplyPanel({
 export function ThreadHost({
   room,
   view,
+  revision,
   onClose,
 }: {
   room?: Room
   view?: string
+  revision?: number | string
   onClose: () => void
 }) {
   if (!room || !view) return null
@@ -145,7 +149,12 @@ export function ThreadHost({
           )}
         </>
       ) : (
-        <ThreadReplyPanel room={room} threadRootId={view} onBack={() => openThreadUrl('list')} />
+        <ThreadReplyPanel
+          room={room}
+          threadRootId={view}
+          revision={revision}
+          onBack={() => openThreadUrl('list')}
+        />
       )}
     </Drawer>
   )

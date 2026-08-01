@@ -2748,6 +2748,7 @@ function TimelineView({
       <ThreadHost
         room={room}
         view={threadView}
+        revision={`${matrixRevision}:${renderTick}`}
         onClose={() => {
           setThreadView(undefined)
           closeThreadUrl()

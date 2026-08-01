@@ -453,8 +453,10 @@ export function SettingsDialog({
                   {device.displayName}{' '}
                   {device.verified ? (
                     <Tag color="success">Verified</Tag>
-                  ) : device.crossSigned ? (
-                    <Tag color="processing">Cross-signed</Tag>
+                  ) : device.signedByOwner ? (
+                    <Tag color="processing">Signed by owner</Tag>
+                  ) : device.locallyVerified ? (
+                    <Tag color="warning">Trusted only on this device</Tag>
                   ) : (
                     <Tag>Unverified</Tag>
                   )}

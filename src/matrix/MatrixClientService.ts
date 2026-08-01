@@ -31,6 +31,7 @@ import {
 } from 'matrix-js-sdk'
 import {
   CryptoEvent,
+  EventShieldColour,
   VerificationPhase,
   VerificationRequestEvent,
   type VerificationRequest,
@@ -50,6 +51,7 @@ import {
 import { timelineAppearanceSettings, VOICE_CHANNEL_ROOM_TYPE } from '../lib/constants'
 import { isHiddenTimelineActivity, isVisibleMessageEvent } from '../lib/eventHelpers'
 import { isServerEventId } from '../lib/matrixIdentifiers'
+import type { MessageEncryptionTrust } from '../lib/messageEncryptionTrust'
 import { applyPermissionLevels } from '../lib/powerLevelPaths'
 import { DEVICE_DELETE_ACTION } from '../lib/accountManagement'
 import { GALLERY_EVENT_FIELD } from '../lib/gallery'
@@ -266,6 +268,11 @@ export class MatrixClientService {
   private secondaryClients = new Map<string, MatrixClientService>()
   private roomOwners = new WeakMap<Room, MatrixClient>()
   private eventOwners = new WeakMap<MatrixEvent, MatrixClient>()
+  private messageEncryptionTrustCache = new WeakMap<MatrixEvent, Promise<MessageEncryptionTrust>>()
+  private messageSenderDeviceTrustCache = new WeakMap<
+    MatrixClient,
+    Map<string, Promise<MessageEncryptionTrust>>
+  >()
   private roomReadOwners = new Map<string, MatrixClient>()
   private startInFlight?: Promise<MatrixClient>
   private presenceTrackingCleanup?: () => void
@@ -1013,14 +1020,17 @@ export class MatrixClientService {
       this.scheduleAllRoomDecryptionRetry(true)
     })
     client.on(CryptoEvent.KeysChanged, () => {
+      this.invalidateMessageEncryptionTrust()
       this.observers.forEach((x) => x.onSync?.('CRYPTO_KEYS_CHANGED'))
       scheduleNativeCryptoSync(client, 0)
       this.scheduleAllRoomDecryptionRetry()
     })
     client.on(CryptoEvent.DevicesUpdated, () => {
+      this.invalidateMessageEncryptionTrust()
       this.observers.forEach((x) => x.onSync?.('CRYPTO_DEVICES_UPDATED'))
     })
     client.on(CryptoEvent.UserTrustStatusChanged, (userId) => {
+      this.invalidateMessageEncryptionTrust()
       this.observers.forEach((x) => x.onSync?.(`CRYPTO_USER_TRUST_STATUS_CHANGED:${userId}`))
     })
     client.on(ClientEvent.Sync, (state) => {
@@ -1184,8 +1194,10 @@ export class MatrixClientService {
               this.observers.forEach((observer) => observer.onEvent?.(event, room))
             },
             onVerificationRequest: (request) => this.publishVerificationRequest(request),
-            onSync: (state) =>
-              this.observers.forEach((observer) => observer.onSync?.(`SECONDARY:${state}`)),
+            onSync: (state) => {
+              if (state.startsWith('CRYPTO_')) this.invalidateMessageEncryptionTrust()
+              this.observers.forEach((observer) => observer.onSync?.(`SECONDARY:${state}`))
+            },
           })
           try {
             await service.start(session)
@@ -1728,6 +1740,88 @@ export class MatrixClientService {
     return this.clientForRoom(roomId)
   }
 
+  messageEncryptionTrust(event: MatrixEvent): Promise<MessageEncryptionTrust> {
+    const cached = this.messageEncryptionTrustCache.get(event)
+    if (cached) return cached
+    const pending = this.loadMessageEncryptionTrust(event).catch(
+      (): MessageEncryptionTrust => ({ kind: 'unknown' }),
+    )
+    this.messageEncryptionTrustCache.set(event, pending)
+    return pending
+  }
+
+  private invalidateMessageEncryptionTrust() {
+    this.messageEncryptionTrustCache = new WeakMap()
+    this.messageSenderDeviceTrustCache = new WeakMap()
+  }
+
+  private messageSenderDeviceTrust(
+    client: MatrixClient,
+    sender: string,
+    senderKey: string,
+  ): Promise<MessageEncryptionTrust> {
+    let clientCache = this.messageSenderDeviceTrustCache.get(client)
+    if (!clientCache) {
+      clientCache = new Map()
+      this.messageSenderDeviceTrustCache.set(client, clientCache)
+    }
+    const cacheKey = `${sender}\0${senderKey}`
+    const cached = clientCache.get(cacheKey)
+    if (cached) return cached
+    const pending = (async (): Promise<MessageEncryptionTrust> => {
+      const crypto = client.getCrypto()
+      if (!crypto) return { kind: 'unknown' }
+      const deviceMap = await crypto.getUserDeviceInfo([sender], true)
+      const device = [...(deviceMap.get(sender)?.values() ?? [])].find(
+        (candidate) => candidate.keys.get(`curve25519:${candidate.deviceId}`) === senderKey,
+      )
+      if (!device) return { kind: 'unknown' }
+      const status = await crypto.getDeviceVerificationStatus(sender, device.deviceId)
+      return {
+        kind: status?.crossSigningVerified ? 'verified' : 'unverified',
+        deviceId: device.deviceId,
+        deviceName: device.displayName,
+        signedByOwner: status?.signedByOwner ?? false,
+      }
+    })().catch((): MessageEncryptionTrust => ({ kind: 'unknown' }))
+    clientCache.set(cacheKey, pending)
+    return pending
+  }
+
+  private async loadMessageEncryptionTrust(event: MatrixEvent): Promise<MessageEncryptionTrust> {
+    if (event.isDecryptionFailure()) {
+      return { kind: 'warning', warningLevel: 'high', reason: 'DECRYPTION_FAILURE' }
+    }
+    const client = this.clientForEvent(event)
+    const crypto = client?.getCrypto()
+    const sender = event.getSender()
+    const senderKey = event.getSenderKey()
+    if (!client || !crypto || !sender || !senderKey) return { kind: 'unknown' }
+
+    const [encryptionInfo, deviceTrust] = await Promise.all([
+      crypto.getEncryptionInfoForEvent(event).catch(() => null),
+      this.messageSenderDeviceTrust(client, sender, senderKey),
+    ])
+    if (encryptionInfo?.shieldColour === EventShieldColour.RED) {
+      return {
+        kind: 'warning',
+        warningLevel: 'high',
+        reason: encryptionInfo.shieldReason ?? undefined,
+      }
+    }
+
+    if (encryptionInfo?.shieldColour === EventShieldColour.GREY) {
+      return {
+        kind: 'warning',
+        warningLevel: 'low',
+        reason: encryptionInfo.shieldReason ?? undefined,
+        deviceId: deviceTrust.deviceId,
+        deviceName: deviceTrust.deviceName,
+      }
+    }
+    return deviceTrust
+  }
+
   private clientForEventAuthor(event: MatrixEvent) {
     const roomId = event.getRoomId()
     const sender = event.getSender()
@@ -2087,7 +2181,11 @@ export class MatrixClientService {
           userAgent:
             device['org.matrix.msc3852.last_seen_user_agent'] ?? device.last_seen_user_agent,
           current: device.device_id === this.client!.getDeviceId(),
-          verified: status?.isVerified() ?? false,
+          // isVerified() also includes trust stored only in this local crypto database. The
+          // current device naturally trusts its own key, but that does not mean our other
+          // devices can verify it. Only report account-wide verification once the device's
+          // cross-signing signature is trusted.
+          verified: status?.crossSigningVerified ?? false,
           crossSigned: status?.crossSigningVerified ?? false,
           signedByOwner: status?.signedByOwner ?? false,
           locallyVerified: status?.localVerified ?? false,

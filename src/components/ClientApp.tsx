@@ -199,6 +199,12 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
         if (['PREPARED', 'SYNCING'].includes(normalized)) setInitialSyncReady(true)
         // Room callbacks carry ordinary sync changes.
         if (normalized === 'PREPARED') refresh(undefined, true)
+        if (
+          normalized.includes('CRYPTO_KEYS_CHANGED') ||
+          normalized.includes('CRYPTO_DEVICES_UPDATED') ||
+          normalized.includes('CRYPTO_USER_TRUST_STATUS_CHANGED')
+        )
+          refresh(undefined, true)
       },
     })
     const unreadPreferenceChanged = () => refresh(undefined, true)
