@@ -255,6 +255,7 @@ export class MatrixClientService {
   private decryptionRetriesInFlight = new WeakSet<MatrixEvent>()
   private secretStorageKeys = new Map<string, Uint8Array>()
   private cryptoSyncRunning?: Promise<void>
+  private currentDeviceCrossSignRunning?: Promise<void>
   private cryptoRetryTimer?: number
   private cryptoRetryInFlight?: Promise<unknown>
   private lastReadReceipts = new WeakMap<
@@ -2122,6 +2123,26 @@ export class MatrixClientService {
     return crypto.requestOwnUserVerification()
   }
 
+  private ensureCurrentDeviceCrossSigned(
+    crypto: NonNullable<ReturnType<MatrixClient['getCrypto']>>,
+    userId: string,
+    deviceId: string,
+  ) {
+    if (this.currentDeviceCrossSignRunning) return this.currentDeviceCrossSignRunning
+    const running = (async () => {
+      const status = await crypto.getDeviceVerificationStatus(userId, deviceId)
+      if (status?.signedByOwner || !(await crypto.isCrossSigningReady())) return
+      await crypto.crossSignDevice(deviceId)
+      await crypto.getUserDeviceInfo([userId], true)
+    })()
+    const tracked = running.finally(() => {
+      if (this.currentDeviceCrossSignRunning === tracked)
+        this.currentDeviceCrossSignRunning = undefined
+    })
+    this.currentDeviceCrossSignRunning = tracked
+    return tracked
+  }
+
   roomVerificationUser(room: Room) {
     const client = this.clientForRoomInstance(room)
     const ownUserId = client?.getUserId()
@@ -2163,15 +2184,28 @@ export class MatrixClientService {
   async getDeviceSessions(): Promise<MatrixDeviceSession[]> {
     if (!this.client) throw new Error('Client is not started')
     const userId = this.client.getSafeUserId()
+    const crypto = this.client.getCrypto()
     const [serverDevices, cryptoDevices] = await Promise.all([
       this.client.getDevices(),
-      this.client.getCrypto()?.getUserDeviceInfo([userId], true),
+      crypto?.getUserDeviceInfo([userId], true),
     ])
     const cryptographic = cryptoDevices?.get(userId)
+
+    // Importing cross-signing keys only signs the current device when the keys were not already
+    // cached by the Rust crypto store. That leaves a device which successfully completed SAS
+    // verification locally trusted, but without the owner's self-signing signature. Repair that
+    // state whenever the device list is loaded and the signing key is available.
+    const currentDeviceId = this.client.getDeviceId()
+    if (crypto && currentDeviceId && cryptographic?.has(currentDeviceId)) {
+      await this.ensureCurrentDeviceCrossSigned(crypto, userId, currentDeviceId).catch((error) =>
+        console.warn('[crypto] Could not cross-sign the current device', error),
+      )
+    }
+
     return Promise.all(
       serverDevices.devices.map(async (device) => {
         const status = cryptographic?.has(device.device_id)
-          ? await this.client!.getCrypto()?.getDeviceVerificationStatus(userId, device.device_id)
+          ? await crypto?.getDeviceVerificationStatus(userId, device.device_id)
           : null
         return {
           deviceId: device.device_id,

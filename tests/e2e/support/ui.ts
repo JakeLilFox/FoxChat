@@ -81,8 +81,16 @@ export async function addAccount(page: Page, account: MatrixTestAccount) {
   })
 }
 
+export async function closeActiveSpace(page: Page) {
+  const closeSpace = page.getByTestId('room-sidebar').getByRole('button', { name: 'arrow-left' })
+  if (await closeSpace.isVisible()) await closeSpace.click()
+}
+
 export async function openRoomActions(page: Page) {
-  await page.getByRole('button', { name: 'Room actions' }).first().click()
+  await closeActiveSpace(page)
+  const actions = page.getByRole('button', { name: 'Room actions' }).first()
+  await expect(actions).toBeVisible()
+  await actions.click()
 }
 
 export async function sendMessage(page: Page, body: string) {

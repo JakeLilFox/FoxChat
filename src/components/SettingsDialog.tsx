@@ -211,6 +211,21 @@ export function SettingsDialog({
   useEffect(() => {
     if (open) void load()
   }, [open, load])
+  useEffect(() => {
+    if (!open) return
+    let refreshTimer: number | undefined
+    const unsubscribe = matrixService.subscribe({
+      onSync: (state) => {
+        if (!state.toUpperCase().includes('CRYPTO_')) return
+        if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
+        refreshTimer = window.setTimeout(() => void load(), 100)
+      },
+    })
+    return () => {
+      unsubscribe()
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
+    }
+  }, [open, load])
   const setPublicProfileField = (field: string, value: unknown) => {
     if (!client) throw new Error('Matrix client is not connected')
     return (

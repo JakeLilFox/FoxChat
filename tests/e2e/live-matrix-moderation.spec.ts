@@ -1,7 +1,13 @@
 import { expect, test, type Page } from '@playwright/test'
 import { liveMatrixConfig } from './support/env'
 import { cleanTestRoom, removeOtherDevices, storedSessions } from './support/matrix-api'
-import { openChannelInSpace, openRoomActions, openRoomSettings, signIn } from './support/ui'
+import {
+  closeActiveSpace,
+  openChannelInSpace,
+  openRoomActions,
+  openRoomSettings,
+  signIn,
+} from './support/ui'
 
 const live = liveMatrixConfig()
 
@@ -33,7 +39,9 @@ const moderateViaContextMenu = async (
 
 const joinRoomById = async (page: Page, roomId: string) => {
   await openRoomActions(page)
-  await page.getByRole('menuitem', { name: 'Join a room', exact: true }).click()
+  const joinAction = page.getByRole('menu').getByText('Join a room', { exact: true })
+  await expect(joinAction).toBeVisible()
+  await joinAction.click()
   const dialog = page.getByRole('dialog', { name: 'Join a room' })
   await expect(dialog).toBeVisible()
   await dialog.getByLabel('Room ID or alias').fill(roomId)
@@ -248,8 +256,10 @@ test.describe('live moderation journey', () => {
         await expect(owner!.getByText(spaceName, { exact: true }).first()).toBeVisible({
           timeout: 60_000,
         })
+        await expect
+          .poll(() => new URL(owner!.url()).searchParams.get('space'), { timeout: 60_000 })
+          .toMatch(/^!/)
         spaceId = new URL(owner!.url()).searchParams.get('space') ?? undefined
-        expect(spaceId).toMatch(/^!/)
 
         const spaceDialog = await openRoomSettings(owner!, spaceName, 'Channels')
         await spaceDialog.getByRole('button', { name: 'plus' }).click()
@@ -278,6 +288,7 @@ test.describe('live moderation journey', () => {
       await test.step('the second account joins both the space and its channel directly by ID', async () => {
         await expectJoinSucceeds(member!, spaceId!)
         await expectJoinSucceeds(member!, channelId!)
+        await closeActiveSpace(member!)
         await expect(member!.getByTestId('room-row').filter({ hasText: spaceName })).toBeVisible({
           timeout: 60_000,
         })
@@ -295,6 +306,7 @@ test.describe('live moderation journey', () => {
 
       await test.step('a kick does not block rejoining a public space', async () => {
         await expectJoinSucceeds(member!, spaceId!)
+        await closeActiveSpace(member!)
         await expect(member!.getByTestId('room-row').filter({ hasText: spaceName })).toBeVisible({
           timeout: 60_000,
         })
@@ -317,6 +329,7 @@ test.describe('live moderation journey', () => {
       await test.step('unbanning restores the ability to rejoin the space', async () => {
         await unbanViaSettings(owner!, spaceName, account2Id!)
         await expectJoinSucceeds(member!, spaceId!)
+        await closeActiveSpace(member!)
         await expect(member!.getByTestId('room-row').filter({ hasText: spaceName })).toBeVisible({
           timeout: 60_000,
         })
