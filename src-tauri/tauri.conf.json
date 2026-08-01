@@ -32,7 +32,7 @@
     "targets": "all",
     "linux": {
       "appimage": {
-        "bundleMediaFramework": false
+        "bundleMediaFramework": true
       }
     },
     "icon": [

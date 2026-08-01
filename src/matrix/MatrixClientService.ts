@@ -3933,6 +3933,36 @@ export class MatrixClientService {
     return client.joinRoom(roomIdOrAlias.trim(), { viaServers })
   }
 
+  async waitForJoinedRoomAs(roomId: string, accountId: string, timeoutMs = 30_000) {
+    const client = this.accountClient(accountId)
+    if (!client) throw new Error('Account is not available')
+    const current = client.getRoom(roomId)
+    if (current?.getMyMembership() === 'join') return current
+
+    return new Promise<Room>((resolve, reject) => {
+      let timeout: number | undefined
+      const cleanup = () => {
+        client.off(ClientEvent.Room, check)
+        client.off(RoomEvent.MyMembership, check)
+        if (timeout !== undefined) window.clearTimeout(timeout)
+      }
+      const check = (changedRoom: Room) => {
+        if (changedRoom.roomId !== roomId || changedRoom.getMyMembership() !== 'join') return
+        cleanup()
+        resolve(changedRoom)
+      }
+      client.on(ClientEvent.Room, check)
+      client.on(RoomEvent.MyMembership, check)
+      timeout = window.setTimeout(() => {
+        cleanup()
+        reject(new Error('Timed out waiting for the joined room to synchronize'))
+      }, timeoutMs)
+
+      const synchronized = client.getRoom(roomId)
+      if (synchronized?.getMyMembership() === 'join') check(synchronized)
+    })
+  }
+
   async declineRoomInvite(roomId: string, accountId: string) {
     const client = this.accountClient(accountId)
     const room = client?.getRoom(roomId)

@@ -49,17 +49,6 @@ if [[ "${APPIMAGE_E2E_NOTIFICATIONS:-0}" == "1" ]]; then
   rm -f "${FOXCHAT_E2E_NOTIFICATION_FILE}"
 fi
 
-gstreamer_plugin_paths=()
-for plugin_path in /usr/lib/*/gstreamer-1.0 /usr/lib/gstreamer-1.0; do
-  if [[ -d "${plugin_path}" ]]; then
-    gstreamer_plugin_paths+=("${plugin_path}")
-  fi
-done
-if (( ${#gstreamer_plugin_paths[@]} )); then
-  printf -v gstreamer_system_path '%s:' "${gstreamer_plugin_paths[@]}"
-  export GST_PLUGIN_SYSTEM_PATH_1_0="${gstreamer_system_path%:}"
-fi
-
 fake_microphone="${APPIMAGE_E2E_FAKE_MIC:-0}"
 if [[ "${fake_microphone}" == "1" ]]; then
   for command in gst-launch-1.0 pactl pipewire pipewire-pulse pw-cli pw-loopback wireplumber xdotool; do

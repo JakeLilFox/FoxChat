@@ -131,7 +131,6 @@ export function SpaceOverview({
         matrixService.selectRoomAccount(joined.roomId, accountId, true)
       }
       message.success(`Joined ${joined.name}`)
-      onSelect(joined.roomId)
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Could not join channel')
     } finally {

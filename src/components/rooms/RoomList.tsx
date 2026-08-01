@@ -452,11 +452,23 @@ export function RoomList({
     setInviteBusy(key)
     try {
       if (accept) {
-        await matrixService.joinRoomAs(room.roomId, accountId)
+        const joined = await matrixService.joinRoomAs(room.roomId, accountId)
         // Keep the account selection until membership sync catches up.
-        matrixService.selectRoomAccount(room.roomId, accountId, true)
-        message.success(`Joined ${room.name}`)
-        onSelect(room.roomId)
+        matrixService.selectRoomAccount(joined.roomId, accountId, true)
+        message.success(`Joined ${joined.name}`)
+        // Open immediately so the drawer closes and ClientApp preserves the
+        // navigation intent. /join resolves before the joined room is committed
+        // to the SDK's sync store, so select it again once it can be rendered.
+        onSelect(joined.roomId)
+        void matrixService
+          .waitForJoinedRoomAs(joined.roomId, accountId)
+          .then(() => onSelect(joined.roomId))
+          .catch((error) =>
+            console.warn('[rooms] Joined room did not synchronize before navigation timeout', {
+              roomId: joined.roomId,
+              error,
+            }),
+          )
       } else {
         await matrixService.declineRoomInvite(room.roomId, accountId)
         message.success(`Declined invitation to ${room.name}`)
