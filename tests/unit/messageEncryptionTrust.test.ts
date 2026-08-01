@@ -9,6 +9,7 @@ import { MatrixClientService } from '../../src/matrix/MatrixClientService'
 const encryptedEvent = () =>
   ({
     getRoomId: () => undefined,
+    getId: () => undefined,
     getSender: () => '@alice:example.org',
     getSenderKey: () => 'curve-key',
     isDecryptionFailure: () => false,
