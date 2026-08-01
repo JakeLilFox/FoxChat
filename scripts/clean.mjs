@@ -17,6 +17,7 @@ const generatedPaths = [
   '.playwright',
   '.gradle-ci',
   'desktop-updates',
+  'android-artifacts',
   '.android-command-line-tools.zip',
   'ci_apk.apk',
   'foxchat-e2e-avd.tar.gz',

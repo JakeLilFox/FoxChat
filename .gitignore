@@ -15,6 +15,7 @@ src-tauri/target
 bridge/target
 bridge/dist
 desktop-updates/
+android-artifacts/
 .android-sdk
 .android-command-line-tools*
 .gradle-ci

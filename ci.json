@@ -643,7 +643,7 @@
         "type": "cmd",
         "id": "6a1b2c3d-4e5f-4071-8a9b-0c1d2e3f4a5b",
         "cmd": [
-          "if [ -n \"${KEYSTORE_BASE64}\" ]; then AAB_PATH=$(ls src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab src-tauri/gen/android/app/build/outputs/bundle/release/app-release.aab src-tauri/gen/android/app/build/outputs/bundle/release/app-universal-release.aab 2>/dev/null | head -n 1) && APK_PATH=src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk && curl -fsSL -o /tmp/bundletool.jar https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar && /tmp/jdk21/bin/java -jar /tmp/bundletool.jar build-apks --bundle=\"$AAB_PATH\" --output=/tmp/app.apks --mode=universal --ks=/tmp/release.keystore --ks-pass=pass:\"${KEYSTORE_PASSWORD}\" --ks-key-alias=\"${KEYSTORE_ALIAS}\" --key-pass=pass:\"${KEYSTORE_PASSWORD}\" --overwrite && mkdir -p src-tauri/gen/android/app/build/outputs/apk/universal/release /tmp/fdroid-apk && unzip -p /tmp/app.apks universal.apk > \"$APK_PATH\" && cp \"$APK_PATH\" /tmp/fdroid-apk/app-universal.apk; else echo 'No KEYSTORE_BASE64 - skipping F-Droid APK extraction'; fi"
+          "APK_ARTIFACT=android-artifacts/FoxChat_${version}_android.apk && mkdir -p android-artifacts && if [ -n \"${KEYSTORE_BASE64}\" ]; then AAB_PATH=$(ls src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab src-tauri/gen/android/app/build/outputs/bundle/release/app-release.aab src-tauri/gen/android/app/build/outputs/bundle/release/app-universal-release.aab 2>/dev/null | head -n 1) && if [ -z \"$AAB_PATH\" ]; then echo 'Android AAB build produced no bundle' >&2; exit 1; fi && curl -fsSL -o /tmp/bundletool.jar https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar && /tmp/jdk21/bin/java -jar /tmp/bundletool.jar build-apks --bundle=\"$AAB_PATH\" --output=/tmp/app.apks --mode=universal --ks=/tmp/release.keystore --ks-pass=pass:\"${KEYSTORE_PASSWORD}\" --ks-key-alias=\"${KEYSTORE_ALIAS}\" --key-pass=pass:\"${KEYSTORE_PASSWORD}\" --overwrite && unzip -p /tmp/app.apks universal.apk > \"$APK_ARTIFACT\" && mkdir -p /tmp/fdroid-apk && cp \"$APK_ARTIFACT\" /tmp/fdroid-apk/app-universal.apk; else APK_SOURCE=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' \\( -path '*/universal/*' -o -path '*/x86_64/*' \\) 2>/dev/null | sort | head -n 1) && if [ -z \"$APK_SOURCE\" ]; then echo 'Android APK build produced no universal or x86_64 package' >&2; exit 1; fi && cp \"$APK_SOURCE\" \"$APK_ARTIFACT\"; fi && test -s \"$APK_ARTIFACT\" && echo \"Staged Android APK: $APK_ARTIFACT\""
         ]
       },
       {
@@ -664,7 +664,7 @@
         "type": "asset",
         "id": "a1b2c3d4-apk4-4000-b000-111111111111",
         "files": [
-          "src-tauri/gen/android/app/build/outputs/apk/"
+          "android-artifacts/FoxChat_${version}_android.apk"
         ],
         "prefix": "android-apk"
       },
@@ -700,7 +700,7 @@
             "type": "cmd",
             "id": "d4c3e6f8-9001-4c23-bd4e-5f6a7b8c9d0e",
             "cmd": [
-              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export JAVA_HOME=/tmp/jdk21 && export PATH=$JAVA_HOME/bin:$PATH && export ANDROID_E2E_ADB_KEY_BASE64=\"${ANDROID_E2E_ADB_KEY_BASE64}\" && if [ -f /tmp/fdroid-apk/app-universal.apk ]; then APK_PATH=/tmp/fdroid-apk/app-universal.apk; else APK_PATH=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' \\( -path '*/x86_64/*' -o -path '*/universal/*' \\) | sort | head -n 1); fi && test -n \"$APK_PATH\" && export ANDROID_E2E_APK_PATH=\"$APK_PATH\" && npm run android:e2e:setup-emulator && npm run test:e2e:android"
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export JAVA_HOME=/tmp/jdk21 && export PATH=$JAVA_HOME/bin:$PATH && export ANDROID_E2E_ADB_KEY_BASE64=\"${ANDROID_E2E_ADB_KEY_BASE64}\" && APK_PATH=android-artifacts/FoxChat_${version}_android.apk && if [ ! -s \"$APK_PATH\" ]; then echo \"Required Android E2E APK is missing: $APK_PATH\" >&2; exit 1; fi && echo \"Using Android E2E APK: $APK_PATH\" && export ANDROID_E2E_APK_PATH=\"$APK_PATH\" && npm run android:e2e:setup-emulator && npm run test:e2e:android"
             ],
             "flags": [
               "ignore-errors"
@@ -1006,7 +1006,7 @@
           "desktop/src-tauri/target/release/bundle/deb/FoxChat-${version}-1.x86_64.rpm.sig",
           "desktop/src-tauri/target/release/bundle/deb/FoxChat-${version}-1.x86_64.rpm",
           "desktop/bridge/dist/FoxChatBridge-linux-x86_64",
-          "android/src-tauri/gen/android/app/build/outputs/apk/"
+          "android-apk/android-artifacts/FoxChat_${version}_android.apk"
         ]
       }
     ],
