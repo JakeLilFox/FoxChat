@@ -336,6 +336,11 @@ export const recentStorage = {
   emojis: 'foxchat-recent-custom-emojis',
   stickers: 'foxchat-recent-stickers',
 } as const
+export const pinnedStorage = {
+  unicode: 'foxchat-pinned-unicode',
+  emojis: 'foxchat-pinned-custom-emojis',
+  stickers: 'foxchat-pinned-stickers',
+} as const
 export type StoredEmote = {
   name: string
   body: string
@@ -360,6 +365,15 @@ export const rememberRecent = <T>(key: string, value: T, identity: (item: T) => 
   window.dispatchEvent(new CustomEvent('foxchat-recents', { detail: key }))
   return next
 }
+export const togglePinned = <T>(key: string, value: T, identity: (item: T) => string) => {
+  const current = readRecent<T>(key)
+  const valueId = identity(value)
+  const pinned = current.some((item) => identity(item) === valueId)
+  const next = pinned ? current.filter((item) => identity(item) !== valueId) : [value, ...current]
+  localStorage.setItem(key, JSON.stringify(next))
+  window.dispatchEvent(new CustomEvent('foxchat-pins', { detail: key }))
+  return next
+}
 export const matchesPickerSearch = (query: string, ...values: Array<string | undefined>) => {
   const terms = query.normalize('NFKD').toLocaleLowerCase().trim().split(/\s+/).filter(Boolean)
   if (!terms.length) return true
@@ -369,6 +383,34 @@ export const matchesPickerSearch = (query: string, ...values: Array<string | und
     .normalize('NFKD')
     .toLocaleLowerCase()
   return terms.every((term) => searchable.includes(term))
+}
+export const inlineEmoteSuggestions = (
+  query: string,
+  emotes: MatrixEmote[],
+  recent: StoredEmote[],
+  limit = 3,
+) => {
+  const recentPositions = new Map(recent.map((emote, index) => [emote.url, index]))
+  const matches = emotes
+    .map((emote, index) => ({ emote, index, recent: recentPositions.get(emote.url) }))
+    .filter(({ emote }) => matchesPickerSearch(query, emote.name, emote.body))
+    .sort((first, second) => {
+      if (first.recent !== undefined && second.recent !== undefined)
+        return first.recent - second.recent
+      if (first.recent !== undefined) return -1
+      if (second.recent !== undefined) return 1
+      return first.index - second.index
+    })
+  const names = new Set<string>()
+  return matches
+    .filter(({ emote }) => {
+      const name = emote.name.toLocaleLowerCase()
+      if (names.has(name)) return false
+      names.add(name)
+      return true
+    })
+    .slice(0, limit)
+    .map(({ emote }) => emote)
 }
 export const forgetRecents = <T>(key: string, shouldForget: (item: T) => boolean) => {
   const current = readRecent<T>(key)
@@ -386,6 +428,17 @@ export function useRecents<T>(key: string) {
     }
     window.addEventListener('foxchat-recents', update)
     return () => window.removeEventListener('foxchat-recents', update)
+  }, [key])
+  return items
+}
+export function usePinned<T>(key: string) {
+  const [items, setItems] = useState<T[]>(() => readRecent<T>(key))
+  useEffect(() => {
+    const update = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === key) setItems(readRecent<T>(key))
+    }
+    window.addEventListener('foxchat-pins', update)
+    return () => window.removeEventListener('foxchat-pins', update)
   }, [key])
   return items
 }

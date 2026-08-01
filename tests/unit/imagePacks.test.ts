@@ -8,6 +8,7 @@ import {
   deduplicateRoomPacks,
   forgetRecents,
   imagePackAccounts,
+  inlineEmoteSuggestions,
   IMAGE_PACK_STATE_TARGET_BYTES,
   jsonByteLength,
   matchesPickerSearch,
@@ -21,6 +22,7 @@ import {
   serializeImagePackItems,
   setAllAccountImagePacksEnabled,
   splitImagePackContent,
+  togglePinned,
   uniquePackName,
   type MatrixEmotePack,
 } from '../../src/lib/emojiData'
@@ -35,6 +37,32 @@ describe('matchesPickerSearch', () => {
 
   it('treats an empty search as a match', () => {
     expect(matchesPickerSearch('   ', 'Anything')).toBe(true)
+  })
+})
+
+describe('inlineEmoteSuggestions', () => {
+  const emotes = [
+    { name: 'party-parrot', body: 'Party parrot', url: 'mxc://example.org/parrot' },
+    { name: 'party-fox', body: 'Party fox', url: 'mxc://example.org/fox' },
+    { name: 'party-cat', body: 'Party cat', url: 'mxc://example.org/cat' },
+    { name: 'party-dog', body: 'Party dog', url: 'mxc://example.org/dog' },
+  ]
+
+  it('filters before sorting matches by most recent use and limiting to three', () => {
+    expect(
+      inlineEmoteSuggestions('party', emotes, [emotes[2], emotes[0]], 3).map((emote) => emote.name),
+    ).toEqual(['party-cat', 'party-parrot', 'party-fox'])
+  })
+
+  it('does not let a recent non-match into the results', () => {
+    expect(inlineEmoteSuggestions('fox', emotes, [emotes[0]])).toEqual([emotes[1]])
+  })
+
+  it('uses the most recently selected image when packs contain the same name', () => {
+    const alternate = { ...emotes[0], url: 'mxc://example.org/alternate-parrot' }
+    expect(inlineEmoteSuggestions('parrot', [emotes[0], alternate], [alternate])).toEqual([
+      alternate,
+    ])
   })
 })
 
@@ -363,6 +391,23 @@ describe('image-pack recents', () => {
     forgetRecents<{ url: string }>(key, (item) => item.url.endsWith('/deleted'))
 
     expect(readRecent(key)).toEqual([{ url: 'mxc://example.org/kept' }])
+    localStorage.removeItem(key)
+  })
+})
+
+describe('image-pack pins', () => {
+  it('pins newest items first and toggles an existing pin off', () => {
+    const key = 'foxchat-test-image-pack-pins'
+    const first = { url: 'mxc://example.org/first' }
+    const second = { url: 'mxc://example.org/second' }
+    localStorage.removeItem(key)
+
+    togglePinned(key, first, (item) => item.url)
+    togglePinned(key, second, (item) => item.url)
+    expect(readRecent(key)).toEqual([second, first])
+
+    togglePinned(key, second, (item) => item.url)
+    expect(readRecent(key)).toEqual([first])
     localStorage.removeItem(key)
   })
 })

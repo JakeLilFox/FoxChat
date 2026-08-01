@@ -14,10 +14,13 @@ import {
   moveImagePackOrder,
   orderedImageEntries,
   orderImagePacks,
+  pinnedStorage,
   recentStorage,
   rememberRecent,
+  togglePinned,
   unicodeCategories,
   useAllAccountImagePacks,
+  usePinned,
   useRecents,
 } from '../../lib/emojiData'
 import {
@@ -29,8 +32,8 @@ import {
 import { closeEmojiUrl, emojiOpenFromUrl, openEmojiUrl } from '../../lib/urlState'
 import { EmojiGrid, EmojiPanel, IconBtn, PackCollection, PackJumpBar } from '../../styles'
 import { useEffect, useRef, useState } from 'react'
-import { App as AntApp, Empty, Input, Popover, Tabs, Tooltip } from 'antd'
-import { SearchOutlined, SmileOutlined } from '@ant-design/icons'
+import { App as AntApp, Dropdown, Empty, Input, Popover, Tabs, Tooltip } from 'antd'
+import { PushpinOutlined, SearchOutlined, SmileOutlined } from '@ant-design/icons'
 import { Room } from 'matrix-js-sdk'
 import { type ImageInfo } from 'matrix-js-sdk/lib/@types/media'
 import { matrixService } from '../../matrix/MatrixClientService'
@@ -42,23 +45,120 @@ type PickerPack = {
   items: MatrixEmote[]
 }
 
+const LONG_PRESS_MS = 550
+
+function PinnablePickerItem({
+  pinned,
+  title,
+  onSelect,
+  onTogglePin,
+  children,
+}: {
+  pinned: boolean
+  title: string
+  onSelect: () => void
+  onTogglePin: () => void
+  children: React.ReactNode
+}) {
+  const timer = useRef(0)
+  const start = useRef({ x: 0, y: 0 })
+  const suppressClick = useRef(false)
+  const pointerType = useRef('')
+  const clearTimer = () => window.clearTimeout(timer.current)
+  useEffect(() => clearTimer, [])
+  return (
+    <Dropdown
+      trigger={['contextMenu']}
+      rootClassName="foxchat-emoji-item-menu"
+      getPopupContainer={(trigger) =>
+        trigger.closest<HTMLElement>('.foxchat-emoji-panel') ?? document.body
+      }
+      menu={{
+        items: [
+          {
+            key: 'pin',
+            icon: <PushpinOutlined />,
+            label: pinned ? 'Unpin' : 'Pin',
+            onClick: onTogglePin,
+          },
+        ],
+      }}
+    >
+      <button
+        type="button"
+        title={title}
+        onPointerDown={(event) => {
+          clearTimer()
+          suppressClick.current = false
+          pointerType.current = event.pointerType
+          if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return
+          start.current = { x: event.clientX, y: event.clientY }
+          const target = event.currentTarget
+          const { clientX, clientY } = event
+          timer.current = window.setTimeout(() => {
+            suppressClick.current = true
+            target.dispatchEvent(
+              new MouseEvent('contextmenu', {
+                bubbles: true,
+                cancelable: true,
+                button: 2,
+                clientX,
+                clientY,
+              }),
+            )
+          }, LONG_PRESS_MS)
+        }}
+        onPointerMove={(event) => {
+          if (
+            Math.abs(event.clientX - start.current.x) > 8 ||
+            Math.abs(event.clientY - start.current.y) > 8
+          )
+            clearTimer()
+        }}
+        onPointerUp={clearTimer}
+        onPointerCancel={clearTimer}
+        onPointerLeave={clearTimer}
+        onContextMenu={() => {
+          clearTimer()
+          if (pointerType.current === 'touch' || pointerType.current === 'pen')
+            suppressClick.current = true
+        }}
+        onClick={(event) => {
+          if (suppressClick.current) {
+            event.preventDefault()
+            suppressClick.current = false
+            return
+          }
+          onSelect()
+        }}
+      >
+        {children}
+      </button>
+    </Dropdown>
+  )
+}
+
 function MatrixPackBrowser({
   usage,
   groups,
+  pinned,
   recent,
   client,
   empty,
   search,
   onSelect,
+  onTogglePin,
   onMovePack,
 }: {
   usage: 'emoticon' | 'sticker'
   groups: PickerPack[]
+  pinned: StoredEmote[]
   recent: StoredEmote[]
   client: ReturnType<typeof matrixService.clientForRoom>
   empty: string
   search: string
   onSelect: (emote: MatrixEmote) => void
+  onTogglePin: (emote: MatrixEmote) => void
   onMovePack: (source: string, target: string, edge: 'before' | 'after') => void
 }) {
   const collectionRef = useRef<HTMLDivElement>(null)
@@ -69,14 +169,28 @@ function MatrixPackBrowser({
     edge?: 'before' | 'after'
   }>()
   const searching = !!search.trim()
+  const availableItems = groups.flatMap((group) => group.items)
+  const restoreStoredItem = (item: StoredEmote): MatrixEmote =>
+    availableItems.find((emote) => emote.url === item.url) ?? { ...item, client }
   const packs: Array<PickerPack & { reorderable: boolean }> = [
+    ...(pinned.length
+      ? [
+          {
+            id: 'pinned',
+            orderKey: 'pinned',
+            label: 'Pinned',
+            items: pinned.map(restoreStoredItem),
+            reorderable: false,
+          },
+        ]
+      : []),
     ...(recent.length
       ? [
           {
             id: 'recent',
             orderKey: 'recent',
             label: 'Recently used',
-            items: recent.map((item) => ({ ...item, client })),
+            items: recent.map(restoreStoredItem),
             reorderable: false,
           },
         ]
@@ -196,14 +310,15 @@ function MatrixPackBrowser({
             </div>
             <EmojiGrid $stickers={usage === 'sticker'}>
               {pack.items.map((emote) => (
-                <button
+                <PinnablePickerItem
                   key={`${emote.name}:${emote.url}`}
-                  type="button"
                   title={`${emote.body} · ${pack.label}`}
-                  onClick={() => onSelect(emote)}
+                  pinned={pinned.some((item) => item.url === emote.url)}
+                  onSelect={() => onSelect(emote)}
+                  onTogglePin={() => onTogglePin(emote)}
                 >
                   <MatrixEmoteImage emote={emote} />
-                </button>
+                </PinnablePickerItem>
               ))}
             </EmojiGrid>
           </div>
@@ -218,11 +333,13 @@ export function EmojiButton({
   onUnicode,
   onEmote,
   onSticker,
+  onAvailableEmotes,
 }: {
   room: Room
   onUnicode: (emoji: string) => void
   onEmote: (emote: MatrixEmote) => void
   onSticker: (emote: MatrixEmote) => void
+  onAvailableEmotes?: (emotes: MatrixEmote[]) => void
 }) {
   const { message } = AntApp.useApp()
   const [open, setOpen] = useState(() => emojiOpenFromUrl())
@@ -256,6 +373,9 @@ export function EmojiButton({
   const recentUnicode = useRecents<string>(recentStorage.unicode)
   const recentEmojis = useRecents<StoredEmote>(recentStorage.emojis)
   const recentStickers = useRecents<StoredEmote>(recentStorage.stickers)
+  const pinnedUnicode = usePinned<string>(pinnedStorage.unicode)
+  const pinnedEmojis = usePinned<StoredEmote>(pinnedStorage.emojis)
+  const pinnedStickers = usePinned<StoredEmote>(pinnedStorage.stickers)
   const allAccountPacksEnabled = useAllAccountImagePacks()
   const [remoteFavoritePacks, setRemoteFavoritePacks] = useState<NamedEmotePack[]>([])
   const client = matrixService.clientForRoom(room.roomId)
@@ -320,7 +440,7 @@ export function EmojiButton({
     })),
   )
   useEffect(() => {
-    if (!open) return
+    if (!open && !onAvailableEmotes) return
     let cancelled = false
     const configs = JSON.parse(favoriteRoomKey) as Array<{
       id: string
@@ -373,7 +493,7 @@ export function EmojiButton({
     return () => {
       cancelled = true
     }
-  }, [open, client, favoriteRoomKey, mergingAccounts])
+  }, [open, client, favoriteRoomKey, mergingAccounts, onAvailableEmotes])
   const namedPacks = orderImagePacks(
     deduplicateRoomPacks([...accountPacks, ...remoteFavoritePacks]),
     packOrder,
@@ -436,6 +556,31 @@ export function EmojiButton({
     })
   }
   const allCustom = groups.flatMap((group) => group.items)
+  const availableEmotes = allCustom.filter(
+    (emote) => !emote.usage || emote.usage.includes('emoticon'),
+  )
+  const availableEmotesKey = [
+    room.roomId,
+    ...availableEmotes.map(
+      (emote) => `${emote.client?.getUserId() ?? ''}\u0000${emote.name}\u0000${emote.url}`,
+    ),
+  ].join('\u0001')
+  const reportedAvailableEmotes = useRef<
+    | {
+        key: string
+        callback: typeof onAvailableEmotes
+      }
+    | undefined
+  >(undefined)
+  useEffect(() => {
+    if (
+      reportedAvailableEmotes.current?.key === availableEmotesKey &&
+      reportedAvailableEmotes.current.callback === onAvailableEmotes
+    )
+      return
+    reportedAvailableEmotes.current = { key: availableEmotesKey, callback: onAvailableEmotes }
+    onAvailableEmotes?.(availableEmotes)
+  }, [availableEmotes, availableEmotesKey, onAvailableEmotes])
   const emojiCount = allCustom.filter(
     (emote) => !emote.usage || emote.usage.includes('emoticon'),
   ).length
@@ -447,6 +592,17 @@ export function EmojiButton({
     onUnicode(emoji)
     close()
   }
+  const unicodePickerItem = (emoji: string, key: string) => (
+    <PinnablePickerItem
+      key={key}
+      title={emoji}
+      pinned={pinnedUnicode.includes(emoji)}
+      onSelect={() => selectUnicode(emoji)}
+      onTogglePin={() => togglePinned(pinnedStorage.unicode, emoji, (item) => item)}
+    >
+      {emoji}
+    </PinnablePickerItem>
+  )
   const unicodeSearchResults = [
     ...new Set(
       unicodeCategories.flatMap((category) =>
@@ -459,16 +615,7 @@ export function EmojiButton({
   const unicodeContent = search.trim() ? (
     unicodeSearchResults.length ? (
       <EmojiGrid>
-        {unicodeSearchResults.map((emoji, index) => (
-          <button
-            key={`${emoji}-${index}`}
-            type="button"
-            title={emoji}
-            onClick={() => selectUnicode(emoji)}
-          >
-            {emoji}
-          </button>
-        ))}
+        {unicodeSearchResults.map((emoji, index) => unicodePickerItem(emoji, `${emoji}-${index}`))}
       </EmojiGrid>
     ) : (
       <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No matching Unicode emoji" />
@@ -477,6 +624,19 @@ export function EmojiButton({
     <Tabs
       size="small"
       items={[
+        ...(pinnedUnicode.length
+          ? [
+              {
+                key: 'pinned',
+                label: 'Pinned',
+                children: (
+                  <EmojiGrid>
+                    {pinnedUnicode.map((emoji) => unicodePickerItem(emoji, emoji))}
+                  </EmojiGrid>
+                ),
+              },
+            ]
+          : []),
         ...(recentUnicode.length
           ? [
               {
@@ -484,16 +644,7 @@ export function EmojiButton({
                 label: 'Recent',
                 children: (
                   <EmojiGrid>
-                    {recentUnicode.map((emoji) => (
-                      <button
-                        key={emoji}
-                        type="button"
-                        title={emoji}
-                        onClick={() => selectUnicode(emoji)}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
+                    {recentUnicode.map((emoji) => unicodePickerItem(emoji, emoji))}
                   </EmojiGrid>
                 ),
               },
@@ -504,32 +655,30 @@ export function EmojiButton({
           label: <Tooltip title={category.title}>{category.label}</Tooltip>,
           children: (
             <EmojiGrid>
-              {category.items.map((emoji, index) => (
-                <button
-                  key={`${emoji}-${index}`}
-                  type="button"
-                  title={emoji}
-                  onClick={() => selectUnicode(emoji)}
-                >
-                  {emoji}
-                </button>
-              ))}
+              {category.items.map((emoji, index) => unicodePickerItem(emoji, `${emoji}-${index}`))}
             </EmojiGrid>
           ),
         })),
       ]}
     />
   )
+  const storedMatrixItem = (emote: MatrixEmote): StoredEmote => ({
+    name: emote.name,
+    body: emote.body,
+    url: emote.url,
+    info: emote.info,
+    usage: emote.usage,
+  })
+  const toggleMatrixItemPin = (usage: 'emoticon' | 'sticker', emote: MatrixEmote) =>
+    togglePinned(
+      usage === 'emoticon' ? pinnedStorage.emojis : pinnedStorage.stickers,
+      storedMatrixItem(emote),
+      (item) => item.url,
+    )
   const selectMatrixItem = (usage: 'emoticon' | 'sticker', emote: MatrixEmote) => {
     rememberRecent(
       usage === 'emoticon' ? recentStorage.emojis : recentStorage.stickers,
-      {
-        name: emote.name,
-        body: emote.body,
-        url: emote.url,
-        info: emote.info,
-        usage: emote.usage,
-      },
+      storedMatrixItem(emote),
       (item) => item.url,
     )
     ;(usage === 'emoticon' ? onEmote : onSticker)(emote)
@@ -552,11 +701,13 @@ export function EmojiButton({
             <MatrixPackBrowser
               usage="emoticon"
               groups={groups}
+              pinned={pinnedEmojis}
               recent={recentEmojis}
               client={client}
               empty="No Matrix emoji packs"
               search={search}
               onSelect={(emote) => selectMatrixItem('emoticon', emote)}
+              onTogglePin={(emote) => toggleMatrixItemPin('emoticon', emote)}
               onMovePack={movePack}
             />
           ),
@@ -568,11 +719,13 @@ export function EmojiButton({
             <MatrixPackBrowser
               usage="sticker"
               groups={groups}
+              pinned={pinnedStickers}
               recent={recentStickers}
               client={client}
               empty="No Matrix sticker packs"
               search={search}
               onSelect={(emote) => selectMatrixItem('sticker', emote)}
+              onTogglePin={(emote) => toggleMatrixItemPin('sticker', emote)}
               onMovePack={movePack}
             />
           ),
@@ -581,7 +734,7 @@ export function EmojiButton({
     />
   )
   const content = (
-    <EmojiPanel ref={panelRef}>
+    <EmojiPanel ref={panelRef} className="foxchat-emoji-panel">
       <Input
         className="emojiSearch"
         type="search"

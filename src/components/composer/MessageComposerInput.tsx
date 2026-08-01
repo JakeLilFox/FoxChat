@@ -56,13 +56,15 @@ export function MessageComposerInput({
   useEffect(() => () => mediaUrls.current.forEach(URL.revokeObjectURL), [])
   useLayoutEffect(() => {
     const root = ref.current
-    if (!root || serializeComposer(root) === value) return
+    if (!root) return
+    const tokens = [...emotes.keys()].sort((a, b) => b.length - a.length)
+    const hasUntokenizedEmote = tokens.some((token) => root.textContent?.includes(token))
+    if (serializeComposer(root) === value && !hasUntokenizedEmote) return
     const active = document.activeElement === root
     const currentGeneration = ++generation.current
     mediaUrls.current.forEach(URL.revokeObjectURL)
     mediaUrls.current = []
     root.replaceChildren()
-    const tokens = [...emotes.keys()].sort((a, b) => b.length - a.length)
     const pattern = tokens.length
       ? new RegExp(
           tokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),

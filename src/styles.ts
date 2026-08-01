@@ -2690,6 +2690,20 @@ export const MentionMenu = styled.div`
   .meta {
     min-width: 0;
   }
+  .emotePreview {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    align-items: center;
+    justify-content: center;
+  }
+  .emotePreview img {
+    display: block;
+    max-width: 28px;
+    max-height: 28px;
+    object-fit: contain;
+  }
   .label {
     font-weight: 700;
   }
@@ -2801,6 +2815,9 @@ export const EmojiGrid = styled.div<{ $stickers?: boolean }>`
     color: ${(p) => p.theme.text};
     font-size: 30px;
     cursor: pointer;
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+    user-select: none;
   }
   button:hover {
     background: ${(p) => p.theme.hover};
@@ -2827,6 +2844,7 @@ export const EmojiGrid = styled.div<{ $stickers?: boolean }>`
   }
 `
 export const EmojiPanel = styled.div`
+  position: relative;
   width: min(410px, calc(100vw - 24px));
   margin: -12px;
   padding: 13px;

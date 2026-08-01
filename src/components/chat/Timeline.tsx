@@ -2,7 +2,7 @@ import { CallMembershipStatus } from '../calls/CallMembershipStatus'
 import { EmojiButton } from '../composer'
 import { type ChatFollower } from '../composer'
 import { MemberAvatar } from '../profile'
-import { MembershipStatus } from '../message'
+import { MatrixEmoteImage, MembershipStatus } from '../message'
 import { Message } from '../message'
 import { MessageComposerInput } from '../composer'
 import { PendingUpload } from '../message'
@@ -23,7 +23,14 @@ import {
   type VoiceSystemNotice,
   voiceSystemNoticeEvent,
 } from '../../lib/constants'
-import { type MatrixEmote } from '../../lib/emojiData'
+import {
+  type MatrixEmote,
+  type StoredEmote,
+  inlineEmoteSuggestions,
+  recentStorage,
+  rememberRecent,
+  useRecents,
+} from '../../lib/emojiData'
 import {
   MESSAGE_WINDOW_SHIFT,
   MESSAGE_WINDOW_SIZE,
@@ -246,6 +253,8 @@ function TimelineView({
   const visibleAccountId = room ? matrixService.selectedRoomAccountId(room.roomId) : undefined
   const { message } = AntApp.useApp()
   const [draft, setDraft] = useState('')
+  const [availableInlineEmotes, setAvailableInlineEmotes] = useState<MatrixEmote[]>([])
+  const recentInlineEmotes = useRecents<StoredEmote>(recentStorage.emojis)
   const [roomModal, setRoomModal] = useState<RoomModalView | undefined>(roomModalFromUrl)
   const [pollOpen, setPollOpen] = useState(false)
   const [timestampOpen, setTimestampOpen] = useState(false)
@@ -547,7 +556,9 @@ function TimelineView({
               // it, leaving it stuck below the intended position instead of catching up once
               // more content is measurable.
               const target = captured.eventId
-                ? box.querySelector<HTMLElement>(`[data-event-id="${CSS.escape(captured.eventId)}"]`)
+                ? box.querySelector<HTMLElement>(
+                    `[data-event-id="${CSS.escape(captured.eventId)}"]`,
+                  )
                 : undefined
               if (target) {
                 box.scrollTop +=
@@ -1981,7 +1992,38 @@ function TimelineView({
         ?.focus(),
     )
   }
-  const change = (value: string) => {
+  const rememberInlineEmote = (emote: MatrixEmote) => {
+    const token = `:${emote.name}:`
+    inlineEmotesRef.current.set(token, emote)
+    rememberRecent(
+      recentStorage.emojis,
+      {
+        name: emote.name,
+        body: emote.body,
+        url: emote.url,
+        info: emote.info,
+        usage: emote.usage,
+      },
+      (item) => item.url,
+    )
+    return token
+  }
+  const change = (nextValue: string) => {
+    let value = nextValue
+    const completedEmote = value.match(/(^|\s):([^:\s]+):$/)
+    if (completedEmote) {
+      const name = completedEmote[2].toLocaleLowerCase()
+      const emote = inlineEmoteSuggestions(
+        name,
+        availableInlineEmotes,
+        recentInlineEmotes,
+        availableInlineEmotes.length,
+      ).find((candidate) => candidate.name.toLocaleLowerCase() === name)
+      if (emote) {
+        const token = rememberInlineEmote(emote)
+        value = `${value.slice(0, value.length - completedEmote[2].length - 2)}${token} `
+      }
+    }
     draftRef.current = value
     composerRevisionRef.current++
     setDraft(value)
@@ -2061,6 +2103,21 @@ function TimelineView({
     if (!mentionMatch) return
     const start = draft.length - mentionMatch[2].length - mentionMatch[3].length
     change(`${draft.slice(0, start)}${id} `)
+    requestAnimationFrame(() =>
+      messagesRef.current?.parentElement
+        ?.querySelector<HTMLElement>('[contenteditable="true"]')
+        ?.focus(),
+    )
+  }
+  const emoteMatch = draft.match(/(^|\s):([^:\s]+)$/)
+  const emoteOptions = emoteMatch
+    ? inlineEmoteSuggestions(emoteMatch[2], availableInlineEmotes, recentInlineEmotes)
+    : []
+  const chooseInlineEmote = (emote: MatrixEmote) => {
+    if (!emoteMatch) return
+    const start = draft.length - emoteMatch[2].length - 1
+    const token = rememberInlineEmote(emote)
+    change(`${draft.slice(0, start)}${token} `)
     requestAnimationFrame(() =>
       messagesRef.current?.parentElement
         ?.querySelector<HTMLElement>('[contenteditable="true"]')
@@ -2586,6 +2643,29 @@ function TimelineView({
               </ComposeTray>
             )}
             <Composer data-testid="composer-bar">
+              {emoteOptions.length > 0 && (
+                <MentionMenu role="listbox" aria-label="Emoji suggestions">
+                  {emoteOptions.map((emote, index) => (
+                    <button
+                      key={`${emote.name}:${emote.url}`}
+                      type="button"
+                      role="option"
+                      aria-selected={index === 0}
+                      className={index === 0 ? 'active' : undefined}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => chooseInlineEmote(emote)}
+                    >
+                      <span className="emotePreview">
+                        <MatrixEmoteImage emote={emote} />
+                      </span>
+                      <span className="meta">
+                        <div className="label">:{emote.name}:</div>
+                        <div className="id">{emote.body}</div>
+                      </span>
+                    </button>
+                  ))}
+                </MentionMenu>
+              )}
               {mentionOptions.length > 0 && (
                 <MentionMenu>
                   {mentionOptions.map((option, index) => (
@@ -2659,7 +2739,10 @@ function TimelineView({
                 emotes={inlineEmotesRef.current}
                 onChange={change}
                 onKeyDown={(e) => {
-                  if (e.key === 'Tab' && mentionOptions[0]) {
+                  if ((e.key === 'Tab' || e.key === 'Enter') && emoteOptions[0]) {
+                    e.preventDefault()
+                    chooseInlineEmote(emoteOptions[0])
+                  } else if (e.key === 'Tab' && mentionOptions[0]) {
                     e.preventDefault()
                     chooseMention(mentionOptions[0].id)
                   } else if (e.key === 'Enter' && !e.shiftKey && !isAndroidApp()) {
@@ -2687,6 +2770,7 @@ function TimelineView({
                 onUnicode={(emoji) => change(draftRef.current + emoji)}
                 onEmote={insertInlineEmote}
                 onSticker={(emote) => void sendSticker(emote)}
+                onAvailableEmotes={setAvailableInlineEmotes}
               />
               {recording ? (
                 <>
