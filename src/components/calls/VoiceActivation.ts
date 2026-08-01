@@ -1,8 +1,5 @@
-const SPEECH_BAND_LOW_HZ = 180
-const SPEECH_BAND_HIGH_HZ = 3600
-const VOICED_BAND_HIGH_HZ = 1400
-const HIGH_BAND_LOW_HZ = 4000
-const HIGH_BAND_HIGH_HZ = 8000
+import { VoiceFrameAnalyzer, VOICE_DETECTION_FFT_SIZE } from './voiceDetection'
+
 const CALIBRATION_MS = 1200
 const WARMUP_MS = 80
 const ATTACK_MS = 110
@@ -52,7 +49,9 @@ export class VoiceActivation {
   private monitorGain?: GainNode
   private monitorGated = false
   private monitorDelayMs = 0
+  private monitorVolume = 1
   private monitorCloseTimer?: number
+  private frameAnalyzer = new VoiceFrameAnalyzer()
 
   constructor(
     onSpeakingChange: (speaking: boolean) => void,
@@ -84,8 +83,8 @@ export class VoiceActivation {
     this.context = new AudioContext()
     this.source = this.context.createMediaStreamSource(this.stream)
     this.analyser = this.context.createAnalyser()
-    this.analyser.fftSize = 1024
-    this.analyser.smoothingTimeConstant = 0.2
+    this.analyser.fftSize = VOICE_DETECTION_FFT_SIZE
+    this.analyser.smoothingTimeConstant = 0
     this.source.connect(this.analyser)
     this.bins = new Float32Array(this.analyser.frequencyBinCount)
     this.waveform = new Float32Array(this.analyser.fftSize)
@@ -94,71 +93,15 @@ export class VoiceActivation {
     this.calibrationLevels = []
     this.speaking = false
     this.candidateSince = undefined
+    this.frameAnalyzer.reset()
     this.startedAt = performance.now()
     this.loop()
   }
 
-  private bandStats(data: Float32Array<ArrayBuffer>, lowHz: number, highHz: number) {
-    if (!this.analyser || !this.context)
-      return { level: -100, flatness: 1, centroid: highHz, spread: 0 }
-    const binHz = this.context.sampleRate / this.analyser.fftSize
-    const lowBin = Math.max(0, Math.ceil(lowHz / binHz))
-    const highBin = Math.min(data.length - 1, Math.floor(highHz / binHz))
-    let power = 0
-    let logPower = 0
-    let weightedFrequency = 0
-    let weightedSquaredFrequency = 0
-    let count = 0
-    for (let index = lowBin; index <= highBin; index++) {
-      if (!Number.isFinite(data[index])) continue
-      const binPower = Math.max(1e-12, 10 ** (data[index] / 10))
-      power += binPower
-      logPower += Math.log(binPower)
-      const frequency = index * binHz
-      weightedFrequency += frequency * binPower
-      weightedSquaredFrequency += frequency * frequency * binPower
-      count++
-    }
-    if (!count || power <= 0) return { level: -100, flatness: 1, centroid: highHz, spread: 0 }
-    const meanPower = power / count
-    const centroid = weightedFrequency / power
-    return {
-      level: 10 * Math.log10(meanPower),
-      flatness: Math.exp(logPower / count) / meanPower,
-      centroid,
-      spread: Math.sqrt(Math.max(0, weightedSquaredFrequency / power - centroid * centroid)),
-    }
-  }
-
-  private periodicity(data: Float32Array<ArrayBuffer>) {
-    if (!this.context || data.length < 2) return 0
-    let mean = 0
-    for (const sample of data) mean += sample
-    mean /= data.length
-
-    const minLag = Math.max(1, Math.floor(this.context.sampleRate / 420))
-    const maxLag = Math.min(data.length - 16, Math.ceil(this.context.sampleRate / 85))
-    let best = 0
-    for (let lag = minLag; lag <= maxLag; lag += 2) {
-      let correlation = 0
-      let leftEnergy = 0
-      let rightEnergy = 0
-      for (let index = 0; index < data.length - lag; index++) {
-        const left = data[index] - mean
-        const right = data[index + lag] - mean
-        correlation += left * right
-        leftEnergy += left * left
-        rightEnergy += right * right
-      }
-      const energy = Math.sqrt(leftEnergy * rightEnergy)
-      if (energy > 1e-8) best = Math.max(best, correlation / energy)
-    }
-    return best
-  }
-
   private updateMonitorGate(preserveTail = false) {
     if (!this.monitorGain) return
-    const target = !this.monitorGated || this.speaking ? 0.7 : 0
+    const target =
+      (!this.monitorGated || this.speaking) && this.monitorVolume > 0 ? 0.7 * this.monitorVolume : 0
     if (this.monitorCloseTimer !== undefined) {
       window.clearTimeout(this.monitorCloseTimer)
       this.monitorCloseTimer = undefined
@@ -184,31 +127,20 @@ export class VoiceActivation {
     if (!this.analyser || !this.context || !this.bins || !this.waveform) return
     this.analyser.getFloatFrequencyData(this.bins)
     this.analyser.getFloatTimeDomainData(this.waveform)
-    const speech = this.bandStats(this.bins, SPEECH_BAND_LOW_HZ, SPEECH_BAND_HIGH_HZ)
-    const voiced = this.bandStats(this.bins, SPEECH_BAND_LOW_HZ, VOICED_BAND_HIGH_HZ)
-    const high = this.bandStats(this.bins, HIGH_BAND_LOW_HZ, HIGH_BAND_HIGH_HZ)
-    const periodicity = this.periodicity(this.waveform)
-    const level = speech.level
+    const analysis = this.frameAnalyzer.analyze(
+      this.bins,
+      this.waveform,
+      this.context.sampleRate,
+      this.analyser.fftSize,
+      this.speaking,
+    )
+    const level = analysis.level
     const now = performance.now()
     const calibrating = now - this.startedAt < CALIBRATION_MS
 
-    const openingShape =
-      periodicity >= 0.2 &&
-      voiced.level >= speech.level - 3.5 &&
-      speech.level >= high.level + 5 &&
-      speech.flatness <= 0.42 &&
-      speech.centroid <= 1900 &&
-      speech.spread >= 380
-    const continuationShape =
-      periodicity >= 0.11 &&
-      voiced.level >= speech.level - 5.5 &&
-      speech.level >= high.level + 2 &&
-      speech.flatness <= 0.62 &&
-      speech.centroid <= 2700 &&
-      speech.spread >= 260
-    const speechShaped = this.speaking ? continuationShape : openingShape
+    const speechShaped = analysis.voiceLike
 
-    if (calibrating && !openingShape && Number.isFinite(level) && level > -100) {
+    if (calibrating && !analysis.openingShape && Number.isFinite(level) && level > -100) {
       this.calibrationLevels.push(level)
       if (this.calibrationLevels.length >= 6) {
         const sorted = [...this.calibrationLevels].sort((left, right) => left - right)
@@ -277,6 +209,11 @@ export class VoiceActivation {
       thresholdDb === undefined ? undefined : Math.max(-90, Math.min(-10, thresholdDb))
   }
 
+  setMonitoringVolume(volumePercent: number) {
+    this.monitorVolume = Math.max(0, Math.min(2, volumePercent / 100))
+    this.updateMonitorGate()
+  }
+
   async startMonitoring(options: VoiceActivationMonitorOptions = {}) {
     if (!this.context || !this.source) throw new Error('The microphone is not ready yet')
     this.stopMonitoring()
@@ -285,7 +222,7 @@ export class VoiceActivation {
     this.monitorDelay = this.context.createDelay(1)
     this.monitorGain = this.context.createGain()
     this.monitorDelay.delayTime.value = this.monitorDelayMs / 1000
-    this.monitorGain.gain.value = !this.monitorGated || this.speaking ? 0.7 : 0
+    this.monitorGain.gain.value = !this.monitorGated || this.speaking ? 0.7 * this.monitorVolume : 0
     this.source
       .connect(this.monitorDelay)
       .connect(this.monitorGain)
@@ -329,5 +266,6 @@ export class VoiceActivation {
     this.bins = undefined
     this.waveform = undefined
     this.calibrationLevels = []
+    this.frameAnalyzer.reset()
   }
 }

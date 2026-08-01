@@ -10,6 +10,7 @@ import {
 import { IconBtn } from '../../styles'
 import {
   preferredMicrophoneId,
+  MICROPHONE_VOLUME_CHANGED_EVENT,
   preferredScreenShareBitrate,
   preferredScreenShareContentHint,
   preferredScreenShareFrameRate,
@@ -707,13 +708,17 @@ export function VoiceCallHost() {
       )
     }
     const onShortcutChange = (event: Event) => setPttShortcut((event as CustomEvent<string>).detail)
+    const onMicrophoneVolumeChange = (event: Event) =>
+      micGateRef.current?.setVolume((event as CustomEvent<number>).detail)
     window.addEventListener(VOICE_INPUT_MODE_CHANGED_EVENT, onModeChange)
     window.addEventListener(VOICE_ACTIVATION_THRESHOLD_CHANGED_EVENT, onThresholdChange)
     window.addEventListener(PUSH_TO_TALK_SHORTCUT_CHANGED_EVENT, onShortcutChange)
+    window.addEventListener(MICROPHONE_VOLUME_CHANGED_EVENT, onMicrophoneVolumeChange)
     return () => {
       window.removeEventListener(VOICE_INPUT_MODE_CHANGED_EVENT, onModeChange)
       window.removeEventListener(VOICE_ACTIVATION_THRESHOLD_CHANGED_EVENT, onThresholdChange)
       window.removeEventListener(PUSH_TO_TALK_SHORTCUT_CHANGED_EVENT, onShortcutChange)
+      window.removeEventListener(MICROPHONE_VOLUME_CHANGED_EVENT, onMicrophoneVolumeChange)
     }
   }, [])
   useEffect(() => {

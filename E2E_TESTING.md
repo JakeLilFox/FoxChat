@@ -48,7 +48,8 @@ The AppImage test runs the already-built Linux desktop artifact through
 real AppImage, signs in, creates and opens a private fixture room, sends text,
 uploads a PNG, verifies both Matrix events on the homeserver, checks that an
 external link is handed to the OS browser opener, and signs out. A separate
-recovery journey restores encrypted history with the account recovery key.
+recovery journey restores encrypted history with the account recovery key and
+can verify the native device through a second, browser-based Matrix session.
 
 The release CI runs three isolated journeys:
 
@@ -73,6 +74,12 @@ By default, the runner looks in
 specific existing artifact. `APPIMAGE_E2E_ACCOUNT` selects the account from
 `test.env` and defaults to account 1. Screenshots, the captured external URL,
 and the native-driver log are written to `test-results/appimage/`.
+
+When `APPIMAGE_E2E_VERIFICATION=1`, the cross-device SAS handshake is retried
+once with a fresh browser device if either side does not render all seven emoji
+within 60 seconds. The stalled request is cancelled on both devices before the
+retry. Native state, browser state, and a browser screenshot from each stalled
+attempt are retained in the output directory.
 
 To run the same harness directly on an Ubuntu host that already has
 `tauri-driver`, `WebKitWebDriver`, Xvfb, xauth, and DBus:

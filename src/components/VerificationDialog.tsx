@@ -22,26 +22,62 @@ export function VerificationDialog({
   const [sas, setSas] = useState<ShowSasCallbacks>()
   const [working, setWorking] = useState(false)
   const verifierRef = useRef<Verifier | undefined>(undefined)
+  const verifierListenersRef = useRef<
+    | {
+        verifier: Verifier
+        showSas: (value: ShowSasCallbacks) => void
+        cancel: () => void
+      }
+    | undefined
+  >(undefined)
   const startingRef = useRef(false)
+  const startWhenReadyRef = useRef(false)
+  const unbindVerifier = useCallback(() => {
+    const listeners = verifierListenersRef.current
+    if (listeners) {
+      listeners.verifier.off(VerifierEvent.ShowSas, listeners.showSas)
+      listeners.verifier.off(VerifierEvent.Cancel, listeners.cancel)
+    }
+    verifierListenersRef.current = undefined
+    verifierRef.current = undefined
+  }, [])
   const bindVerifier = useCallback(
     (verifier: Verifier) => {
-      if (verifierRef.current === verifier) return
+      // Rust crypto may reach the SAS comparison state before React receives the verifier.
+      // ShowSas is an edge-triggered event, so recover its retained value instead of waiting
+      // forever for an event which has already fired.
+      if (verifierRef.current === verifier) {
+        const retainedSas = verifier.getShowSasCallbacks()
+        if (retainedSas) setSas(retainedSas)
+        return
+      }
+      unbindVerifier()
       verifierRef.current = verifier
-      verifier.on(VerifierEvent.ShowSas, (value) => setSas(value))
-      verifier.on(VerifierEvent.Cancel, () => refresh((x) => x + 1))
+      setSas(undefined)
+      const showSas = (value: ShowSasCallbacks) => setSas(value)
+      const cancel = () => refresh((x) => x + 1)
+      verifierListenersRef.current = { verifier, showSas, cancel }
+      verifier.on(VerifierEvent.ShowSas, showSas)
+      verifier.on(VerifierEvent.Cancel, cancel)
+      const retainedSas = verifier.getShowSasCallbacks()
+      if (retainedSas) setSas(retainedSas)
       void verifier
         .verify()
         .then(() => refresh((x) => x + 1))
         .catch((e) => message.error(e instanceof Error ? e.message : 'Verification cancelled'))
     },
-    [message],
+    [message, unbindVerifier],
   )
   const startReadyVerifier = useCallback(async () => {
     if (request.verifier) {
       bindVerifier(request.verifier)
       return
     }
-    if (request.phase !== VerificationPhase.Ready || !request.initiatedByMe || startingRef.current)
+    if (
+      request.phase !== VerificationPhase.Ready ||
+      !startWhenReadyRef.current ||
+      startingRef.current
+    )
       return
     startingRef.current = true
     setWorking(true)
@@ -55,6 +91,9 @@ export function VerificationDialog({
     }
   }, [request, bindVerifier, message])
   useEffect(() => {
+    startWhenReadyRef.current = false
+  }, [request])
+  useEffect(() => {
     const changed = () => {
       refresh((x) => x + 1)
       if (request.verifier) bindVerifier(request.verifier)
@@ -64,16 +103,19 @@ export function VerificationDialog({
     changed()
     return () => {
       request.off(VerificationRequestEvent.Change, changed)
+      unbindVerifier()
     }
-  }, [request, bindVerifier, startReadyVerifier])
+  }, [request, bindVerifier, startReadyVerifier, unbindVerifier])
   const proceed = async () => {
+    // A to-device request has no initiator until one side sends m.key.verification.start.
+    // Remember that the user chose this device even if accept() resolves before Ready.
+    startWhenReadyRef.current = true
     setWorking(true)
     try {
       if (!request.initiatedByMe && request.phase === VerificationPhase.Requested)
         await request.accept()
       if (request.verifier) bindVerifier(request.verifier)
-      else if (request.phase === VerificationPhase.Ready)
-        bindVerifier(await request.startVerification('m.sas.v1'))
+      else await startReadyVerifier()
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Could not start verification')
     } finally {
@@ -98,6 +140,7 @@ export function VerificationDialog({
       </p>
       {sas?.sas.emoji && (
         <div
+          data-testid="verification-sas"
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(4,1fr)',
@@ -116,7 +159,7 @@ export function VerificationDialog({
               }}
             >
               <div style={{ fontSize: 28 }}>{emoji}</div>
-              <small>{name}</small>
+              <small data-testid="verification-sas-label">{name}</small>
             </div>
           ))}
         </div>

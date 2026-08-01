@@ -1,4 +1,6 @@
 import {
+  MICROPHONE_VOLUME_CHANGED_EVENT,
+  MICROPHONE_VOLUME_KEY,
   MICROPHONE_DEVICE_KEY,
   PUSH_TO_TALK_SHORTCUT_CHANGED_EVENT,
   PUSH_TO_TALK_SHORTCUT_KEY,
@@ -11,6 +13,7 @@ import {
   VOICE_ACTIVATION_THRESHOLD_MODE_KEY,
   VOICE_INPUT_MODE_CHANGED_EVENT,
   VOICE_INPUT_MODE_KEY,
+  microphoneVolumePercent,
   preferredMicrophoneId,
   pushToTalkShortcut,
   voiceActivationPrerollMs,
@@ -39,6 +42,7 @@ export function MicrophoneSetting() {
   const pushToTalkAvailable = desktopPushToTalkAvailable()
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [deviceId, setDeviceId] = useState(preferredMicrophoneId)
+  const [microphoneVolume, setMicrophoneVolume] = useState(microphoneVolumePercent)
   const [needsPermission, setNeedsPermission] = useState(false)
   const [inputMode, setInputMode] = useState<VoiceInputMode>(() => {
     const stored = voiceInputMode()
@@ -57,8 +61,11 @@ export function MicrophoneSetting() {
   const engineRef = useRef<VoiceActivation | undefined>(undefined)
   const thresholdModeRef = useRef(thresholdMode)
   const thresholdDbRef = useRef(thresholdDb)
+  const microphoneVolumeRef = useRef(microphoneVolume)
+  const committedMicrophoneVolumeRef = useRef(microphoneVolume)
   thresholdModeRef.current = thresholdMode
   thresholdDbRef.current = thresholdDb
+  microphoneVolumeRef.current = microphoneVolume
 
   const refresh = useCallback(async () => {
     const all = await navigator.mediaDevices.enumerateDevices()
@@ -87,6 +94,7 @@ export function MicrophoneSetting() {
       undefined,
       thresholdModeRef.current === 'manual' ? thresholdDbRef.current : undefined,
     )
+    engine.setMonitoringVolume(microphoneVolumeRef.current)
     engineRef.current = engine
     setMicrophoneError('')
     void engine
@@ -153,6 +161,25 @@ export function MicrophoneSetting() {
     applyPreferredMicrophoneToActiveCalls()
   }
 
+  const changeMicrophoneVolume = (value: number) => {
+    setMicrophoneVolume(value)
+    localStorage.setItem(MICROPHONE_VOLUME_KEY, String(value))
+    engineRef.current?.setMonitoringVolume(value)
+    window.dispatchEvent(new CustomEvent(MICROPHONE_VOLUME_CHANGED_EVENT, { detail: value }))
+  }
+
+  const finishMicrophoneVolumeChange = (value: number) => {
+    const previous = committedMicrophoneVolumeRef.current
+    committedMicrophoneVolumeRef.current = value
+    if (
+      value !== previous &&
+      (value === 100 || previous === 100) &&
+      '__TAURI_INTERNALS__' in window &&
+      /Linux/i.test(window.navigator.userAgent)
+    )
+      applyPreferredMicrophoneToActiveCalls()
+  }
+
   const changeInputMode = (value: VoiceInputMode) => {
     if (value === 'push_to_talk' && !pushToTalkAvailable) return
     setInputMode(value)
@@ -216,6 +243,13 @@ export function MicrophoneSetting() {
   const rejectedNonVoice = !!preview?.aboveThreshold && !preview.voiceLike && !preview.speaking
   const voiceStarting = !!preview?.candidate && !preview.speaking
   const releaseHold = !!preview?.speaking && !preview.candidate
+  const microphoneTestDescription = microphoneError
+    ? microphoneError
+    : testing
+      ? inputMode === 'voice_activation'
+        ? 'You are hearing the filtered, delayed signal after the activation gate. Use headphones to prevent feedback.'
+        : 'You are hearing the filtered outgoing microphone signal. Use headphones to prevent feedback.'
+      : 'Hear the volume-adjusted outgoing path after echo cancellation, noise suppression, and voice isolation where supported.'
 
   return (
     <>
@@ -245,6 +279,32 @@ export function MicrophoneSetting() {
           title="Microphone"
           description="Choose which microphone to use for voice calls."
         />
+      </AntList.Item>
+
+      <AntList.Item>
+        <div style={{ width: '100%', display: 'grid', gap: 8 }}>
+          <AntList.Item.Meta
+            title={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span>Microphone volume</span>
+                <Tag>{microphoneVolume}%</Tag>
+              </div>
+            }
+            description="Adjust how loudly your microphone is sent to everyone in Matrix calls."
+          />
+          <Slider
+            aria-label="Microphone volume"
+            min={0}
+            max={200}
+            step={5}
+            value={microphoneVolume}
+            marks={{ 0: '0%', 100: '100%', 200: '200%' }}
+            tooltip={{ formatter: (value) => `${value}%` }}
+            onChange={changeMicrophoneVolume}
+            onChangeComplete={finishMicrophoneVolumeChange}
+            style={{ margin: '8px 10px 22px' }}
+          />
+        </div>
       </AntList.Item>
 
       <AntList.Item>
@@ -463,18 +523,7 @@ export function MicrophoneSetting() {
           </Button>
         }
       >
-        <AntList.Item.Meta
-          title="Microphone test"
-          description={
-            microphoneError
-              ? microphoneError
-              : testing
-                ? inputMode === 'voice_activation'
-                  ? 'You are hearing the filtered, delayed signal after the activation gate. Use headphones to prevent feedback.'
-                  : 'You are hearing the filtered outgoing microphone signal. Use headphones to prevent feedback.'
-                : 'Hear the outgoing path after echo cancellation, noise suppression, and voice isolation where supported, without gain control amplifying background noise.'
-          }
-        />
+        <AntList.Item.Meta title="Microphone test" description={microphoneTestDescription} />
       </AntList.Item>
     </>
   )

@@ -12,6 +12,8 @@ import {
   type IOpenIDUpdate,
 } from 'matrix-widget-api'
 import {
+  clampMicrophoneVolumePercent,
+  microphoneVolumePercent,
   preferredMicrophoneId,
   type ScreenShareContentHint,
   type ScreenShareFrameRate,
@@ -393,6 +395,7 @@ export const createMicrophoneGate = (iframe: HTMLIFrameElement) => {
     '__TAURI_INTERNALS__' in window && /Linux/i.test(window.navigator.userAgent)
   let patchedWindow: Window | undefined
   const tracks = new Set<MediaStreamTrack>()
+  const directTracks = new Set<MediaStreamTrack>()
   const delayNodes = new Set<DelayNode>()
   const gainNodes = new Set<GainNode>()
   const audioContexts = new Set<AudioContext>()
@@ -400,6 +403,8 @@ export const createMicrophoneGate = (iframe: HTMLIFrameElement) => {
   let closeTimer: number | undefined
   let cameraAllowed = false
   let enabled = true
+  let volumeScale = microphoneVolumePercent() / 100
+  const targetGain = () => (enabled ? volumeScale : 0)
   const apply = () => {
     const win = iframe.contentWindow
     if (!win || win === patchedWindow) return
@@ -435,10 +440,16 @@ export const createMicrophoneGate = (iframe: HTMLIFrameElement) => {
       const stream = await original(effectiveConstraints)
       if (effectiveConstraints?.audio)
         for (const track of stream.getAudioTracks()) {
-          if (gateOriginalTrack) {
+          // Linux WebKit needs the native track at neutral gain. A custom volume
+          // explicitly opts into Web Audio so the published Matrix track is amplified.
+          if (gateOriginalTrack && volumeScale === 1) {
             track.enabled = enabled
             tracks.add(track)
-            track.addEventListener('ended', () => tracks.delete(track))
+            directTracks.add(track)
+            track.addEventListener('ended', () => {
+              tracks.delete(track)
+              directTracks.delete(track)
+            })
             continue
           }
           // Build the gate in the iframe realm to match Firefox's sample rate.
@@ -450,7 +461,7 @@ export const createMicrophoneGate = (iframe: HTMLIFrameElement) => {
           const gain = context.createGain()
           const destination = context.createMediaStreamDestination()
           delay.delayTime.value = delayMs / 1000
-          gain.gain.value = enabled ? 1 : 0
+          gain.gain.value = targetGain()
           source.connect(delay).connect(gain).connect(destination)
           const output = destination.stream.getAudioTracks()[0]
           stream.removeTrack(track)
@@ -496,19 +507,28 @@ export const createMicrophoneGate = (iframe: HTMLIFrameElement) => {
       for (const delay of delayNodes)
         delay.delayTime.setValueAtTime(delayMs / 1000, delay.context.currentTime)
     },
+    setVolume(nextVolumePercent: number) {
+      volumeScale = clampMicrophoneVolumePercent(nextVolumePercent) / 100
+      for (const gain of gainNodes) {
+        const now = gain.context.currentTime
+        gain.gain.cancelScheduledValues(now)
+        gain.gain.setValueAtTime(gain.gain.value, now)
+        gain.gain.linearRampToValueAtTime(targetGain(), now + 0.015)
+      }
+    },
     setEnabled(next: boolean, preserveTail = false) {
       if (closeTimer !== undefined) {
         window.clearTimeout(closeTimer)
         closeTimer = undefined
       }
       enabled = next
-      if (gateOriginalTrack) for (const track of tracks) track.enabled = next
+      for (const track of directTracks) track.enabled = next
       const applyGain = () => {
         for (const gain of gainNodes) {
           const now = gain.context.currentTime
           gain.gain.cancelScheduledValues(now)
           gain.gain.setValueAtTime(gain.gain.value, now)
-          gain.gain.linearRampToValueAtTime(next ? 1 : 0, now + (next ? 0.008 : 0.025))
+          gain.gain.linearRampToValueAtTime(targetGain(), now + (next ? 0.008 : 0.025))
         }
       }
       if (!next && preserveTail && delayMs > 0)
@@ -528,7 +548,7 @@ export const createMicrophoneGate = (iframe: HTMLIFrameElement) => {
           const now = gain.context.currentTime
           gain.gain.cancelScheduledValues(now)
           gain.gain.setValueAtTime(gain.gain.value, now)
-          gain.gain.linearRampToValueAtTime(enabled ? 1 : 0, now + 0.025)
+          gain.gain.linearRampToValueAtTime(targetGain(), now + 0.025)
         }
       }, delayMs)
     },
@@ -537,6 +557,7 @@ export const createMicrophoneGate = (iframe: HTMLIFrameElement) => {
       if (closeTimer !== undefined) window.clearTimeout(closeTimer)
       for (const context of audioContexts) void context.close().catch(() => undefined)
       tracks.clear()
+      directTracks.clear()
       delayNodes.clear()
       gainNodes.clear()
       audioContexts.clear()

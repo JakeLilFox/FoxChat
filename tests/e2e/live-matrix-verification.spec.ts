@@ -29,7 +29,7 @@ const closeSettings = async (page: Page) => {
 const verificationDialog = (page: Page) =>
   page.getByRole('dialog', { name: 'Verify another device' })
 
-const sasEmojiLabels = (dialog: Locator) => dialog.locator('small')
+const sasEmojiLabels = (dialog: Locator) => dialog.getByTestId('verification-sas-label')
 
 const expectDeviceVerified = async (settings: Locator, deviceId: string) => {
   const row = settings.locator('.ant-list-item').filter({ hasText: deviceId })

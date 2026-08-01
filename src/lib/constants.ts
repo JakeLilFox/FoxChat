@@ -55,6 +55,14 @@ export const applyChatFontSize = (value: number) =>
 applyChatFontSize(chatFontSizeFromStorage())
 export const MICROPHONE_DEVICE_KEY = 'foxchat.microphoneDeviceId'
 export const preferredMicrophoneId = () => localStorage.getItem(MICROPHONE_DEVICE_KEY) || undefined
+export const MICROPHONE_VOLUME_KEY = 'foxchat.microphoneVolumePercent'
+export const MICROPHONE_VOLUME_CHANGED_EVENT = 'foxchat-microphone-volume-changed'
+export const clampMicrophoneVolumePercent = (value: number) =>
+  Number.isFinite(value) ? Math.max(0, Math.min(200, value)) : 100
+export const microphoneVolumePercent = () => {
+  const stored = localStorage.getItem(MICROPHONE_VOLUME_KEY)
+  return stored === null ? 100 : clampMicrophoneVolumePercent(Number(stored))
+}
 export type VoiceInputMode = 'open' | 'voice_activation' | 'push_to_talk'
 export type VoiceActivationThresholdMode = 'automatic' | 'manual'
 export const VOICE_INPUT_MODE_KEY = 'foxchat.voiceInputMode'
