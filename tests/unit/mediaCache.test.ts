@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CATEGORY_CONFIG,
+  materializeCachedBlob,
   planEviction,
   type CacheEntry,
   type PolicyConfig,
@@ -19,6 +20,24 @@ const entry = (overrides: Partial<CacheEntry> & Pick<CacheEntry, 'key'>): CacheE
 })
 
 const DAY = 24 * 60 * 60 * 1000
+
+describe('materializeCachedBlob', () => {
+  it('copies persisted bytes into a fresh blob with the separately stored MIME type', async () => {
+    const persisted = new Blob([new Uint8Array([137, 80, 78, 71])])
+
+    const materialized = await materializeCachedBlob(persisted, 'image/png', 4)
+
+    expect(materialized).not.toBe(persisted)
+    expect(materialized.type).toBe('image/png')
+    expect([...new Uint8Array(await materialized.arrayBuffer())]).toEqual([137, 80, 78, 71])
+  })
+
+  it('rejects an incomplete persisted blob so the caller can redownload it', async () => {
+    await expect(materializeCachedBlob(new Blob(['bad']), 'image/png', 100)).rejects.toThrow(
+      'Cached media is incomplete',
+    )
+  })
+})
 
 // stubs availableAccounts() so CATEGORY_CONFIG's room lookups resolve to fake rooms
 const withRooms = <T>(rooms: Record<string, number>, run: () => T): T => {

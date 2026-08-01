@@ -204,11 +204,25 @@ export async function getCachedMedia(
       store(db, 'readonly').get(key) as IDBRequest<CacheEntry | undefined>,
     )
     if (!entry) return undefined
+    const blob = await materializeCachedBlob(entry.blob, entry.mimetype, entry.byteSize)
     store(db, 'readwrite').put({ ...entry, lastAccessedAt: Date.now() })
-    return { blob: entry.blob, mimetype: entry.mimetype }
+    return { blob, mimetype: blob.type }
   } catch {
     return undefined
   }
+}
+
+export async function materializeCachedBlob(
+  persisted: Blob,
+  mimetype: string,
+  expectedBytes?: number,
+): Promise<Blob> {
+  const bytes = await persisted.arrayBuffer()
+  if (expectedBytes !== undefined && bytes.byteLength !== expectedBytes)
+    throw new Error('Cached media is incomplete')
+  return new Blob([bytes], {
+    type: mimetype.trim() || persisted.type || 'application/octet-stream',
+  })
 }
 
 export async function putCachedMedia(params: {
