@@ -128,10 +128,20 @@
             ]
           },
           {
-            "type": "cmd",
-            "id": "5bb53a9a-355f-41dd-b9fb-0863f4364243",
-            "cmd": [
-              "source /home/ubuntu1/.nvm/nvm.sh && npm run marketing:screenshots -- --output=marketing-material"
+            "type": "step",
+            "id": "7c448849-df28-4c48-8e64-d4728932751f",
+            "name": "Testing",
+            "tasks": [
+              {
+                "type": "cmd",
+                "id": "5bb53a9a-355f-41dd-b9fb-0863f4364243",
+                "cmd": [
+                  "source /home/ubuntu1/.nvm/nvm.sh && npm run marketing:screenshots -- --output=marketing-material"
+                ]
+              }
+            ],
+            "locks": [
+              "Testing"
             ]
           },
           {
@@ -347,44 +357,54 @@
         ]
       },
       {
-        "type": "cmd",
-        "id": "2f5e3d77-4a8c-4d3f-9c2a-7e6b1f8d5a40",
-        "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && npm run test:e2e:linux-call"
+        "type": "step",
+        "id": "55c1d282-23cb-47a4-835f-c407b9684e4d",
+        "name": "Testing",
+        "tasks": [
+          {
+            "type": "cmd",
+            "id": "2f5e3d77-4a8c-4d3f-9c2a-7e6b1f8d5a40",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && npm run test:e2e:linux-call"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "449a8c9c-e315-4efe-b832-abf3fe252499",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_ACCOUNT=1 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04-recovery && export APPIMAGE_E2E_RECOVERY_ONLY=1 && export APPIMAGE_E2E_VERIFICATION=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu-recovery && npm run test:e2e:appimage:host"
+            ],
+            "flags": [
+              "ignore-errors"
+            ],
+            "exitCodeVar": "appimage_recovery_code"
+          },
+          {
+            "type": "cmd",
+            "id": "2919d04d-e8c9-449b-9e11-41f23533064a",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_PATH=src-tauri/target/release/foxchat && export APPIMAGE_E2E_ACCOUNT=2 && export APPIMAGE_E2E_NOTIFICATION_SENDER_ACCOUNT=3 && export APPIMAGE_E2E_NOTIFICATIONS=1 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04 && export APPIMAGE_E2E_SKIP_RECOVERY=1 && export APPIMAGE_E2E_FAKE_MIC=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu && npm run test:e2e:appimage:host"
+            ],
+            "flags": [
+              "ignore-errors"
+            ],
+            "exitCodeVar": "appimage_full_code"
+          },
+          {
+            "type": "cmd",
+            "id": "7de0ee41-bfeb-4217-a53c-fabcadbe6c35",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export DOCKER_BUILDKIT=0 && export APPIMAGE_E2E_DOCKERFILE=tests/appimage/Dockerfile.ci && export APPIMAGE_E2E_DOCKER_NETWORK=host && export APPIMAGE_E2E_TAURI_DRIVER=\"$(command -v tauri-driver)\" && export APPIMAGE_E2E_BUILD_IN_CONTAINER=1 && export APPIMAGE_E2E_ACCOUNT=3 && export APPIMAGE_E2E_PLATFORM=arch-linux && export APPIMAGE_E2E_SKIP_RECOVERY=1 && if [ -e /dev/dri/card0 ] && [ -e /dev/dri/renderD128 ]; then export APPIMAGE_E2E_DRI_DEVICES=/dev/dri/card0,/dev/dri/renderD128; fi && npm run test:e2e:appimage"
+            ],
+            "flags": [
+              "ignore-errors"
+            ],
+            "exitCodeVar": "appimage_arch_code"
+          }
+        ],
+        "locks": [
+          "Testing"
         ]
-      },
-      {
-        "type": "cmd",
-        "id": "449a8c9c-e315-4efe-b832-abf3fe252499",
-        "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_ACCOUNT=1 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04-recovery && export APPIMAGE_E2E_RECOVERY_ONLY=1 && export APPIMAGE_E2E_VERIFICATION=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu-recovery && npm run test:e2e:appimage:host"
-        ],
-        "flags": [
-          "ignore-errors"
-        ],
-        "exitCodeVar": "appimage_recovery_code"
-      },
-      {
-        "type": "cmd",
-        "id": "2919d04d-e8c9-449b-9e11-41f23533064a",
-        "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export APPIMAGE_E2E_PATH=src-tauri/target/release/foxchat && export APPIMAGE_E2E_ACCOUNT=2 && export APPIMAGE_E2E_NOTIFICATION_SENDER_ACCOUNT=3 && export APPIMAGE_E2E_NOTIFICATIONS=1 && export APPIMAGE_E2E_PLATFORM=ubuntu-24.04 && export APPIMAGE_E2E_SKIP_RECOVERY=1 && export APPIMAGE_E2E_FAKE_MIC=1 && export APPIMAGE_E2E_NATIVE_DRIVER=/usr/bin/WebKitWebDriver && export APPIMAGE_E2E_OUTPUT_DIR=test-results/appimage-ubuntu && npm run test:e2e:appimage:host"
-        ],
-        "flags": [
-          "ignore-errors"
-        ],
-        "exitCodeVar": "appimage_full_code"
-      },
-      {
-        "type": "cmd",
-        "id": "7de0ee41-bfeb-4217-a53c-fabcadbe6c35",
-        "cmd": [
-          "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export DOCKER_BUILDKIT=0 && export APPIMAGE_E2E_DOCKERFILE=tests/appimage/Dockerfile.ci && export APPIMAGE_E2E_DOCKER_NETWORK=host && export APPIMAGE_E2E_TAURI_DRIVER=\"$(command -v tauri-driver)\" && export APPIMAGE_E2E_BUILD_IN_CONTAINER=1 && export APPIMAGE_E2E_ACCOUNT=3 && export APPIMAGE_E2E_PLATFORM=arch-linux && export APPIMAGE_E2E_SKIP_RECOVERY=1 && if [ -e /dev/dri/card0 ] && [ -e /dev/dri/renderD128 ]; then export APPIMAGE_E2E_DRI_DEVICES=/dev/dri/card0,/dev/dri/renderD128; fi && npm run test:e2e:appimage"
-        ],
-        "flags": [
-          "ignore-errors"
-        ],
-        "exitCodeVar": "appimage_arch_code"
       },
       {
         "type": "asset",
@@ -672,6 +692,15 @@
         ]
       },
       {
+        "type": "step",
+        "id": "b2692f59-35d3-40a0-86ca-72b8fb285885",
+        "name": "Testing",
+        "tasks": [],
+        "locks": [
+          "Testing"
+        ]
+      },
+      {
         "type": "cmd",
         "id": "d4c3e6f8-9001-4c23-bd4e-5f6a7b8c9d0e",
         "cmd": [
@@ -700,8 +729,7 @@
     ],
     "image": "build-container-tauri",
     "depends": [
-      "Test",
-      "Desktop"
+      "Test"
     ],
     "trigger": {
       "logic": {
