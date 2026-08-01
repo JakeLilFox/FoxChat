@@ -2937,6 +2937,32 @@ export const PackJumpBar = styled.div`
     object-fit: contain;
   }
 `
+export const CustomReactionTextRow = styled.div`
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  input {
+    min-width: 0;
+    flex: 1;
+    border: 1px solid ${(p) => p.theme.border};
+    border-radius: 8px;
+    background: ${(p) => p.theme.input};
+    color: ${(p) => p.theme.text};
+    padding: 6px 8px;
+  }
+  button {
+    border: 0;
+    border-radius: 8px;
+    background: ${(p) => p.theme.accent};
+    color: white;
+    padding: 0 14px;
+    cursor: pointer;
+  }
+  button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+`
 export const PackCollection = styled.div`
   max-height: 390px;
   overflow: auto;

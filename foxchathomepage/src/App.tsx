@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import './App.css'
 
@@ -16,41 +16,25 @@ const marketingShots: MarketingShot[] = [
     description: 'Images stay close to the conversation, with a focused viewer when you need it.',
   },
   {
-    src: '/marketing/04-dark-conversation.png',
-    title: 'Dark mode',
-    description: 'A quieter theme for late-night conversations and low-light rooms.',
+    src: '/marketing/12-diagonal-conversation.png',
+    title: 'Light or dark, your call',
+    description: 'The same conversation, split across both themes.',
   },
   {
-    src: '/marketing/03-mobile-conversation.png',
+    src: '/marketing/13-diagonal-mobile.png',
     title: 'Made for mobile',
     description: 'The same conversations and familiar controls, shaped for a smaller screen.',
     format: 'mobile',
   },
   {
-    src: '/marketing/05-dark-mobile-conversation.png',
-    title: 'Mobile after dark',
-    description: 'Dark mode carries cleanly from the desktop client to Android.',
-    format: 'mobile',
-  },
-  {
-    src: '/marketing/06-space-overview-light.png',
+    src: '/marketing/14-diagonal-space.png',
     title: 'Spaces at a glance',
     description: 'Keep projects and communities organized without losing your place.',
   },
   {
-    src: '/marketing/07-space-chat-light.png',
+    src: '/marketing/15-diagonal-space-chat.png',
     title: 'Channels with context',
     description: 'Move from a Space overview into a channel and keep the bigger picture nearby.',
-  },
-  {
-    src: '/marketing/08-space-overview-dark.png',
-    title: 'Spaces in dark mode',
-    description: 'The full Space layout remains readable and calm in either theme.',
-  },
-  {
-    src: '/marketing/09-space-chat-dark.png',
-    title: 'Focused conversations',
-    description: 'Chat, shared photos, and room details fit together without crowding the message.',
   },
   {
     src: '/marketing/10-chat-tour-light.gif',
@@ -61,6 +45,11 @@ const marketingShots: MarketingShot[] = [
     src: '/marketing/11-chat-tour-dark.gif',
     title: 'A quick tour after dark',
     description: 'The same fast room switching in dark mode.',
+  },
+  {
+    src: '/marketing/16-voice-call.gif',
+    title: 'Voice, naturally',
+    description: 'Hop on a voice channel and see who is talking at a glance.',
   },
 ]
 
@@ -98,6 +87,70 @@ function TiltCard(props: { children: React.ReactNode; className?: string }) {
       style={style}
     >
       {props.children}
+    </div>
+  )
+}
+
+function MarketingCarousel({ shots }: { shots: MarketingShot[] }) {
+  const [index, setIndex] = useState(0)
+  const [paused, setPaused] = useState(false)
+  const count = shots.length
+
+  useEffect(() => {
+    if (paused) return
+    const timer = window.setInterval(() => setIndex((value) => (value + 1) % count), 5000)
+    return () => window.clearInterval(timer)
+  }, [count, paused])
+
+  const goTo = (next: number) => setIndex(((next % count) + count) % count)
+  const shot = shots[index]
+
+  return (
+    <div
+      className="carousel"
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+    >
+      <div className="carousel-track">
+        <button
+          type="button"
+          className="carousel-nav carousel-prev"
+          aria-label="Previous screenshot"
+          onClick={() => goTo(index - 1)}
+        >
+          ‹
+        </button>
+        <figure
+          className={`carousel-slide${shot.format === 'mobile' ? ' carousel-slide-mobile' : ''}`}
+        >
+          <div className="carousel-image-wrap">
+            <img src={shot.src} alt={shot.title} />
+          </div>
+          <figcaption>
+            <h3>{shot.title}</h3>
+            <p>{shot.description}</p>
+          </figcaption>
+        </figure>
+        <button
+          type="button"
+          className="carousel-nav carousel-next"
+          aria-label="Next screenshot"
+          onClick={() => goTo(index + 1)}
+        >
+          ›
+        </button>
+      </div>
+      <div className="carousel-dots">
+        {shots.map((item, dotIndex) => (
+          <button
+            key={item.src}
+            type="button"
+            className={`carousel-dot${dotIndex === index ? ' active' : ''}`}
+            aria-label={`Show ${item.title}`}
+            onClick={() => goTo(dotIndex)}
+          />
+        ))}
+      </div>
     </div>
   )
 }
@@ -207,22 +260,7 @@ function App() {
             themes.
           </p>
         </div>
-        <div className="marketing-grid">
-          {marketingShots.map((shot) => (
-            <figure
-              className={`marketing-card${shot.format === 'mobile' ? ' marketing-card-mobile' : ''}`}
-              key={shot.src}
-            >
-              <div className="marketing-image-wrap">
-                <img src={shot.src} alt={shot.title} loading="lazy" />
-              </div>
-              <figcaption>
-                <h3>{shot.title}</h3>
-                <p>{shot.description}</p>
-              </figcaption>
-            </figure>
-          ))}
-        </div>
+        <MarketingCarousel shots={marketingShots} />
       </section>
 
       <section className="platforms" id="platforms">

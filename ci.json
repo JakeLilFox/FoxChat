@@ -642,6 +642,14 @@
       },
       {
         "type": "asset",
+        "id": "a1b2c3d4-apk4-4000-b000-111111111111",
+        "files": [
+          "src-tauri/gen/android/app/build/outputs/apk/"
+        ],
+        "prefix": "android-apk"
+      },
+      {
+        "type": "asset",
         "id": "d27b557c-ac51-451c-849b-903d05dd4532",
         "files": [
           "src-tauri/gen/android/app/build/outputs/"
@@ -962,11 +970,14 @@
         "files": [
           "windows/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/",
           "windows/bridge/dist/FoxChatBridge-windows-x86_64.exe",
-          "desktop/src-tauri/target/release/bundle/appimage/",
-          "desktop/src-tauri/target/release/bundle/deb/",
-          "desktop/src-tauri/target/release/bundle/rpm/",
+          "desktop/src-tauri/target/release/bundle/appimage/FoxChat_${version}_amd64.AppImage.sig",
+          "desktop/src-tauri/target/release/bundle/appimage/FoxChat_${version}_amd64.AppImage",
+          "desktop/src-tauri/target/release/bundle/deb/FoxChat_${version}_amd64.deb.sig",
+          "desktop/src-tauri/target/release/bundle/deb/FoxChat_${version}_amd64.deb",
+          "desktop/src-tauri/target/release/bundle/deb/FoxChat-${version}-1.x86_64.rpm.sig",
+          "desktop/src-tauri/target/release/bundle/deb/FoxChat-${version}-1.x86_64.rpm",
           "desktop/bridge/dist/FoxChatBridge-linux-x86_64",
-          "android/src-tauri/gen/android/app/build/outputs/"
+          "android/src-tauri/gen/android/app/build/outputs/apk/"
         ]
       }
     ],

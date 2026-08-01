@@ -980,8 +980,29 @@ async function capturePng(page, path) {
   await page.screenshot({ path, caret: 'hide' })
 }
 
-async function createTourGif(page, roomNames, output, label) {
+function encodeFramesToGif(frameDirectory, output, { framerate = 3 } = {}) {
   if (!ffmpegPath) throw new Error('ffmpeg-static did not provide an executable')
+  const encoded = spawnSync(
+    ffmpegPath,
+    [
+      '-y',
+      '-framerate',
+      String(framerate),
+      '-i',
+      resolve(frameDirectory, 'frame-%03d.png'),
+      '-vf',
+      'scale=960:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=192[p];[s1][p]paletteuse=dither=bayer',
+      '-loop',
+      '0',
+      output,
+    ],
+    { cwd: root, encoding: 'utf8', windowsHide: true },
+  )
+  if (encoded.status !== 0)
+    throw new Error(`Could not encode GIF ${safePath(output)}: ${encoded.stderr || encoded.stdout}`)
+}
+
+async function createTourGif(page, roomNames, output, label) {
   const frameDirectory = resolve(outputDirectory, `.frames-${label}`)
   const expectedPrefix = `${resolve(outputDirectory)}${sep}`
   if (!resolve(frameDirectory).startsWith(expectedPrefix))
@@ -997,27 +1018,177 @@ async function createTourGif(page, roomNames, output, label) {
         await page.screenshot({ path: resolve(frameDirectory, filename), caret: 'hide' })
       }
     }
-    const encoded = spawnSync(
-      ffmpegPath,
-      [
-        '-y',
-        '-framerate',
-        '3',
-        '-i',
-        resolve(frameDirectory, 'frame-%03d.png'),
-        '-vf',
-        'scale=960:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=192[p];[s1][p]paletteuse=dither=bayer',
-        '-loop',
-        '0',
-        output,
-      ],
-      { cwd: root, encoding: 'utf8', windowsHide: true },
-    )
-    if (encoded.status !== 0)
-      throw new Error(`Could not encode ${label} GIF: ${encoded.stderr || encoded.stdout}`)
+    encodeFramesToGif(frameDirectory, output)
   } finally {
     rmSync(frameDirectory, { recursive: true, force: true })
   }
+}
+
+async function compositeDiagonalSplit(topLeftImage, bottomRightImage, output) {
+  if (!ffmpegPath) throw new Error('ffmpeg-static did not provide an executable')
+  // scale2ref matches the overlay image to the base image's size in case the two captures
+  // (e.g. a mobile viewport vs. a resized one) don't come out pixel-identical; the blend
+  // expression then keeps input A wherever X/W + Y/H < 1, i.e. the triangle around the
+  // top-left corner bounded by the line from (W,0) to (0,H), and input B elsewhere.
+  const result = spawnSync(
+    ffmpegPath,
+    [
+      '-y',
+      '-i',
+      topLeftImage,
+      '-i',
+      bottomRightImage,
+      '-filter_complex',
+      "[1:v][0:v]scale2ref[ovl][base];[base][ovl]blend=all_expr='if(lt(X/W+Y/H,1),A,B)'",
+      '-frames:v',
+      '1',
+      output,
+    ],
+    { cwd: root, encoding: 'utf8', windowsHide: true },
+  )
+  if (result.status !== 0)
+    throw new Error(
+      `Could not composite diagonal split ${safePath(output)}: ${result.stderr || result.stdout}`,
+    )
+}
+
+function writeToneWav(path, frequencyHz, durationSeconds = 60) {
+  const sampleRate = 48_000
+  const amplitude = 0.6
+  const tremoloHz = 4
+  const sampleCount = Math.floor(durationSeconds * sampleRate)
+  const dataSize = sampleCount * 2
+  const buffer = Buffer.alloc(44 + dataSize)
+  buffer.write('RIFF', 0)
+  buffer.writeUInt32LE(36 + dataSize, 4)
+  buffer.write('WAVE', 8)
+  buffer.write('fmt ', 12)
+  buffer.writeUInt32LE(16, 16)
+  buffer.writeUInt16LE(1, 20)
+  buffer.writeUInt16LE(1, 22)
+  buffer.writeUInt32LE(sampleRate, 24)
+  buffer.writeUInt32LE(sampleRate * 2, 28)
+  buffer.writeUInt16LE(2, 32)
+  buffer.writeUInt16LE(16, 34)
+  buffer.write('data', 36)
+  buffer.writeUInt32LE(dataSize, 40)
+  for (let i = 0; i < sampleCount; i++) {
+    const t = i / sampleRate
+    const tremolo = 1 - 0.18 * (0.5 + 0.5 * Math.sin(2 * Math.PI * tremoloHz * t))
+    const sample = amplitude * tremolo * Math.sin(2 * Math.PI * frequencyHz * t)
+    const clamped = Math.max(-1, Math.min(1, sample))
+    buffer.writeInt16LE(Math.round(clamped * 32_767), 44 + i * 2)
+  }
+  writeFileSync(path, buffer)
+}
+
+async function launchFakeAudioBrowser(fakeAudioWavPath) {
+  return chromium.launch({
+    headless: !headed,
+    args: [
+      '--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream',
+      `--use-file-for-fake-audio-capture=${fakeAudioWavPath}`,
+    ],
+  })
+}
+
+async function setMicrophone(page, unmuted) {
+  const button = page.getByRole('button', {
+    name: unmuted ? 'Unmute microphone' : 'Mute microphone',
+  })
+  if (await button.isVisible().catch(() => false)) await button.click()
+}
+
+async function captureVoiceCallGif(accounts, rawSessions) {
+  const output = resolve(outputDirectory, '16-voice-call.gif')
+  const tone1Path = resolve(outputDirectory, '.voice-tone-1.wav')
+  const tone2Path = resolve(outputDirectory, '.voice-tone-2.wav')
+  const frameDirectory = resolve(outputDirectory, '.frames-voice-call')
+  writeToneWav(tone1Path, 220)
+  writeToneWav(tone2Path, 300)
+
+  await createSharedRoom(
+    rawSessions.slice(0, 2),
+    'Voice hangout',
+    'Hop on when you have a minute.',
+    {
+      creation_content: { type: 'org.matrix.msc3417.call', 'm.federate': true },
+      room_type: 'org.matrix.msc3417.call',
+      power_level_content_override: {
+        events: {
+          'org.matrix.msc3401.call.member': 0,
+          'm.call.member': 0,
+          'org.matrix.msc4143.rtc.member': 0,
+          'm.rtc.member': 0,
+        },
+      },
+    },
+  )
+
+  let browser1
+  let browser2
+  try {
+    browser1 = await launchFakeAudioBrowser(tone1Path)
+    browser2 = await launchFakeAudioBrowser(tone2Path)
+    const context1 = await browser1.newContext({
+      baseURL,
+      viewport: { width: 1280, height: 800 },
+      reducedMotion: 'reduce',
+      locale: 'en-US',
+    })
+    const context2 = await browser2.newContext({
+      baseURL,
+      viewport: { width: 1280, height: 800 },
+      reducedMotion: 'reduce',
+      locale: 'en-US',
+    })
+    const page1 = await context1.newPage()
+    const page2 = await context2.newPage()
+    await signIn(page1, accounts[0])
+    await signIn(page2, accounts[1])
+    await openNamedRoom(page1, 'Voice hangout')
+    await openNamedRoom(page2, 'Voice hangout')
+    await page1.getByTitle('Join voice channel').click()
+    await page2.getByTitle('Join voice channel').click()
+    for (const page of [page1, page2])
+      await page
+        .frameLocator('iframe[title$="call engine"]')
+        .locator('[data-testid="incall_leave"]')
+        .waitFor({ state: 'visible', timeout: 90_000 })
+    await settleVisuals(page1)
+
+    mkdirSync(frameDirectory, { recursive: true })
+    let frame = 0
+    // Alternates who appears to be talking so the loop reads as a natural back-and-forth
+    // rather than two people talking over each other the whole time.
+    const cycles = [
+      [true, false],
+      [false, true],
+      [true, false],
+      [false, true],
+    ]
+    for (const [speaker1, speaker2] of cycles) {
+      await setMicrophone(page1, speaker1)
+      await setMicrophone(page2, speaker2)
+      await page1.waitForTimeout(900)
+      for (let hold = 0; hold < 3; hold++) {
+        await page1.screenshot({
+          path: resolve(frameDirectory, `frame-${String(frame++).padStart(3, '0')}.png`),
+          caret: 'hide',
+        })
+        await page1.waitForTimeout(250)
+      }
+    }
+    encodeFramesToGif(frameDirectory, output)
+  } finally {
+    rmSync(frameDirectory, { recursive: true, force: true })
+    rmSync(tone1Path, { force: true })
+    rmSync(tone2Path, { force: true })
+    await browser1?.close().catch(() => undefined)
+    await browser2?.close().catch(() => undefined)
+  }
+  return output
 }
 
 async function openSpaceChannel(page, spaceName, channelName) {
@@ -1117,6 +1288,21 @@ async function captureScreenshots(pages) {
     timeline.scrollTop = timeline.scrollHeight
   })
   await capturePng(mobilePage, darkMobile)
+
+  // Diagonal dark/light showcase images: each pairs a light and dark capture of the same
+  // view, split by the diagonal from the top-right corner to the bottom-left corner so the
+  // triangle around the top-left corner shows one theme and the triangle around the
+  // bottom-right corner shows the other. Which theme lands top-left alternates from one
+  // composite to the next so the set doesn't read as one-sided.
+  const diagonalConversation = resolve(outputDirectory, '12-diagonal-conversation.png')
+  const diagonalMobile = resolve(outputDirectory, '13-diagonal-mobile.png')
+  const diagonalSpace = resolve(outputDirectory, '14-diagonal-space.png')
+  const diagonalSpaceChat = resolve(outputDirectory, '15-diagonal-space-chat.png')
+  await compositeDiagonalSplit(dark, desktop, diagonalConversation)
+  await compositeDiagonalSplit(mobile, darkMobile, diagonalMobile)
+  await compositeDiagonalSplit(spaceDark, spaceLight, diagonalSpace)
+  await compositeDiagonalSplit(spaceChatLight, spaceChatDark, diagonalSpaceChat)
+
   return [
     desktop,
     media,
@@ -1129,6 +1315,10 @@ async function captureScreenshots(pages) {
     spaceChatDark,
     tourLight,
     tourDark,
+    diagonalConversation,
+    diagonalMobile,
+    diagonalSpace,
+    diagonalSpaceChat,
   ]
 }
 
@@ -1255,6 +1445,15 @@ async function main() {
     )
 
     const screenshots = await captureScreenshots(pages)
+    const voiceCallGif = await captureVoiceCallGif(accounts, rawSessions).catch((error) => {
+      console.warn(
+        `Voice call GIF capture failed, continuing without it: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      return undefined
+    })
+    if (voiceCallGif) screenshots.push(voiceCallGif)
     const manifest = {
       createdAt: new Date().toISOString(),
       room: { name: roomName, topic: roomTopic },

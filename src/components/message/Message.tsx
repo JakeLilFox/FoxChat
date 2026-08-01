@@ -289,7 +289,7 @@ export const Message = memo(function Message({
   useEffect(() => {
     if (!menu) return
     const outside = (event: PointerEvent) => {
-      if (!(event.target as HTMLElement).closest('.ant-dropdown')) {
+      if (!(event.target as HTMLElement).closest('[class*="ant-dropdown"]')) {
         suppressMessageMenuOpenUntil = Date.now() + 200
         closeMenu()
       }
@@ -644,6 +644,10 @@ export const Message = memo(function Message({
           onSelect={(emote) => {
             close()
             void toggleReaction(emote.url)
+          }}
+          onSelectText={(text) => {
+            close()
+            void toggleReaction(text)
           }}
         />
       ),
