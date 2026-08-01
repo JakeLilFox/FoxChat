@@ -848,67 +848,71 @@ function TimelineView({
     window.addEventListener(AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT, applyPreference)
     return () => window.removeEventListener(AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT, applyPreference)
   }, [markVisibleRead])
-  const stabilizeTimelinePosition = useCallback((eventId?: string) => {
-    const box = messagesRef.current
-    if (!box || positionStabilizerUserCancelled.current || positionStabilizerSuperseded.current)
-      return
-    positionStabilizerCleanup.current()
-    let frame = 0
-    let stopped = false
-    const align = () => {
-      if (
-        stopped ||
-        positionStabilizerUserCancelled.current ||
-        positionStabilizerSuperseded.current
-      )
+  const stabilizeTimelinePosition = useCallback(
+    (eventId?: string) => {
+      const box = messagesRef.current
+      if (!box || positionStabilizerUserCancelled.current || positionStabilizerSuperseded.current)
         return
-      const target = eventId
-        ? box.querySelector<HTMLElement>(`[data-event-id="${CSS.escape(eventId)}"]`)
-        : undefined
-      if (target) {
-        const delta = target.getBoundingClientRect().top - box.getBoundingClientRect().top - 22
-        if (Math.abs(delta) > 0.5) box.scrollTop += delta
-      } else {
-        box.scrollTop = box.scrollHeight
+      positionStabilizerCleanup.current()
+      let frame = 0
+      let stopped = false
+      const align = () => {
+        if (
+          stopped ||
+          positionStabilizerUserCancelled.current ||
+          positionStabilizerSuperseded.current
+        )
+          return
+        const target = eventId
+          ? box.querySelector<HTMLElement>(`[data-event-id="${CSS.escape(eventId)}"]`)
+          : undefined
+        if (target) {
+          const delta = target.getBoundingClientRect().top - box.getBoundingClientRect().top - 22
+          if (Math.abs(delta) > 0.5) box.scrollTop += delta
+        } else {
+          box.scrollTop = box.scrollHeight
+        }
+        atBottom.current =
+          box.scrollHeight - box.scrollTop - box.clientHeight <= FOLLOW_LATEST_THRESHOLD
+        followLatest.current = atBottom.current
+        setShowJumpToLatest(!atBottom.current)
+        requestAnimationFrame(markVisibleRead)
       }
-      atBottom.current =
-        box.scrollHeight - box.scrollTop - box.clientHeight <= FOLLOW_LATEST_THRESHOLD
-      followLatest.current = atBottom.current
-      setShowJumpToLatest(!atBottom.current)
-    }
-    const schedule = () => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(align)
-    }
-    const resizeObserver = new ResizeObserver(schedule)
-    const observeChildren = () =>
-      [...box.children].forEach((child) => resizeObserver.observe(child))
-    observeChildren()
-    resizeObserver.observe(box)
-    const mutationObserver = new MutationObserver(() => {
+      const schedule = () => {
+        cancelAnimationFrame(frame)
+        frame = requestAnimationFrame(align)
+      }
+      const resizeObserver = new ResizeObserver(schedule)
+      const observeChildren = () =>
+        [...box.children].forEach((child) => resizeObserver.observe(child))
       observeChildren()
+      resizeObserver.observe(box)
+      const mutationObserver = new MutationObserver(() => {
+        observeChildren()
+        schedule()
+      })
+      mutationObserver.observe(box, { childList: true, subtree: true })
+      const stop = (event?: Event) => {
+        if (stopped) return
+        if (event) positionStabilizerUserCancelled.current = true
+        stopped = true
+        cancelAnimationFrame(frame)
+        resizeObserver.disconnect()
+        mutationObserver.disconnect()
+        window.clearTimeout(timeout)
+        box.removeEventListener('wheel', stop)
+        box.removeEventListener('touchstart', stop)
+        box.removeEventListener('pointerdown', stop)
+      }
+      box.addEventListener('wheel', stop, { passive: true })
+      box.addEventListener('touchstart', stop, { passive: true })
+      box.addEventListener('pointerdown', stop)
+      const timeout = window.setTimeout(stop, 12_000)
+      positionStabilizerCleanup.current = stop
       schedule()
-    })
-    mutationObserver.observe(box, { childList: true, subtree: true })
-    const stop = (event?: Event) => {
-      if (stopped) return
-      if (event) positionStabilizerUserCancelled.current = true
-      stopped = true
-      cancelAnimationFrame(frame)
-      resizeObserver.disconnect()
-      mutationObserver.disconnect()
-      window.clearTimeout(timeout)
-      box.removeEventListener('wheel', stop)
-      box.removeEventListener('touchstart', stop)
-      box.removeEventListener('pointerdown', stop)
-    }
-    box.addEventListener('wheel', stop, { passive: true })
-    box.addEventListener('touchstart', stop, { passive: true })
-    box.addEventListener('pointerdown', stop)
-    const timeout = window.setTimeout(stop, 12_000)
-    positionStabilizerCleanup.current = stop
-    schedule()
-  }, [])
+    },
+    [markVisibleRead],
+  )
   useEffect(() => () => positionStabilizerCleanup.current(), [roomIdentity])
   const loadOlder = useCallback(async () => {
     if (
@@ -1292,8 +1296,12 @@ function TimelineView({
         })
       }),
     )
-    const firstRetry = window.setTimeout(position, 350)
-    const secondRetry = window.setTimeout(position, 1_200)
+    const retryPositionAndRead = () => {
+      position()
+      requestAnimationFrame(markVisibleRead)
+    }
+    const firstRetry = window.setTimeout(retryPositionAndRead, 350)
+    const secondRetry = window.setTimeout(retryPositionAndRead, 1_200)
     const cleanup = () => {
       cancelAnimationFrame(frame)
       window.clearTimeout(firstRetry)

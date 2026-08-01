@@ -5,6 +5,7 @@ import {
   inviteToRoom,
   joinRoomAs,
   removeOtherDevices,
+  roomUnreadCount,
   sendFillerMessages,
   sendReadReceipt,
   storedSessions,
@@ -184,12 +185,17 @@ test.describe('live timeline scroll-position journey', () => {
       })
 
       await test.step('room A: fresh open scrolls to unread, shows jump-to-latest', async () => {
+        const unreadBeforeOpen = await roomUnreadCount(account2Session!, roomAId!)
+        expect(unreadBeforeOpen).toBeGreaterThan(0)
         await openRoom(remotePage!, roomAName)
         await expect(unreadDivider(remotePage!)).toBeVisible({
           timeout: 30_000,
         })
         await expectAwayFromBottom(remotePage!)
         await expect(jumpToLatestButton(remotePage!)).toBeVisible()
+        await expect
+          .poll(() => roomUnreadCount(account2Session!, roomAId!), { timeout: 30_000 })
+          .toBeLessThan(unreadBeforeOpen)
       })
 
       await test.step('room A: jump-to-latest scrolls to the bottom', async () => {

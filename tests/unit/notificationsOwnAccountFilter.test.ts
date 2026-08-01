@@ -27,7 +27,7 @@ describe('notifyMatrixEvent own-account filtering (bug 3)', () => {
       { id: 'other-own', userId: '@other-own:example.org', client },
     ]
     internals.room = () => undefined
-    return room
+    return { room, client }
   }
 
   const stubNotificationConstructor = () => {
@@ -47,7 +47,7 @@ describe('notifyMatrixEvent own-account filtering (bug 3)', () => {
   }
 
   it("does not notify for a message sent by the user's own other account", async () => {
-    const room = setUpService()
+    const { room } = setUpService()
     const notificationSpy = stubNotificationConstructor()
 
     const event = fakeEvent({
@@ -66,7 +66,7 @@ describe('notifyMatrixEvent own-account filtering (bug 3)', () => {
   })
 
   it('does notify for a genuine message from someone else', async () => {
-    const room = setUpService()
+    const { room } = setUpService()
     const notificationSpy = stubNotificationConstructor()
 
     const event = fakeEvent({
@@ -82,5 +82,89 @@ describe('notifyMatrixEvent own-account filtering (bug 3)', () => {
     await notifyMatrixEvent(event, room)
 
     expect(notificationSpy).toHaveBeenCalled()
+  })
+
+  it('only notifies for an actual mention when the room is set to mentions only', async () => {
+    const { room, client } = setUpService()
+    ;(client as unknown as { getRoomPushRule: () => undefined }).getRoomPushRule = () => undefined
+    const notificationSpy = stubNotificationConstructor()
+
+    await notifyMatrixEvent(
+      fakeEvent({
+        id: '$ordinary-mentions-only',
+        roomId: room.roomId,
+        type: EventType.RoomMessage,
+        sender: '@carol:example.org',
+        ts: Date.now(),
+        notify: true,
+        content: { msgtype: 'm.text', body: 'ordinary message' },
+      }),
+      room,
+    )
+
+    expect(notificationSpy).not.toHaveBeenCalled()
+
+    await notifyMatrixEvent(
+      fakeEvent({
+        id: '$actual-mention',
+        roomId: room.roomId,
+        type: EventType.RoomMessage,
+        sender: '@carol:example.org',
+        ts: Date.now(),
+        notify: true,
+        content: {
+          msgtype: 'm.text',
+          body: 'hello @me:example.org',
+          'm.mentions': { user_ids: ['@me:example.org'] },
+        },
+      }),
+      room,
+    )
+
+    expect(notificationSpy).toHaveBeenCalledOnce()
+  })
+
+  it('accepts mentions of any logged-in account but rejects room and unrelated mentions', async () => {
+    const { room, client } = setUpService()
+    ;(client as unknown as { getRoomPushRule: () => undefined }).getRoomPushRule = () => undefined
+    const notificationSpy = stubNotificationConstructor()
+
+    for (const [id, mentions] of [
+      ['$unrelated-mention', { user_ids: ['@someone-else:example.org'] }],
+      ['$room-mention', { room: true }],
+    ] as const) {
+      await notifyMatrixEvent(
+        fakeEvent({
+          id,
+          roomId: room.roomId,
+          type: EventType.RoomMessage,
+          sender: '@carol:example.org',
+          ts: Date.now(),
+          notify: true,
+          content: { msgtype: 'm.text', body: 'not for my accounts', 'm.mentions': mentions },
+        }),
+        room,
+      )
+    }
+    expect(notificationSpy).not.toHaveBeenCalled()
+
+    await notifyMatrixEvent(
+      fakeEvent({
+        id: '$other-own-account-mention',
+        roomId: room.roomId,
+        type: EventType.RoomMessage,
+        sender: '@carol:example.org',
+        ts: Date.now(),
+        notify: true,
+        content: {
+          msgtype: 'm.text',
+          body: 'hello @other-own:example.org',
+          'm.mentions': { user_ids: ['@other-own:example.org'] },
+        },
+      }),
+      room,
+    )
+
+    expect(notificationSpy).toHaveBeenCalledOnce()
   })
 })

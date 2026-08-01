@@ -1,5 +1,13 @@
 import { vi } from 'vitest'
-import { NotificationCountType, type MatrixEvent, type Room, type RoomType } from 'matrix-js-sdk'
+import {
+  NotificationCountType,
+  PushRuleActionName,
+  PushRuleKind,
+  RuleId,
+  type MatrixEvent,
+  type Room,
+  type RoomType,
+} from 'matrix-js-sdk'
 import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts'
 
 export type FakeRoomOptions = {
@@ -170,9 +178,33 @@ export function fakeClient(rooms: Room[], userId = '@me:example.org') {
     sendStateEvent,
     sendReadReceipt,
     setRoomReadMarkers,
+    getRoomPushRule: () => ({ actions: [PushRuleActionName.Notify] }),
     getPushActionsForEvent: (event: MatrixEvent) => ({
       notify: !!(event as unknown as { __notify?: boolean }).__notify,
+      tweaks: {},
     }),
+    getPushDetailsForEvent: (event: MatrixEvent) => {
+      const notify = !!(event as unknown as { __notify?: boolean }).__notify
+      const mentions = event.getContent<{
+        'm.mentions'?: { user_ids?: string[]; room?: boolean }
+      }>()['m.mentions']
+      const userMentioned = mentions?.user_ids?.includes(userId) === true
+      const roomMentioned = mentions?.room === true
+      return {
+        actions: { notify, tweaks: { highlight: userMentioned || roomMentioned } },
+        rule: {
+          actions: [PushRuleActionName.Notify],
+          default: true,
+          enabled: true,
+          kind: userMentioned || roomMentioned ? PushRuleKind.Override : PushRuleKind.Underride,
+          rule_id: userMentioned
+            ? RuleId.IsUserMention
+            : roomMentioned
+              ? RuleId.IsRoomMention
+              : RuleId.Message,
+        },
+      }
+    },
   }
 }
 export type FakeClient = ReturnType<typeof fakeClient>

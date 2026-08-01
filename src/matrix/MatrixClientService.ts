@@ -2855,8 +2855,9 @@ export class MatrixClientService {
     await this.clientForRoom(roomId)?.setRoomMutePushRule('global', roomId, muted)
   }
 
-  getRoomNotificationMode(roomId: string): RoomNotificationMode {
-    const rule = this.clientForRoom(roomId)?.getRoomPushRule('global', roomId)
+  getRoomNotificationMode(roomId: string, accountId?: string): RoomNotificationMode {
+    const client = this.clientForRoomAccount(roomId, accountId) ?? this.accountClient(accountId)
+    const rule = client?.getRoomPushRule('global', roomId)
     if (rule?.actions.includes(PushRuleActionName.DontNotify)) return 'none'
     if (rule?.actions.includes(PushRuleActionName.Notify)) return 'all'
     return 'mentions'

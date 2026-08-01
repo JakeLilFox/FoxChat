@@ -1,4 +1,4 @@
-import { EventType, type MatrixEvent, MatrixEventEvent, type Room } from 'matrix-js-sdk'
+import { EventType, type MatrixEvent, MatrixEventEvent, RuleId, type Room } from 'matrix-js-sdk'
 import { isHiddenTimelineActivity } from '../lib/eventHelpers'
 import { matrixService } from '../matrix/MatrixClientService'
 import { isAndroidApp } from './nativeBackground'
@@ -63,6 +63,11 @@ type PendingDesktopNotification = {
 }
 const desktopNotificationQueue: PendingDesktopNotification[] = []
 let desktopNotificationTimer: number | undefined
+const mentionRuleIds = new Set<string>([
+  RuleId.IsUserMention,
+  RuleId.ContainsDisplayName,
+  RuleId.ContainsUserName,
+])
 const notificationId = (value: string) =>
   [...value].reduce(
     (hash, character) => Math.imul(hash ^ character.charCodeAt(0), 16777619),
@@ -401,7 +406,20 @@ export async function notifyMatrixEvent(event: MatrixEvent, room?: Room) {
     const relation = content['m.relates_to'] as { rel_type?: string } | undefined
     if (relation?.rel_type === 'm.replace') return
     const eventClient = matrixService.clientForEvent(event) ?? client
-    if (!eventClient.getPushActionsForEvent(event)?.notify) return
+    const pushDetails = eventClient.getPushDetailsForEvent(event, true)
+    const pushActions = pushDetails?.actions ?? eventClient.getPushActionsForEvent(event, true)
+    if (!pushActions?.notify) return
+    const eventAccountId = matrixService
+      .availableAccounts()
+      .find((account) => account.client === eventClient)?.id
+    const notificationMode = matrixService.getRoomNotificationMode(room.roomId, eventAccountId)
+    if (notificationMode === 'none') return
+    if (notificationMode === 'mentions') {
+      const mentions = content['m.mentions'] as { user_ids?: string[]; room?: boolean } | undefined
+      const explicitlyMentioned = mentions?.user_ids?.some((userId) => ownUserIds.has(userId))
+      const mentionRule = !!pushDetails?.rule && mentionRuleIds.has(pushDetails.rule.rule_id)
+      if (!explicitlyMentioned && !mentionRule) return
+    }
     const notificationRoom = eventClient.getRoom(room.roomId) ?? room
     const groupId = notificationGroup(notificationRoom)
     const silent = activeGroups.has(groupId) && groupUnreadCount(groupId) > 0
