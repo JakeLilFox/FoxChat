@@ -1,5 +1,6 @@
 import { ImagePackEditor } from '../../ImagePackEditor'
 import { RoleEditor } from '../../roles'
+import { RoomBannedMembers } from './RoomBannedMembers'
 import { RoomGeneralSettings } from './RoomGeneralSettings'
 import { RoomFederationSettings } from './RoomFederationSettings'
 import { RoomNotificationSetting } from './RoomNotificationSetting'
@@ -7,6 +8,7 @@ import { RoomSecuritySettings } from './RoomSecuritySettings'
 import { SpaceInvitations } from '../../spaces'
 import { SpaceManagement } from '../../spaces'
 import { SpacePresentationSettings } from './SpacePresentationSettings'
+import { effectivePowerLevel } from '../../../lib/roleHelpers'
 import {
   type MatrixEmotePack,
   type RoomImagePackLocation,
@@ -47,6 +49,11 @@ export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () =
     room.currentState.maySendStateEvent(EventType.RoomPowerLevels, userId)
   const canManagePacks =
     !!userId && room.currentState.maySendStateEvent('im.ponies.room_emotes', userId)
+  const banPower =
+    room.currentState.getStateEvents(EventType.RoomPowerLevels, '')?.getContent()?.ban ?? 50
+  const canViewBanned =
+    !!userId &&
+    effectivePowerLevel(room, userId) >= (typeof banPower === 'number' ? banPower : 50)
   const [packSlots, setPackSlots] = useState<PackSlot[]>(() => slotsFromRoom(room))
   const [activePackKey, setActivePackKey] = useState<string>(() => packSlots[0]?.key ?? 'default')
   const [activeSettingsTab, setActiveSettingsTab] = useState('general')
@@ -158,6 +165,15 @@ export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () =
             key: 'roles',
             label: 'Roles & permissions',
             children: <RoleEditor room={room} />,
+          },
+        ]
+      : []),
+    ...(canViewBanned
+      ? [
+          {
+            key: 'banned',
+            label: 'Banned members',
+            children: <RoomBannedMembers room={room} />,
           },
         ]
       : []),

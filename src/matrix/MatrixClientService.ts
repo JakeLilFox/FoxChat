@@ -3269,6 +3269,24 @@ export class MatrixClientService {
     await client.ban(roomId, userId, reason?.trim() || undefined)
   }
 
+  async unbanRoomMember(roomId: string, userId: string) {
+    const client = this.clientForRoom(roomId)
+    if (!client) throw new Error('Matrix client is not ready')
+    await client.unban(roomId, userId)
+  }
+
+  bannedRoomMembers(room: Room) {
+    return room
+      .getMembersWithMembership('ban')
+      .map((member) => ({
+        userId: member.userId,
+        name: member.name !== member.userId ? member.name : undefined,
+        avatarUrl: member.getMxcAvatarUrl() ?? undefined,
+        reason: member.events.member?.getContent().reason as string | undefined,
+      }))
+      .sort((a, b) => (a.name || a.userId).localeCompare(b.name || b.userId))
+  }
+
   getBlockedUsers() {
     return this.client?.getIgnoredUsers() ?? []
   }
