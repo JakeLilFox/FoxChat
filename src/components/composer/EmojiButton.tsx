@@ -30,6 +30,7 @@ import {
   setMatrixPickerContentTab,
 } from '../../lib/uiPreferences'
 import { closeEmojiUrl, emojiOpenFromUrl, openEmojiUrl } from '../../lib/urlState'
+import { itemWindowAround } from '../../lib/virtualWindow'
 import { EmojiGrid, EmojiPanel, IconBtn, PackCollection, PackJumpBar } from '../../styles'
 import { useEffect, useRef, useState } from 'react'
 import { App as AntApp, Dropdown, Empty, Input, Popover, Tabs, Tooltip } from 'antd'
@@ -46,18 +47,21 @@ type PickerPack = {
 }
 
 const LONG_PRESS_MS = 550
+const PICKER_IMAGE_OVERSCAN = 100
 
 function PinnablePickerItem({
   pinned,
   title,
   onSelect,
   onTogglePin,
+  itemIndex,
   children,
 }: {
   pinned: boolean
   title: string
   onSelect: () => void
   onTogglePin: () => void
+  itemIndex?: number
   children: React.ReactNode
 }) {
   const timer = useRef(0)
@@ -86,6 +90,7 @@ function PinnablePickerItem({
     >
       <button
         type="button"
+        data-picker-index={itemIndex}
         title={title}
         onPointerDown={(event) => {
           clearTimer()
@@ -214,6 +219,43 @@ function MatrixPackBrowser({
       }
     })
     .filter((pack) => pack.items.length)
+  let totalItems = 0
+  const packsWithOffsets = packs.map((pack) => {
+    const offset = totalItems
+    totalItems += pack.items.length
+    return { pack, offset }
+  })
+  const layoutKey = packs.map((pack) => `${pack.id}:${pack.items.length}`).join('\u0000')
+  const [imageWindow, setImageWindow] = useState(() =>
+    itemWindowAround([], totalItems, PICKER_IMAGE_OVERSCAN),
+  )
+  useEffect(() => {
+    const collection = collectionRef.current
+    setImageWindow(itemWindowAround([], totalItems, PICKER_IMAGE_OVERSCAN))
+    if (!collection) return
+    if (typeof IntersectionObserver === 'undefined') {
+      setImageWindow({ start: 0, end: totalItems - 1 })
+      return
+    }
+    const visibleIndices = new Set<number>()
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const index = Number((entry.target as HTMLElement).dataset.pickerIndex)
+          if (!Number.isInteger(index)) continue
+          if (entry.isIntersecting) visibleIndices.add(index)
+          else visibleIndices.delete(index)
+        }
+        if (visibleIndices.size)
+          setImageWindow(itemWindowAround(visibleIndices, totalItems, PICKER_IMAGE_OVERSCAN))
+      },
+      { root: collection },
+    )
+    collection
+      .querySelectorAll<HTMLElement>('[data-picker-index]')
+      .forEach((item) => observer.observe(item))
+    return () => observer.disconnect()
+  }, [layoutKey, totalItems])
   if (!packs.length)
     return (
       <Empty
@@ -291,12 +333,12 @@ function MatrixPackBrowser({
               setDrag(undefined)
             }}
           >
-            <MatrixEmoteImage emote={pack.items[0]} />
+            <MatrixEmoteImage emote={pack.items[0]} lazy />
           </button>
         ))}
       </PackJumpBar>
       <PackCollection ref={collectionRef}>
-        {packs.map((pack) => (
+        {packsWithOffsets.map(({ pack, offset }) => (
           <div
             className="pack"
             key={pack.id}
@@ -309,17 +351,23 @@ function MatrixPackBrowser({
               {pack.label} · {pack.items.length}
             </div>
             <EmojiGrid $stickers={usage === 'sticker'}>
-              {pack.items.map((emote) => (
-                <PinnablePickerItem
-                  key={`${emote.name}:${emote.url}`}
-                  title={`${emote.body} · ${pack.label}`}
-                  pinned={pinned.some((item) => item.url === emote.url)}
-                  onSelect={() => onSelect(emote)}
-                  onTogglePin={() => onTogglePin(emote)}
-                >
-                  <MatrixEmoteImage emote={emote} />
-                </PinnablePickerItem>
-              ))}
+              {pack.items.map((emote, itemIndex) => {
+                const globalIndex = offset + itemIndex
+                return (
+                  <PinnablePickerItem
+                    key={`${emote.name}:${emote.url}`}
+                    title={`${emote.body} · ${pack.label}`}
+                    pinned={pinned.some((item) => item.url === emote.url)}
+                    onSelect={() => onSelect(emote)}
+                    onTogglePin={() => onTogglePin(emote)}
+                    itemIndex={globalIndex}
+                  >
+                    {globalIndex >= imageWindow.start && globalIndex <= imageWindow.end ? (
+                      <MatrixEmoteImage emote={emote} lazy />
+                    ) : null}
+                  </PinnablePickerItem>
+                )
+              })}
             </EmojiGrid>
           </div>
         ))}
