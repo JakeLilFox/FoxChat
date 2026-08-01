@@ -902,7 +902,7 @@ async function testDesktopVerification() {
   }
 }
 
-async function testDesktopNotification(fixtureToken, fixtureRoomId) {
+async function testDesktopNotification(fixtureToken, fixtureRoomId, fixtureUserId) {
   const sender = await passwordLogin(
     notificationSenderUser,
     notificationSenderPassword,
@@ -952,7 +952,11 @@ async function testDesktopNotification(fixtureToken, fixtureRoomId) {
         method: 'PUT',
         token: sender.access_token,
         baseUrl: notificationSenderHomeserver,
-        body: { msgtype: 'm.text', body: notificationBody },
+        body: {
+          msgtype: 'm.text',
+          body: notificationBody,
+          'm.mentions': { user_ids: [fixtureUserId] },
+        },
       },
     )
 
@@ -1233,7 +1237,8 @@ try {
     await screenshot(`${platformName}-recovery-success.png`)
     await signOut()
   } else {
-    if (testNotifications) await testDesktopNotification(fixture.access_token, roomId)
+    if (testNotifications)
+      await testDesktopNotification(fixture.access_token, roomId, fixture.user_id)
     await selectRoom()
     await sendComposerText(sentText)
     await waitFor(
