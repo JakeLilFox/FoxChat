@@ -16,6 +16,7 @@ const skipMicrophoneTest = process.env.APPIMAGE_E2E_SKIP_MIC_TEST === '1'
 const testCalls = process.env.APPIMAGE_E2E_CALLS === '1'
 const testVerification = process.env.APPIMAGE_E2E_VERIFICATION === '1'
 const testNotifications = process.env.APPIMAGE_E2E_NOTIFICATIONS === '1'
+const desktopVerificationAttempts = 2
 const callReceiverUrl = process.env.APPIMAGE_E2E_CALL_RECEIVER_URL ?? 'http://127.0.0.1:4173'
 const rawCallReceiverHomeserver = process.env.MATRIX_E2E_CALL_RECEIVER_HOMESERVER?.replace(
   /\/$/,
@@ -53,6 +54,17 @@ await mkdir(outputDirectory, { recursive: true })
 await unlink(openedUrlFile).catch(() => undefined)
 await unlink(microphonePromptFile).catch(() => undefined)
 await unlink(desktopNotificationFile).catch(() => undefined)
+for (let attempt = 1; attempt <= desktopVerificationAttempts; attempt++) {
+  for (const side of ['native', 'browser']) {
+    for (const extension of ['json', 'png'])
+      await unlink(
+        resolve(
+          outputDirectory,
+          `${platformName}-verification-attempt-${attempt}-${side}.${extension}`,
+        ),
+      ).catch(() => undefined)
+  }
+}
 
 const CONNECT_FAILURE_CODES = new Set([
   'UND_ERR_CONNECT_TIMEOUT',
@@ -801,12 +813,78 @@ async function testLinuxCall(fixtureToken, voiceRoomId) {
   }
 }
 
-async function testDesktopVerification() {
+class RetryableDesktopVerificationError extends Error {}
+
+async function nativeVerificationSasLabels() {
+  const labels = await command('POST', sessionPath('/execute/sync'), {
+    script: `
+      const dialog = [...document.querySelectorAll('[role="dialog"]')].find(element =>
+        element.textContent?.includes('Verify another device')
+      )
+      return [...(dialog?.querySelectorAll('[data-testid="verification-sas-label"]') || [])].map(
+        element => element.textContent?.trim()
+      )
+    `,
+    args: [],
+  })
+  return Array.isArray(labels) ? labels : []
+}
+
+async function closeNativeVerificationDialog() {
+  await waitFor(
+    'native verification dialog to close',
+    () =>
+      command('POST', sessionPath('/execute/sync'), {
+        script: `
+          const dialog = [...document.querySelectorAll('[role="dialog"]')].find(element =>
+            element.getClientRects().length &&
+            element.textContent?.includes('Verify another device')
+          )
+          if (!dialog) return true
+          dialog.querySelector('.ant-modal-close')?.click()
+          return false
+        `,
+        args: [],
+      }),
+    15_000,
+  )
+}
+
+async function dumpDesktopVerificationState(page, attempt) {
+  await dumpPageState(`verification-attempt-${attempt}-native`).catch(() => undefined)
+  if (!page) return
+  await page
+    .screenshot({
+      path: resolve(outputDirectory, `${platformName}-verification-attempt-${attempt}-browser.png`),
+      fullPage: true,
+    })
+    .catch(() => undefined)
+  const browserState = await page
+    .evaluate(() => ({
+      bodyText: document.body?.innerText.slice(0, 3_000) ?? '',
+      sasLabels: [...document.querySelectorAll('[data-testid="verification-sas-label"]')].map(
+        (element) => element.textContent?.trim(),
+      ),
+      dialogs: [...document.querySelectorAll('[role="dialog"]')].map((element) =>
+        element.textContent?.replace(/\s+/g, ' ').trim().slice(0, 1_000),
+      ),
+    }))
+    .catch(() => undefined)
+  if (browserState)
+    await writeFile(
+      resolve(outputDirectory, `${platformName}-verification-attempt-${attempt}-browser.json`),
+      JSON.stringify(browserState, null, 2),
+    ).catch(() => undefined)
+}
+
+async function testDesktopVerificationAttempt(attempt) {
   const { chromium } = await import('playwright')
   let browser
   let context
   let page
   let browserSession
+  let browserDialog
+  let completed = false
   try {
     browser = await chromium.launch({ headless: true })
     context = await browser.newContext({
@@ -836,7 +914,7 @@ async function testDesktopVerification() {
     const settings = page.getByRole('dialog', { name: 'Settings' })
     await settings.getByRole('tab', { name: 'Security' }).click()
     await settings.getByRole('button', { name: 'Verify with another device' }).click()
-    const browserDialog = page.getByRole('dialog', { name: 'Verify another device' })
+    browserDialog = page.getByRole('dialog', { name: 'Verify another device' })
     await browserDialog.waitFor({ state: 'visible', timeout: 30_000 })
 
     await waitFor(
@@ -846,28 +924,27 @@ async function testDesktopVerification() {
     )
     await clickText('button', 'Accept verification request')
 
-    const nativeEmoji = await waitFor(
-      'native desktop SAS emoji',
-      async () => {
-        const labels = await command('POST', sessionPath('/execute/sync'), {
-          script: `
-            const dialog = [...document.querySelectorAll('[role="dialog"]')].find(element =>
-              element.textContent?.includes('Verify another device')
-            )
-            const labels = [...(dialog?.querySelectorAll('small') || [])].map(element =>
-              element.textContent?.trim()
-            )
-            return labels.length === 7 ? labels : null
-          `,
-          args: [],
-        })
-        return Array.isArray(labels) ? labels : false
-      },
-      60_000,
-    )
-    const browserEmoji = browserDialog.locator('small')
-    await browserEmoji.first().waitFor({ state: 'visible', timeout: 30_000 })
-    if (JSON.stringify(nativeEmoji) !== JSON.stringify(await browserEmoji.allTextContents()))
+    let sasEmoji
+    try {
+      sasEmoji = await waitFor(
+        'native and browser SAS emoji',
+        async () => {
+          const [native, web] = await Promise.all([
+            nativeVerificationSasLabels(),
+            browserDialog.getByTestId('verification-sas-label').allTextContents(),
+          ])
+          return native.length === 7 && web.length === 7 ? { native, web } : false
+        },
+        60_000,
+      )
+    } catch (error) {
+      await dumpDesktopVerificationState(page, attempt)
+      throw new RetryableDesktopVerificationError(
+        `SAS handshake did not become ready on verification attempt ${attempt}`,
+        { cause: error },
+      )
+    }
+    if (JSON.stringify(sasEmoji.native) !== JSON.stringify(sasEmoji.web))
       throw new Error('Native and browser devices displayed different SAS emoji')
 
     await clickText('button', 'They match')
@@ -883,12 +960,20 @@ async function testDesktopVerification() {
 
     await writeFile(
       resolve(outputDirectory, `${platformName}-incoming-verification.json`),
-      JSON.stringify({ received: true, sasEmoji: nativeEmoji }, null, 2),
+      JSON.stringify({ received: true, sasEmoji: sasEmoji.native, attempts: attempt }, null, 2),
     )
     console.log(
       `PASS ${platformName}: native desktop received and completed another device's verification request`,
     )
+    completed = true
   } finally {
+    if (!completed) {
+      await browserDialog
+        ?.locator('.ant-modal-close')
+        .click({ timeout: 5_000 })
+        .catch(() => undefined)
+      await closeNativeVerificationDialog()
+    }
     if (browserSession?.accessToken && browserSession?.baseUrl)
       await matrix('/_matrix/client/v3/logout', {
         method: 'POST',
@@ -899,6 +984,25 @@ async function testDesktopVerification() {
     await page?.close().catch(() => undefined)
     await context?.close().catch(() => undefined)
     await browser?.close().catch(() => undefined)
+  }
+}
+
+async function testDesktopVerification() {
+  for (let attempt = 1; attempt <= desktopVerificationAttempts; attempt++) {
+    try {
+      await testDesktopVerificationAttempt(attempt)
+      return
+    } catch (error) {
+      if (
+        !(error instanceof RetryableDesktopVerificationError) ||
+        attempt === desktopVerificationAttempts
+      )
+        throw error
+      console.warn(
+        `RETRY ${platformName}: desktop SAS handshake stalled; starting a fresh verification request`,
+      )
+      await delay(2_000)
+    }
   }
 }
 
