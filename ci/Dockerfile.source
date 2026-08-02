@@ -15,4 +15,6 @@ USER root
 RUN mkdir -p /run/sshd
 RUN chmod 0755 /run/sshd
 
+RUN chown -R ubuntu1:ubuntu1 /home/ubuntu1
+
 CMD ["/bin/bash", "-lc", "dockerd --storage-driver=overlay2 >/var/log/dockerd.log 2>&1 & exec /usr/sbin/sshd -D -e"]
