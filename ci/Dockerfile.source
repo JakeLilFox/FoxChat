@@ -12,5 +12,7 @@ RUN test ! -e node_modules \
     && ln -s /opt/foxchat-ci/homepage-dependencies/node_modules foxchathomepage/node_modules
 
 USER root
+RUN mkdir -p /run/sshd
+RUN chmod 0755 /run/sshd
 
-CMD ["/bin/bash", "-lc", "dockerd --storage-driver=vfs >/var/log/dockerd.log 2>&1 & exec /usr/sbin/sshd -D -e"]
+CMD ["/bin/bash", "-lc", "dockerd --storage-driver=overlay2 >/var/log/dockerd.log 2>&1 & exec /usr/sbin/sshd -D -e"]
