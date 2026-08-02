@@ -3,6 +3,7 @@ import { VoiceFrameAnalyzer, VOICE_DETECTION_FFT_SIZE } from './voiceDetection'
 const CALIBRATION_MS = 1200
 const WARMUP_MS = 80
 const ATTACK_MS = 110
+const ENERGY_FALLBACK_MS = 180
 const RELEASE_MS = 350
 const MIN_MARGIN_DB = 12
 const CLOSE_HYSTERESIS_DB = 6
@@ -26,6 +27,21 @@ export type VoiceActivationMonitorOptions = {
   delayMs?: number
 }
 
+export function voiceActivityDecision(
+  aboveThresholdForMs: number | undefined,
+  speechShaped: boolean,
+  speaking: boolean,
+) {
+  const aboveThreshold = aboveThresholdForMs !== undefined
+  const fallback = aboveThreshold && aboveThresholdForMs >= ENERGY_FALLBACK_MS
+  const candidate = aboveThreshold && (speaking || speechShaped || fallback)
+  return {
+    candidate,
+    active: candidate && (speaking || aboveThresholdForMs >= ATTACK_MS),
+    voiceLike: speechShaped || fallback,
+  }
+}
+
 export class VoiceActivation {
   private context?: AudioContext
   private analyser?: AnalyserNode
@@ -40,7 +56,7 @@ export class VoiceActivation {
   private calibrationLevels: number[] = []
   private speaking = false
   private startedAt = 0
-  private candidateSince?: number
+  private aboveThresholdSince?: number
   private onSpeakingChange: (speaking: boolean) => void
   private onLevel?: (info: VoiceActivationLevel) => void
   private onActivity?: () => void
@@ -92,7 +108,7 @@ export class VoiceActivation {
     this.speechLevel = -45
     this.calibrationLevels = []
     this.speaking = false
-    this.candidateSince = undefined
+    this.aboveThresholdSince = undefined
     this.frameAnalyzer.reset()
     this.startedAt = performance.now()
     this.loop()
@@ -140,7 +156,12 @@ export class VoiceActivation {
 
     const speechShaped = analysis.voiceLike
 
-    if (calibrating && !analysis.openingShape && Number.isFinite(level) && level > -100) {
+    if (
+      calibrating &&
+      level <= this.noiseFloor + MIN_MARGIN_DB &&
+      Number.isFinite(level) &&
+      level > -100
+    ) {
       this.calibrationLevels.push(level)
       if (this.calibrationLevels.length >= 6) {
         const sorted = [...this.calibrationLevels].sort((left, right) => left - right)
@@ -155,21 +176,29 @@ export class VoiceActivation {
     )
     const threshold = this.manualThresholdDb ?? automaticThreshold
     const activeThreshold = this.speaking ? threshold - CLOSE_HYSTERESIS_DB : threshold
-    const candidate = now - this.startedAt >= WARMUP_MS && level > activeThreshold && speechShaped
+    const aboveThreshold = level > activeThreshold
+    if (aboveThreshold) this.aboveThresholdSince ??= now
+    else this.aboveThresholdSince = undefined
+    const decision = voiceActivityDecision(
+      this.aboveThresholdSince === undefined ? undefined : now - this.aboveThresholdSince,
+      speechShaped,
+      this.speaking,
+    )
+    const candidate = now - this.startedAt >= WARMUP_MS && decision.candidate
 
     if (candidate) {
       this.onActivity?.()
-      this.candidateSince ??= now
       this.speechLevel += (level - this.speechLevel) * SPEECH_ADAPT
     } else {
-      this.candidateSince = undefined
-      if (!this.speaking && !calibrating) {
+      // Never learn an above-threshold sound as the noise floor. A voice that
+      // the shape classifier misses would otherwise push its own threshold up.
+      if (!aboveThreshold && !this.speaking && !calibrating) {
         const adapt = level < this.noiseFloor ? FLOOR_ADAPT_DOWN : FLOOR_ADAPT_UP
         this.noiseFloor += (level - this.noiseFloor) * adapt
       }
     }
 
-    const active = candidate && (this.speaking || now - (this.candidateSince ?? now) >= ATTACK_MS)
+    const active = candidate && decision.active
     if (active && !this.speaking) {
       if (this.releaseTimer !== undefined) {
         window.clearTimeout(this.releaseTimer)
@@ -193,8 +222,8 @@ export class VoiceActivation {
       level,
       threshold,
       speaking: this.speaking,
-      voiceLike: speechShaped,
-      aboveThreshold: level > activeThreshold,
+      voiceLike: decision.voiceLike,
+      aboveThreshold,
       candidate,
     })
     this.timer = window.setTimeout(this.loop, POLL_MS)

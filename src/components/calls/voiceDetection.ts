@@ -2,13 +2,16 @@ export const VOICE_DETECTION_FFT_SIZE = 1024
 
 const SPEECH_BAND_LOW_HZ = 180
 const SPEECH_BAND_HIGH_HZ = 3600
+const LOW_BAND_LOW_HZ = 20
+const LOW_BAND_HIGH_HZ = 160
 const VOICED_BAND_HIGH_HZ = 1400
 const HIGH_BAND_LOW_HZ = 4000
 const HIGH_BAND_HIGH_HZ = 8000
 const SPECTRAL_FLUX_SMOOTHING = 0.35
-const OPENING_PERIODICITY = 0.35
-const OPENING_SPECTRAL_FLUX_DB = 8.5
-const CONTINUATION_SPECTRAL_FLUX_DB = 8.25
+const OPENING_PERIODICITY = 0.3
+const OPENING_SPECTRAL_FLUX_DB = 8
+const CONTINUATION_SPECTRAL_FLUX_DB = 7.5
+const MAX_LOW_BAND_DOMINANCE_DB = 12
 
 export type VoiceBandStats = {
   level: number
@@ -20,6 +23,7 @@ export type VoiceBandStats = {
 export type VoiceFrameAnalysis = {
   level: number
   periodicity: number
+  low: VoiceBandStats
   speech: VoiceBandStats
   voiced: VoiceBandStats
   high: VoiceBandStats
@@ -111,6 +115,7 @@ export function analyzeVoiceFrame(
     SPEECH_BAND_LOW_HZ,
     SPEECH_BAND_HIGH_HZ,
   )
+  const low = bandStats(frequencyData, sampleRate, fftSize, LOW_BAND_LOW_HZ, LOW_BAND_HIGH_HZ)
   const voiced = bandStats(
     frequencyData,
     sampleRate,
@@ -138,6 +143,7 @@ export function analyzeVoiceFrame(
   return {
     level: speech.level,
     periodicity: framePeriodicity,
+    low,
     speech,
     voiced,
     high,
@@ -205,6 +211,9 @@ export class VoiceFrameAnalyzer {
     const openingShape =
       base.continuationShape &&
       base.periodicity >= OPENING_PERIODICITY &&
+      // Rumbles and mechanical hums often look periodic but concentrate more
+      // energy below speech than a voice does.
+      base.speech.level >= base.low.level - MAX_LOW_BAND_DOMINANCE_DB &&
       this.smoothedSpectralFluxDb >= OPENING_SPECTRAL_FLUX_DB
     const continuationShape =
       base.continuationShape && this.smoothedSpectralFluxDb >= CONTINUATION_SPECTRAL_FLUX_DB

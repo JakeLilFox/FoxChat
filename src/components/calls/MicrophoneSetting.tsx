@@ -240,7 +240,7 @@ export function MicrophoneSetting() {
     thresholdMode === 'manual' ? thresholdDb : (preview?.threshold ?? thresholdDb)
   const levelPosition = meterPercent(preview?.level)
   const thresholdPosition = meterPercent(displayedThreshold)
-  const rejectedNonVoice = !!preview?.aboveThreshold && !preview.voiceLike && !preview.speaking
+  const detectedSound = !!preview?.aboveThreshold && !preview.speaking
   const voiceStarting = !!preview?.candidate && !preview.speaking
   const releaseHold = !!preview?.speaking && !preview.candidate
   const microphoneTestDescription = microphoneError
@@ -415,8 +415,8 @@ export function MicrophoneSetting() {
                     </Tag>
                   ) : voiceStarting ? (
                     <Tag color="processing">Voice starting</Tag>
-                  ) : rejectedNonVoice ? (
-                    <Tag color="warning">Non-voice sound rejected</Tag>
+                  ) : detectedSound ? (
+                    <Tag color="processing">Sound detected</Tag>
                   ) : (
                     <Tag>Listening for voice</Tag>
                   )}
@@ -442,8 +442,8 @@ export function MicrophoneSetting() {
                       ? '#35c978'
                       : voiceStarting
                         ? '#36b7c9'
-                        : rejectedNonVoice
-                          ? '#d89546'
+                        : detectedSound
+                          ? '#36b7c9'
                           : '#3b9dff',
                     transition: 'width 80ms linear',
                   }}

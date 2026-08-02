@@ -17,6 +17,7 @@ const testCalls = process.env.APPIMAGE_E2E_CALLS === '1'
 const testVerification = process.env.APPIMAGE_E2E_VERIFICATION === '1'
 const testNotifications = process.env.APPIMAGE_E2E_NOTIFICATIONS === '1'
 const desktopVerificationAttempts = 2
+const desktopLoginAttempts = 3
 const callReceiverUrl = process.env.APPIMAGE_E2E_CALL_RECEIVER_URL ?? 'http://127.0.0.1:4173'
 const rawCallReceiverHomeserver = process.env.MATRIX_E2E_CALL_RECEIVER_HOMESERVER?.replace(
   /\/$/,
@@ -372,6 +373,147 @@ async function fill(selector, value) {
     `,
     args: [{ [elementKey]: id }, value],
   })
+}
+
+async function installLoginProbe() {
+  await command('POST', sessionPath('/execute/sync'), {
+    script: `
+      if (window.__foxchatE2ELoginProbe?.installed) return
+      const probe = { installed: true, attempts: [] }
+      window.__foxchatE2ELoginProbe = probe
+      const originalFetch = window.fetch.bind(window)
+      window.fetch = async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input)
+        const method = String(init?.method || (input instanceof Request ? input.method : 'GET'))
+          .toUpperCase()
+        const isLogin = method === 'POST' && new URL(url, location.href).pathname.endsWith('/login')
+        if (!isLogin) return originalFetch(input, init)
+        const startedAt = Date.now()
+        try {
+          const response = await originalFetch(input, init)
+          const body = await response.clone().json().catch(() => ({}))
+          probe.attempts.push({
+            status: response.status,
+            errcode: typeof body.errcode === 'string' ? body.errcode : undefined,
+            error: typeof body.error === 'string' ? body.error : undefined,
+            retryAfterMs:
+              typeof body.retry_after_ms === 'number' ? body.retry_after_ms : undefined,
+            durationMs: Date.now() - startedAt,
+          })
+          return response
+        } catch (error) {
+          probe.attempts.push({
+            status: 0,
+            error: error instanceof Error ? error.message : String(error),
+            durationMs: Date.now() - startedAt,
+          })
+          throw error
+        }
+      }
+    `,
+    args: [],
+  })
+}
+
+async function loginPageStatus() {
+  return command('POST', sessionPath('/execute/sync'), {
+    script: `
+      const button = document.querySelector('[data-testid="login-page"] button[type="submit"]')
+      let persistedSession = null
+      try {
+        const session = JSON.parse(localStorage.getItem('foxchat.matrix.session') || 'null')
+        if (session) {
+          persistedSession = {
+            baseUrl: session.baseUrl,
+            userId: session.userId,
+            deviceId: session.deviceId,
+            hasAccessToken: !!session.accessToken,
+          }
+        }
+      } catch {}
+      return {
+        ready: !!document.querySelector('[data-testid="room-sidebar"]'),
+        loginVisible: !!document.querySelector('[data-testid="login-page"]'),
+        busy: !!button && (button.disabled || button.classList.contains('ant-btn-loading')),
+        messages: [...document.querySelectorAll('.ant-message-notice-content')]
+          .map(element => element.textContent?.replace(/\\s+/g, ' ').trim())
+          .filter(Boolean),
+        attempts: window.__foxchatE2ELoginProbe?.attempts || [],
+        persistedSession,
+      }
+    `,
+    args: [],
+  })
+}
+
+async function loginToDesktop() {
+  await installLoginProbe()
+  for (let attempt = 1; attempt <= desktopLoginAttempts; attempt++) {
+    const before = await loginPageStatus()
+    await fill('input[placeholder="https://matrix.org"]', homeserver)
+    await fill('input[placeholder="@you:matrix.org"]', userId)
+    await fill('input[placeholder="Your password"]', password)
+    await clickCss('button[type="submit"]')
+
+    const outcome = await waitFor(
+      `Matrix login response (attempt ${attempt}/${desktopLoginAttempts})`,
+      async () => {
+        const status = await loginPageStatus()
+        if (status.ready) return { ready: true, status }
+        const response = status.attempts[before.attempts.length]
+        return response ? { ready: false, status, response } : undefined
+      },
+      90_000,
+    )
+    if (outcome.ready) return
+
+    const { response } = outcome
+    if (response.status >= 200 && response.status < 300) {
+      const started = Date.now()
+      const ready = await waitFor(
+        `room drawer after successful Matrix login (attempt ${attempt}/${desktopLoginAttempts})`,
+        async () => {
+          const status = await loginPageStatus()
+          if (status.ready) return true
+          // Authentication succeeded, but client initialization can still fail. Once the form is
+          // interactive again it is safe to retry: MatrixClientService revokes the failed device.
+          if (Date.now() - started >= 1_000 && status.loginVisible && !status.busy) return 'failed'
+          return undefined
+        },
+        90_000,
+      )
+      if (ready === true) return
+      if (attempt < desktopLoginAttempts) {
+        console.warn(
+          `[login] Matrix authentication succeeded on attempt ${attempt}, but client initialization returned to the login form; retrying`,
+        )
+        await delay(attempt * 2_000)
+        continue
+      }
+      throw new Error('Matrix authentication succeeded, but desktop client initialization failed')
+    }
+
+    const retryableServerFailure = response.status === 0 || response.status >= 500
+    const retryAfterMs =
+      response.status === 429 && Number.isFinite(response.retryAfterMs)
+        ? Math.max(0, response.retryAfterMs)
+        : undefined
+    const retryableRateLimit = retryAfterMs !== undefined && retryAfterMs <= 120_000
+    if (attempt < desktopLoginAttempts && (retryableServerFailure || retryableRateLimit)) {
+      const waitMs = retryableRateLimit ? retryAfterMs + 250 : attempt * 2_000
+      console.warn(
+        `[login] Matrix login attempt ${attempt} returned ${response.status || 'a network error'}; retrying in ${waitMs} ms`,
+      )
+      await delay(waitMs)
+      await waitFor('login form to become interactive', async () => !(await loginPageStatus()).busy)
+      continue
+    }
+    throw new Error(
+      `Matrix login failed (${response.status || 'network error'})${
+        response.errcode ? ` ${response.errcode}` : ''
+      }${response.error ? `: ${response.error}` : ''}`,
+    )
+  }
 }
 
 async function bodyContains(text) {
@@ -1218,6 +1360,34 @@ async function dumpPageState(name) {
           testId: element.getAttribute('data-testid'),
           imageAlts: [...element.querySelectorAll('img')].map(image => image.alt),
         })),
+        login: (() => {
+          const page = document.querySelector('[data-testid="login-page"]')
+          if (!page) return null
+          const button = page.querySelector('button[type="submit"]')
+          let persistedSession = null
+          try {
+            const session = JSON.parse(localStorage.getItem('foxchat.matrix.session') || 'null')
+            if (session) {
+              persistedSession = {
+                baseUrl: session.baseUrl,
+                userId: session.userId,
+                deviceId: session.deviceId,
+                hasAccessToken: !!session.accessToken,
+              }
+            }
+          } catch {}
+          return {
+            homeserver: page.querySelector('input[placeholder="https://matrix.org"]')?.value,
+            username: page.querySelector('input[placeholder="@you:matrix.org"]')?.value,
+            hasPassword: !!page.querySelector('input[placeholder="Your password"]')?.value,
+            busy: !!button && (button.disabled || button.classList.contains('ant-btn-loading')),
+            messages: [...document.querySelectorAll('.ant-message-notice-content')]
+              .map(element => element.textContent?.replace(/\\s+/g, ' ').trim())
+              .filter(Boolean),
+            attempts: window.__foxchatE2ELoginProbe?.attempts || [],
+            persistedSession,
+          }
+        })(),
         bodyTextSnippet: document.body ? document.body.innerText.slice(0, 1500) : null,
       }
     `,
@@ -1334,16 +1504,8 @@ try {
   if (!String(title).includes('FoxChat')) throw new Error(`Unexpected native title: ${title}`)
   console.log(`PASS ${platformName}: AppImage opened and rendered the login view`)
 
-  await fill('input[placeholder="https://matrix.org"]', homeserver)
-  await fill('input[placeholder="@you:matrix.org"]', userId)
-  await fill('input[placeholder="Your password"]', password)
-  await clickCss('button[type="submit"]')
   try {
-    await waitFor(
-      'room drawer after Matrix login',
-      () => findCss('[data-testid="room-sidebar"]'),
-      120_000,
-    )
+    await loginToDesktop()
   } catch (error) {
     const state = await dumpPageState('login-timeout')
     throw new Error(

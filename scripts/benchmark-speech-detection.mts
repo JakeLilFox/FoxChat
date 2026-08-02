@@ -375,8 +375,8 @@ const newNonSpeechActivations = nonSpeechSummaries.reduce(
 )
 const regressions = [
   {
-    passes: speechSummary.newOpening >= 0.3,
-    message: `speech opening rate ${percent(speechSummary.newOpening)} is below 30%`,
+    passes: speechSummary.newOpening >= 0.37,
+    message: `speech opening rate ${percent(speechSummary.newOpening)} is below 37%`,
   },
   {
     passes: newNonSpeechOpening <= 0.2,
@@ -387,8 +387,12 @@ const regressions = [
     message: 'non-speech frame rejection improved by less than 60%',
   },
   {
-    passes: speechSummary.newActivationWindows >= speechSummary.oldActivationWindows * 0.75,
-    message: 'speech activation-window retention fell below 75%',
+    passes: speechSummary.newActivationWindows >= speechSummary.oldActivationWindows * 0.9,
+    message: 'speech activation-window retention fell below 90%',
+  },
+  {
+    passes: speechSummary.newContinuation >= 0.5,
+    message: `speech continuation rate ${percent(speechSummary.newContinuation)} is below 50%`,
   },
   {
     passes: newNonSpeechActivations <= oldNonSpeechActivations * 0.3,

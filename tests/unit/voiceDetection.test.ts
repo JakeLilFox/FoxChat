@@ -14,9 +14,18 @@ function periodicWaveform() {
   )
 }
 
-function spectrum(alternating = false) {
+function spectrum(alternating = false, inverted = false) {
   const bins = new Float32Array(VOICE_DETECTION_FFT_SIZE / 2).fill(-90)
-  for (let index = 12; index <= 230; index++) bins[index] = alternating && index % 2 ? -60 : -35
+  for (let index = 12; index <= 230; index++) {
+    const quietBin = index % 2 === (inverted ? 0 : 1)
+    bins[index] = alternating && quietBin ? -60 : -35
+  }
+  return bins
+}
+
+function lowFrequencySound(inverted = false) {
+  const bins = spectrum(true, inverted)
+  for (let index = 1; index <= 10; index++) bins[index] = -10
   return bins
 }
 
@@ -50,6 +59,41 @@ describe('VoiceFrameAnalyzer', () => {
 
     expect(changed.spectralFluxDb).toBeGreaterThan(10)
     expect(changed.smoothedSpectralFluxDb).toBeGreaterThan(0)
+  })
+
+  it('accepts changing speech-shaped frames with the quality-preferred thresholds', () => {
+    const analyzer = new VoiceFrameAnalyzer()
+    const waveform = periodicWaveform()
+    analyzer.analyze(spectrum(true), waveform, sampleRate, VOICE_DETECTION_FFT_SIZE, false)
+    analyzer.analyze(spectrum(true, true), waveform, sampleRate, VOICE_DETECTION_FFT_SIZE, false)
+
+    const changed = analyzer.analyze(
+      spectrum(true),
+      waveform,
+      sampleRate,
+      VOICE_DETECTION_FFT_SIZE,
+      false,
+    )
+
+    expect(changed.openingShape).toBe(true)
+  })
+
+  it('rejects a changing periodic sound dominated by frequencies below speech', () => {
+    const analyzer = new VoiceFrameAnalyzer()
+    const waveform = periodicWaveform()
+    analyzer.analyze(spectrum(true), waveform, sampleRate, VOICE_DETECTION_FFT_SIZE, false)
+    analyzer.analyze(spectrum(true, true), waveform, sampleRate, VOICE_DETECTION_FFT_SIZE, false)
+
+    const changed = analyzer.analyze(
+      lowFrequencySound(),
+      waveform,
+      sampleRate,
+      VOICE_DETECTION_FFT_SIZE,
+      false,
+    )
+
+    expect(changed.spectralFluxDb).toBeGreaterThan(10)
+    expect(changed.openingShape).toBe(false)
   })
 
   it('clears temporal evidence when reset', () => {
