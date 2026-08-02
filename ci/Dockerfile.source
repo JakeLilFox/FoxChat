@@ -1,0 +1,15 @@
+ARG TOOLCHAIN_IMAGE=repo.zenzon.net/foxchat-ci-toolchain:latest
+FROM ${TOOLCHAIN_IMAGE}
+
+USER root
+WORKDIR /home/ubuntu1/build
+
+COPY --chown=ubuntu1:ubuntu1 . .
+
+RUN test ! -e node_modules \
+    && test ! -e foxchathomepage/node_modules \
+    && ln -s /opt/foxchat-ci/root-dependencies/node_modules node_modules \
+    && ln -s /opt/foxchat-ci/homepage-dependencies/node_modules foxchathomepage/node_modules
+
+USER ubuntu1
+

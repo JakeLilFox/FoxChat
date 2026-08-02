@@ -183,6 +183,7 @@ const SESSION_KEY = 'foxchat.matrix.session'
 const ACCOUNTS_KEY = 'foxchat.matrix.accounts'
 const ACTIVE_ACCOUNT_KEY = 'foxchat.matrix.activeAccount'
 const SESSION_REVOCATION_TIMEOUT_MS = 15_000
+const TOKEN_REFRESH_TIMEOUT_MS = 15_000
 const HOMESERVER_KEY = 'foxchat.matrix.lastHomeserver'
 const NATIVE_ACCOUNTS_VERSION = 1
 const ROOM_ACCOUNTS_KEY = 'foxchat.matrix.roomAccounts'
@@ -207,6 +208,26 @@ const normalizeHomeserverInput = (value: string) => {
   if (/^https?:\/\//i.test(normalized)) return normalized
   if (normalized.startsWith('//')) return `https:${normalized}`
   return `https://${normalized}`
+}
+const fetchTokenRefresh = async (url: string, refreshToken: string) => {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), TOKEN_REFRESH_TIMEOUT_MS)
+  try {
+    return await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (controller.signal.aborted)
+      throw new Error(`Matrix session refresh timed out after ${TOKEN_REFRESH_TIMEOUT_MS} ms`, {
+        cause: error,
+      })
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+  }
 }
 const isInfiniteRoomCreator = (room: Room, userId: string) => {
   const create = room.currentState.getStateEvents(EventType.RoomCreate, '')
@@ -566,11 +587,10 @@ export class MatrixClientService {
     let response = await login(true)
     if (response.refresh_token) {
       try {
-        const refresh = await fetch(`${baseUrl}/_matrix/client/v3/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: response.refresh_token }),
-        })
+        const refresh = await fetchTokenRefresh(
+          `${baseUrl}/_matrix/client/v3/refresh`,
+          response.refresh_token,
+        )
         if (refresh.ok) {
           const tokens = (await refresh.json()) as {
             access_token: string
@@ -962,11 +982,10 @@ export class MatrixClientService {
       accessToken: session.accessToken,
       refreshToken: session.refreshToken,
       tokenRefreshFunction: async (refreshToken) => {
-        const response = await fetch(`${session.baseUrl}/_matrix/client/v3/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: refreshToken }),
-        })
+        const response = await fetchTokenRefresh(
+          `${session.baseUrl}/_matrix/client/v3/refresh`,
+          refreshToken,
+        )
         if (!response.ok) {
           const details = (await response.text()).slice(0, 300)
           throw new Error(

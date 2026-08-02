@@ -4,8 +4,8 @@ FoxChat uses Playwright for browser journeys and Vitest for focused
 regressions. The browser suite has two layers:
 
 - `desktop` and `mobile` test public UI and responsive layout without accounts.
-- `matrix-live` uses three dedicated Matrix accounts for a real encrypted-room
-  journey.
+- `matrix-live` assigns four dedicated Matrix accounts to each Playwright
+  worker for real encrypted-room journeys.
 
 The live journey signs two accounts into one FoxChat client and a third account
 into a separate client, creates an encrypted private room, invites and joins
@@ -116,7 +116,7 @@ are present.
 
 ## Environment variables
 
-Each account needs:
+At minimum, accounts 1 through 4 need:
 
 - `MATRIX_E2E_ACCOUNT_1_HOMESERVER`
 - `MATRIX_E2E_ACCOUNT_1_USER`
@@ -127,6 +127,9 @@ Each account needs:
 - `MATRIX_E2E_ACCOUNT_3_HOMESERVER`
 - `MATRIX_E2E_ACCOUNT_3_USER`
 - `MATRIX_E2E_ACCOUNT_3_PASSWORD`
+- `MATRIX_E2E_ACCOUNT_4_HOMESERVER`
+- `MATRIX_E2E_ACCOUNT_4_USER`
+- `MATRIX_E2E_ACCOUNT_4_PASSWORD`
 
 The `*_USER` values may be either a full Matrix ID or a username accepted by
 the homeserver. The suite resolves usernames to their canonical Matrix IDs
@@ -137,10 +140,55 @@ Recovery keys are optional:
 - `MATRIX_E2E_ACCOUNT_1_RECOVERY_KEY`
 - `MATRIX_E2E_ACCOUNT_2_RECOVERY_KEY`
 - `MATRIX_E2E_ACCOUNT_3_RECOVERY_KEY`
+- `MATRIX_E2E_ACCOUNT_4_RECOVERY_KEY`
 
-The fresh-device recovery assertion runs when account 2 has a recovery key.
-The accounts must already have a working server-side encrypted backup for that
-step.
+The fresh-device recovery assertion runs when the worker's second account has
+a recovery key. The accounts must already have a working server-side encrypted
+backup for that step.
+
+Complete, distinct account quadruples form the worker pool automatically.
+`matrix-live` assigns 1/2/3/4 to its first worker, 5/6/7/8 to its second, and
+so on. Duplicate Matrix users are skipped before grouping. Its worker count is
+`floor(distinct complete accounts / 4)`, with a minimum runner value of one so
+an incomplete configuration can report a useful skip reason. An incomplete
+trailing group is ignored. With 128 distinct complete accounts, the project
+runs with 32 isolated workers and needs no pool-related environment settings.
+
+### Provisioning dedicated accounts
+
+If the homeserver allows registration tokens, the repository can create the
+accounts and initialize secret storage, cross-signing, and encrypted key backup
+for each one:
+
+```powershell
+$env:MATRIX_PROVISION_REGISTRATION_TOKEN = '<registration code>'
+$env:MATRIX_PROVISION_BACKUP_PASSPHRASE = '<a long backup passphrase>'
+npm run provision:matrix-accounts -- --homeserver https://matrix.example --count 4
+Remove-Item Env:MATRIX_PROVISION_REGISTRATION_TOKEN, Env:MATRIX_PROVISION_BACKUP_PASSPHRASE
+```
+
+The command prints the path of a generated dotenv file containing the numbered
+`MATRIX_E2E_ACCOUNT_*` credentials and recovery keys. It writes under
+`test-results/` by default, which is ignored by Git, and saves each password as
+soon as registration succeeds so a later backup error does not lose access to
+the new account. The shared passphrase is deliberately not included in the
+output file.
+
+If provisioning is interrupted after an account is registered, reuse the same
+passphrase and output path to repair incomplete backups and continue until the
+requested total is reached:
+
+```powershell
+npm run provision:matrix-accounts -- --homeserver https://matrix.example --count 4 --output test-results/provisioned-matrix-accounts-123.env --resume
+```
+
+Do not use `--force` when resuming: it intentionally replaces the credential
+file instead.
+
+Use `--accept-terms` only after reviewing the homeserver policies when its
+registration flow requires `m.login.terms`. Run
+`npm run provision:matrix-accounts -- --help` for naming, output, and account
+index options.
 
 Optional controls:
 
@@ -258,9 +306,9 @@ configuration (account 1 = primary Android login, account 2 = the second
 account added mid-journey, accounts 3 and 4 = independent normal-browser
 senders for the first and multi-account push checks) and the
 same `tests/e2e/support/{ui,matrix-api,env}.ts` helpers for everything that
-happens in a plain browser. **Run it at concurrency one with the
-`matrix-live` project** - they share accounts and both wipe devices at the
-start.
+happens in a plain browser. **Run it at concurrency one with the `matrix-live`
+project** because both suites can use accounts 1 through 4 and wipe devices at
+startup.
 
 ### One-time setup: baking a signed-in emulator snapshot
 

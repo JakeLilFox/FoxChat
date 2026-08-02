@@ -1,0 +1,133 @@
+ARG TAURI_BASE_IMAGE=build-container-tauri
+FROM ${TAURI_BASE_IMAGE}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ARG ANDROID_COMMAND_LINE_TOOLS_VERSION=14742923
+ARG ANDROID_NDK_VERSION=29.0.13846066
+ARG ANDROID_PLATFORM=36
+ARG ANDROID_BUILD_TOOLS=36.0.0
+ARG ANDROID_E2E_SYSTEM_IMAGE=system-images;android-34;google_apis_playstore;x86_64
+ARG BUNDLETOOL_VERSION=1.18.1
+ARG JDK21_ARCHIVE=OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    HOME=/home/ubuntu1 \
+    CARGO_HOME=/home/ubuntu1/.cargo \
+    RUSTUP_HOME=/home/ubuntu1/.rustup \
+    ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    ANDROID_NDK_VERSION=${ANDROID_NDK_VERSION} \
+    NDK_HOME=/opt/android-sdk/ndk/${ANDROID_NDK_VERSION} \
+    ANDROID_NDK_HOME=/opt/android-sdk/ndk/${ANDROID_NDK_VERSION} \
+    JAVA_HOME=/opt/jdk21 \
+    PATH=/opt/jdk21/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/home/ubuntu1/.local/bin:${PATH}
+
+USER root
+
+RUN mkdir -p /tmp /run /var/log /var/lib/docker /home/ubuntu1/build \
+    && chmod 1777 /tmp
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      clang \
+      curl \
+      dbus-x11 \
+      gstreamer1.0-nice \
+      gstreamer1.0-plugins-bad \
+      gstreamer1.0-plugins-base \
+      gstreamer1.0-pipewire \
+      gstreamer1.0-pulseaudio \
+      gstreamer1.0-tools \
+      lld \
+      llvm \
+      nsis \
+      openjdk-17-jdk \
+      patchelf \
+      pipewire \
+      pipewire-pulse \
+      pulseaudio-utils \
+      python3-pip \
+      screen \
+      unzip \
+      webkit2gtk-driver \
+      wireplumber \
+      xauth \
+      xdotool \
+      xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p \
+      /opt/foxchat-ci/root-dependencies \
+      /opt/foxchat-ci/homepage-dependencies \
+      /opt/ms-playwright \
+      /opt/android-sdk/cmdline-tools/latest \
+      /opt/jdk21 \
+    && curl -fsSL --retry 3 \
+      "https://static.jakefox.de/${JDK21_ARCHIVE}" \
+      -o /tmp/jdk21.tar.gz \
+    && tar xzf /tmp/jdk21.tar.gz -C /opt/jdk21 --strip-components=1 \
+    && curl -fsSL --retry 3 \
+      "https://static.jakefox.de/commandlinetools-linux-${ANDROID_COMMAND_LINE_TOOLS_VERSION}_latest.zip" \
+      -o /tmp/android-command-line-tools.zip \
+    && mkdir -p /tmp/android-command-line-tools \
+    && unzip -q /tmp/android-command-line-tools.zip -d /tmp/android-command-line-tools \
+    && cp -R /tmp/android-command-line-tools/cmdline-tools/. /opt/android-sdk/cmdline-tools/latest/ \
+    && (yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager \
+      --sdk_root=/opt/android-sdk --licenses >/dev/null || true) \
+    && /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager \
+      --sdk_root=/opt/android-sdk \
+      platform-tools \
+      emulator \
+      "platforms;android-${ANDROID_PLATFORM}" \
+      "build-tools;${ANDROID_BUILD_TOOLS}" \
+      "ndk;${ANDROID_NDK_VERSION}" \
+      "${ANDROID_E2E_SYSTEM_IMAGE}" \
+    && curl -fsSL --retry 3 \
+      "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar" \
+      -o /opt/bundletool.jar \
+    && rm -rf \
+      /tmp/android-command-line-tools \
+      /tmp/android-command-line-tools.zip \
+      /tmp/jdk21.tar.gz
+
+COPY --chown=ubuntu1:ubuntu1 package.json package-lock.json /opt/foxchat-ci/root-dependencies/
+COPY --chown=ubuntu1:ubuntu1 foxchathomepage/package.json foxchathomepage/package-lock.json /opt/foxchat-ci/homepage-dependencies/
+COPY ci/android-env.sh /opt/foxchat-ci/android-env.sh
+
+RUN chmod 0755 /opt/foxchat-ci/android-env.sh \
+    && chown -R ubuntu1:ubuntu1 \
+      /opt/android-sdk \
+      /opt/foxchat-ci \
+      /opt/ms-playwright \
+      /home/ubuntu1/.cargo \
+      /home/ubuntu1/.rustup
+
+USER ubuntu1
+
+RUN source /home/ubuntu1/.nvm/nvm.sh \
+    && nvm use 22 \
+    && cd /opt/foxchat-ci/root-dependencies \
+    && npm ci --no-audit --no-fund \
+    && cd /opt/foxchat-ci/homepage-dependencies \
+    && npm ci --no-audit --no-fund \
+    && cd /opt/foxchat-ci/root-dependencies \
+    && npx playwright install --with-deps chromium
+
+RUN (cargo tauri --version >/dev/null 2>&1 \
+      || cargo install tauri-cli --version '^2.0.0' --locked) \
+    && (command -v tauri-driver >/dev/null 2>&1 \
+      || cargo install tauri-driver --locked) \
+    && (cargo xwin --version >/dev/null 2>&1 \
+      || cargo install cargo-xwin --locked)
+
+RUN rustup target add \
+      x86_64-pc-windows-msvc \
+      aarch64-linux-android \
+      armv7-linux-androideabi \
+      i686-linux-android \
+      x86_64-linux-android \
+    && pip3 install --break-system-packages --user --quiet fdroidserver \
+    && fdroid --version
+
+WORKDIR /home/ubuntu1/build
