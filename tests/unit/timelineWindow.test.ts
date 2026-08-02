@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addedVisibleEventCount,
   initialTimelinePosition,
+  mergeTimelineEventSegments,
   nextFollowLatest,
   shouldHandleTimelineGrowth,
   shouldFollowAddedEvents,
@@ -23,6 +24,32 @@ describe('addedVisibleEventCount', () => {
 
   it('does not move the window when events are removed', () => {
     expect(addedVisibleEventCount(4, 3)).toBe(0)
+  })
+})
+
+describe('mergeTimelineEventSegments', () => {
+  it('preserves cached messages when a reset live segment only contains a profile update', () => {
+    const first = fakeEvent({ id: '$first', sender: '@alice:example.org', ts: 1_000 })
+    const second = fakeEvent({ id: '$second', sender: '@bob:example.org', ts: 2_000 })
+    const avatarUpdate = fakeEvent({
+      id: '$avatar',
+      sender: '@alice:example.org',
+      type: 'm.room.member',
+      ts: 3_000,
+    })
+
+    expect(mergeTimelineEventSegments([first, second], [avatarUpdate])).toEqual([
+      first,
+      second,
+      avatarUpdate,
+    ])
+  })
+
+  it('deduplicates overlap between cached and replacement segments', () => {
+    const cached = fakeEvent({ id: '$same', sender: '@alice:example.org', ts: 1_000 })
+    const refreshed = fakeEvent({ id: '$same', sender: '@alice:example.org', ts: 1_000 })
+
+    expect(mergeTimelineEventSegments([cached], [refreshed])).toEqual([refreshed])
   })
 })
 

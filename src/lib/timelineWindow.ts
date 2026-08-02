@@ -6,6 +6,29 @@ export function addedVisibleEventCount(previousCount: number, currentCount: numb
   return Math.max(0, currentCount - previousCount)
 }
 
+export function mergeTimelineEventSegments(...segments: MatrixEvent[][]) {
+  const merged: MatrixEvent[] = []
+  const positions = new Map<string, number>()
+  for (const events of segments) {
+    for (const event of events) {
+      const eventId = event.getId()
+      const transactionId = event.getTxnId?.()
+      const keys = [
+        eventId ? `event:${eventId}` : undefined,
+        transactionId ? `txn:${event.getSender() ?? ''}:${transactionId}` : undefined,
+      ].filter((key): key is string => !!key)
+      const existing = keys.map((key) => positions.get(key)).find((index) => index !== undefined)
+      const index = existing ?? merged.length
+      if (existing === undefined) {
+        if (!keys.length && merged.includes(event)) continue
+        merged.push(event)
+      } else merged[index] = event
+      for (const key of keys) positions.set(key, index)
+    }
+  }
+  return merged.sort((first, second) => first.getTs() - second.getTs())
+}
+
 export function shouldHandleTimelineGrowth(
   newestChanged: boolean,
   addedVisibleEvents: number,

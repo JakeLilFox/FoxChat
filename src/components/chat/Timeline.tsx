@@ -63,6 +63,7 @@ import {
 import {
   addedVisibleEventCount,
   initialTimelinePosition,
+  mergeTimelineEventSegments,
   nextFollowLatest,
   shouldHandleTimelineGrowth,
   shouldFollowAddedEvents,
@@ -182,8 +183,26 @@ const isUnavailablePreJoinEvent = (event: MatrixEvent, fallbackRoom?: Room) => {
 const isAvailableTimelineMessage = (event: MatrixEvent, room?: Room) =>
   isVisibleMessageEvent(event) && !isUnavailablePreJoinEvent(event, room)
 
+const linkedRoomTimelineEvents = (room: Room) => {
+  const live = room.getLiveTimeline()
+  const timelines = [live]
+  const seen = new Set([live])
+  let previous = live.getNeighbouringTimeline(Direction.Backward)
+  while (previous && !seen.has(previous)) {
+    seen.add(previous)
+    timelines.unshift(previous)
+    previous = previous.getNeighbouringTimeline(Direction.Backward)
+  }
+  return mergeTimelineEventSegments(...timelines.map((timeline) => timeline.getEvents()))
+}
+
 const cachedEventWindow = (room: Room) => {
-  const source = room.getLiveTimeline().getEvents()
+  const freshEvents = linkedRoomTimelineEvents(room)
+  const previous = roomTimelineCache.get(timelineRoomIdentity(room))?.events ?? []
+  // A limited sync can replace the live timeline with only a profile membership event. Retain
+  // the previously rendered window as well as any older SDK timeline segments linked to the new
+  // live segment, so that the sync cannot visually erase the conversation.
+  const source = mergeTimelineEventSegments(previous, freshEvents)
   const visible = source.filter((event) => isAvailableTimelineMessage(event, room))
   const first = visible.at(-MESSAGE_WINDOW_SIZE)
   if (!first) return source.slice(-MESSAGE_WINDOW_SIZE)
@@ -220,9 +239,7 @@ const initialRoomPosition = (
 
 const cacheRoomTimeline = (room: Room, touch = false) => {
   const roomIdentity = timelineRoomIdentity(room)
-  const previous = roomTimelineCache.get(roomIdentity)
-  const freshEvents = cachedEventWindow(room)
-  const events = freshEvents.length > 0 ? freshEvents : (previous?.events ?? [])
+  const events = cachedEventWindow(room)
   const position = initialRoomPosition(room, events)
   const entry = {
     room,
@@ -466,13 +483,16 @@ function TimelineView({
   const timelineEvents = useMemo(() => {
     void matrixRevision
     void renderTick
-    const liveTimelineEvents = timeline?.getEvents() ?? []
+    const liveTimelineEvents = contextTimeline
+      ? (timeline?.getEvents() ?? [])
+      : room
+        ? linkedRoomTimelineEvents(room)
+        : []
+    const cachedTimelineEvents = roomTimelineCache.get(roomIdentity ?? '')?.events ?? []
     const baseTimelineEvents =
-      liveTimelineEvents.length > 0
-        ? liveTimelineEvents
-        : room
-          ? (roomTimelineCache.get(roomIdentity ?? '')?.events ?? [])
-          : []
+      room && !contextTimeline
+        ? mergeTimelineEventSegments(cachedTimelineEvents, liveTimelineEvents)
+        : liveTimelineEvents
     return room
       ? contextTimeline
         ? baseTimelineEvents.map((event) => matrixService.eventForReading(event))
