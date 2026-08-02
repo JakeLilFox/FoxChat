@@ -64,6 +64,7 @@ export const isPreJoinHistoryUnavailable = (
     membershipEvent.getContent().membership !== 'join'
   )
     return false
+  if (membershipEvent.getPrevContent().membership === 'join') return false
   const joinedAt = membershipEvent.getTs()
   const eventAt = event.getTs()
   return Number.isFinite(joinedAt) && joinedAt > 0 && Number.isFinite(eventAt) && eventAt < joinedAt

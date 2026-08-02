@@ -129,6 +129,28 @@ describe('content presentation helpers', () => {
     expect(isPreJoinHistoryUnavailable(message, room, userId)).toBe(true)
   })
 
+  it('does not treat an avatar profile update as a new join boundary', () => {
+    const userId = '@me:example.org'
+    const message = event(EventType.RoomMessage, { msgtype: 'm.text', body: 'Still here' })
+    message.event.origin_server_ts = 1_000
+    const avatarUpdate = new MatrixEvent({
+      type: EventType.RoomMember,
+      state_key: userId,
+      sender: userId,
+      origin_server_ts: 2_000,
+      content: { membership: 'join', avatar_url: 'mxc://example.org/new-avatar' },
+      unsigned: {
+        prev_content: { membership: 'join', avatar_url: 'mxc://example.org/old-avatar' },
+      },
+    })
+    const room = {
+      getHistoryVisibility: () => HistoryVisibility.Joined,
+      currentState: { getStateEvents: () => avatarUpdate },
+    } as unknown as Room
+
+    expect(isPreJoinHistoryUnavailable(message, room, userId)).toBe(false)
+  })
+
   it('uses the exact crypto failure reason when cached membership timing is unavailable', () => {
     const message = event(EventType.RoomMessageEncrypted, {})
     Object.defineProperty(message, 'decryptionFailureReason', {
