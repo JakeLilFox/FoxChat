@@ -953,8 +953,11 @@ async function enableDarkMode(page) {
     timeout: 10_000,
   })
   if (mobile) {
-    await page.keyboard.press('Escape')
-    await sidebar.waitFor({ state: 'hidden' })
+    const drawer = sidebar.locator(
+      'xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " ant-drawer ")][1]',
+    )
+    await drawer.locator('.ant-drawer-mask').dispatchEvent('click')
+    await drawer.waitFor({ state: 'hidden' })
   }
 }
 
