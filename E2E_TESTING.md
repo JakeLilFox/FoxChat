@@ -148,11 +148,13 @@ backup for that step.
 
 Complete, distinct account quadruples form the worker pool automatically.
 `matrix-live` assigns 1/2/3/4 to its first worker, 5/6/7/8 to its second, and
-so on. Duplicate Matrix users are skipped before grouping. Its worker count is
-`floor(distinct complete accounts / 4)`, with a minimum runner value of one so
-an incomplete configuration can report a useful skip reason. An incomplete
-trailing group is ignored. With 128 distinct complete accounts, the project
-runs with 32 isolated workers and needs no pool-related environment settings.
+so on. Replacement workers retain the same group through Playwright's stable
+parallel index, and duplicate Matrix users are skipped before grouping. The
+automatic worker count is the smallest of the available account groups, half
+the detected CPU parallelism, and four. This keeps simultaneous login, sync,
+and crypto initialization from overwhelming either the CI container or the
+homeserver. An incomplete trailing group is ignored and no pool-related
+environment setting is needed.
 
 ### Provisioning dedicated accounts
 

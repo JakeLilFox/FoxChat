@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { liveMatrixConfig, matrixE2EAccountPool } from '../../tests/e2e/support/env'
+import {
+  liveMatrixConfig,
+  matrixE2EAccountPool,
+  recommendedMatrixWorkerCount,
+} from '../../tests/e2e/support/env'
 
 const keys = [
   'MATRIX_E2E_ENABLED',
   'MATRIX_E2E_ALLOW_ROOM_MUTATION',
   'MATRIX_E2E_ALLOW_DEVICE_RESET',
+  'TEST_PARALLEL_INDEX',
   'TEST_WORKER_INDEX',
   ...Array.from({ length: 12 }, (_, offset) => offset + 1).flatMap((number) =>
     ['HOMESERVER', 'USER', 'PASSWORD', 'RECOVERY_KEY'].map(
@@ -62,7 +67,7 @@ describe('live Matrix environment safety', () => {
       process.env[`MATRIX_E2E_ACCOUNT_${number}_PASSWORD`] = 'test-password'
     }
 
-    process.env.TEST_WORKER_INDEX = '2'
+    process.env.TEST_PARALLEL_INDEX = '1'
 
     expect(matrixE2EAccountPool()).toMatchObject({
       configuredAccounts: 8,
@@ -86,7 +91,7 @@ describe('live Matrix environment safety', () => {
       process.env[`MATRIX_E2E_ACCOUNT_${number}_USER`] = `@foxchat-e2e-${number}:matrix.org`
       process.env[`MATRIX_E2E_ACCOUNT_${number}_PASSWORD`] = 'test-password'
     }
-    process.env.TEST_WORKER_INDEX = '2'
+    process.env.TEST_PARALLEL_INDEX = '1'
 
     expect(matrixE2EAccountPool()).toMatchObject({
       configuredAccounts: 6,
@@ -114,5 +119,28 @@ describe('live Matrix environment safety', () => {
       enabled: true,
       accountNumbers: [1, 2, 3, 5],
     })
+  })
+
+  it('uses the stable zero-based parallel index across replacement workers', () => {
+    for (const number of [5, 6, 7, 8]) {
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_HOMESERVER`] = 'https://matrix.org'
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_USER`] = `@foxchat-e2e-${number}:matrix.org`
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_PASSWORD`] = 'test-password'
+    }
+
+    process.env.TEST_PARALLEL_INDEX = '0'
+    process.env.TEST_WORKER_INDEX = '17'
+    expect(matrixE2EAccountPool().accountNumbers).toEqual([1, 2, 3, 4])
+
+    process.env.TEST_PARALLEL_INDEX = '1'
+    process.env.TEST_WORKER_INDEX = '42'
+    expect(matrixE2EAccountPool().accountNumbers).toEqual([5, 6, 7, 8])
+  })
+
+  it('caps live Matrix concurrency by account and CPU budgets', () => {
+    expect(recommendedMatrixWorkerCount(31, 32)).toBe(4)
+    expect(recommendedMatrixWorkerCount(31, 4)).toBe(2)
+    expect(recommendedMatrixWorkerCount(2, 32)).toBe(2)
+    expect(recommendedMatrixWorkerCount(31, 1)).toBe(1)
   })
 })

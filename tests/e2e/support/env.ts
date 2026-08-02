@@ -67,10 +67,15 @@ export function matrixE2EAccountPool() {
     ])
   }
 
+  const parsedParallelIndex = Number(value('TEST_PARALLEL_INDEX'))
   const parsedWorkerIndex = Number(value('TEST_WORKER_INDEX'))
-  const workerIndex =
-    Number.isInteger(parsedWorkerIndex) && parsedWorkerIndex > 0 ? parsedWorkerIndex : 1
-  const groupIndex = groups.length ? (workerIndex - 1) % groups.length : 0
+  const parallelIndex =
+    Number.isInteger(parsedParallelIndex) && parsedParallelIndex >= 0
+      ? parsedParallelIndex
+      : Number.isInteger(parsedWorkerIndex) && parsedWorkerIndex >= 0
+        ? parsedWorkerIndex
+        : 0
+  const groupIndex = groups.length ? parallelIndex % groups.length : 0
   return {
     configuredAccounts: completeNumbers.length,
     uniqueAccounts: configuredNumbers.length,
@@ -78,6 +83,17 @@ export function matrixE2EAccountPool() {
     workerCapacity: groups.length,
     accountNumbers: groups[groupIndex],
   }
+}
+
+export function recommendedMatrixWorkerCount(
+  accountWorkerCapacity: number,
+  cpuParallelism: number,
+) {
+  const accountBudget = Math.max(1, Math.trunc(accountWorkerCapacity))
+  // One live test commonly owns multiple browser contexts, crypto workers, and sync loops.
+  // Reserving two CPU slots per Playwright worker avoids starving login and initial sync.
+  const cpuBudget = Math.max(1, Math.floor(cpuParallelism / 2))
+  return Math.min(accountBudget, cpuBudget, 4)
 }
 
 export function liveMatrixConfig(): LiveMatrixConfig {
