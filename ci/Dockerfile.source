@@ -11,6 +11,6 @@ RUN test ! -e node_modules \
     && ln -s /opt/foxchat-ci/root-dependencies/node_modules node_modules \
     && ln -s /opt/foxchat-ci/homepage-dependencies/node_modules foxchathomepage/node_modules
 
-USER ubuntu1
+USER root
 
 CMD ["/bin/bash", "-lc", "dockerd --storage-driver=vfs >/var/log/dockerd.log 2>&1 & exec /usr/sbin/sshd -D -e"]
