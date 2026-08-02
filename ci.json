@@ -407,14 +407,6 @@
         ]
       },
       {
-        "type": "asset",
-        "id": "e8359dc3-f7ae-4fb9-b3f7-05306d5d82d5",
-        "files": [
-          "test-results/"
-        ],
-        "prefix": "desktop-e2e"
-      },
-      {
         "type": "cmd",
         "id": "3f6d9a2e-1b4c-4a7d-9e2f-6c8b1d3a5f70",
         "cmd": [

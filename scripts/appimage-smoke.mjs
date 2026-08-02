@@ -213,10 +213,6 @@ async function passwordLogin(loginUser, loginPassword, baseUrl, deviceName) {
   })
 }
 
-async function fixtureLogin() {
-  return passwordLogin(userId, password, homeserver, `FoxChat desktop E2E fixture ${platformName}`)
-}
-
 async function createFixture(token) {
   const voiceRoomType = 'org.matrix.msc3417.call'
   const created = await matrix('/_matrix/client/v3/createRoom', {
@@ -260,6 +256,21 @@ async function roomMessages(token, roomId) {
     { token },
   )
   return payload.chunk ?? []
+}
+
+async function removeFixtureRoom(token, fixtureRoomId, baseUrl = homeserver) {
+  await matrix(`/_matrix/client/v3/rooms/${encodeURIComponent(fixtureRoomId)}/leave`, {
+    method: 'POST',
+    token,
+    baseUrl,
+    body: {},
+  })
+  await matrix(`/_matrix/client/v3/rooms/${encodeURIComponent(fixtureRoomId)}/forget`, {
+    method: 'POST',
+    token,
+    baseUrl,
+    body: {},
+  })
 }
 
 let sessionId
@@ -367,6 +378,19 @@ async function bodyContains(text) {
   return command('POST', sessionPath('/execute/sync'), {
     script: 'return document.body.innerText.includes(arguments[0])',
     args: [text],
+  })
+}
+
+async function desktopMatrixSession() {
+  return command('POST', sessionPath('/execute/sync'), {
+    script: `
+      try {
+        return JSON.parse(localStorage.getItem('foxchat.matrix.session') || 'null')
+      } catch {
+        return null
+      }
+    `,
+    args: [],
   })
 }
 
@@ -1203,6 +1227,7 @@ async function dumpPageState(name) {
     resolve(outputDirectory, `${platformName}-${name}.json`),
     JSON.stringify(state, null, 2),
   ).catch(() => undefined)
+  return state
 }
 
 async function closeRoomWithEscape() {
@@ -1240,16 +1265,7 @@ async function closeRoomWithEscape() {
 }
 
 async function signOut() {
-  const session = await command('POST', sessionPath('/execute/sync'), {
-    script: `
-      try {
-        return JSON.parse(localStorage.getItem('foxchat.matrix.session') || 'null')
-      } catch {
-        return null
-      }
-    `,
-    args: [],
-  }).catch(() => null)
+  const session = await desktopMatrixSession().catch(() => null)
   await selectSettingsTab('Account')
   await clickText('button', 'Sign out of FoxChat')
   const started = Date.now()
@@ -1313,9 +1329,6 @@ let fixture
 let roomId
 let journeyError
 try {
-  fixture = await fixtureLogin()
-  if (!recoveryOnly) roomId = await createFixture(fixture.access_token)
-
   await startSession()
   const title = await command('GET', sessionPath('/title'))
   if (!String(title).includes('FoxChat')) throw new Error(`Unexpected native title: ${title}`)
@@ -1325,12 +1338,32 @@ try {
   await fill('input[placeholder="@you:matrix.org"]', userId)
   await fill('input[placeholder="Your password"]', password)
   await clickCss('button[type="submit"]')
-  await waitFor(
-    'room drawer after Matrix login',
-    () => findCss('[data-testid="room-sidebar"]'),
-    120_000,
-  )
+  try {
+    await waitFor(
+      'room drawer after Matrix login',
+      () => findCss('[data-testid="room-sidebar"]'),
+      120_000,
+    )
+  } catch (error) {
+    const state = await dumpPageState('login-timeout')
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; page state: ${JSON.stringify(state)}`,
+      { cause: error },
+    )
+  }
   console.log(`PASS ${platformName}: logged in and rendered the room drawer`)
+
+  const desktopSession = await desktopMatrixSession()
+  if (!desktopSession?.accessToken || !desktopSession?.userId)
+    throw new Error('Desktop login rendered the room drawer without a persisted Matrix session')
+  fixture = {
+    access_token: desktopSession.accessToken,
+    user_id: desktopSession.userId,
+    base_url: desktopSession.baseUrl,
+  }
+  // Reuse the authenticated desktop device for fixture setup. A second immediate password login
+  // can be throttled by the homeserver and make the UI login fail nondeterministically.
+  if (!recoveryOnly) roomId = await createFixture(fixture.access_token)
 
   if (!skipRecovery) await restoreRecovery()
   if (testVerification && !skipRecovery) await testDesktopVerification()
@@ -1379,6 +1412,8 @@ try {
     await clickExternalLink()
     await screenshot(`${platformName}-success.png`)
     await closeRoomWithEscape()
+    await removeFixtureRoom(fixture.access_token, roomId, fixture.base_url)
+    roomId = undefined
     await signOut()
   }
 } catch (error) {
@@ -1387,21 +1422,13 @@ try {
 } finally {
   if (sessionId) await command('DELETE', sessionPath()).catch(() => undefined)
   if (fixture?.access_token && roomId) {
-    await matrix(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/leave`, {
-      method: 'POST',
-      token: fixture.access_token,
-      body: {},
-    }).catch(() => undefined)
-    await matrix(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/forget`, {
-      method: 'POST',
-      token: fixture.access_token,
-      body: {},
-    }).catch(() => undefined)
+    await removeFixtureRoom(fixture.access_token, roomId, fixture.base_url).catch(() => undefined)
   }
   if (fixture?.access_token)
     await matrix('/_matrix/client/v3/logout', {
       method: 'POST',
       token: fixture.access_token,
+      baseUrl: fixture.base_url,
       body: {},
     }).catch(() => undefined)
 }
