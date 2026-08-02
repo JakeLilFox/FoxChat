@@ -112,7 +112,10 @@ RUN source /home/ubuntu1/.nvm/nvm.sh \
     && cd /opt/foxchat-ci/homepage-dependencies \
     && npm ci --no-audit --no-fund \
     && cd /opt/foxchat-ci/root-dependencies \
-    && npx playwright install --with-deps chromium
+    && npx playwright install --with-deps chromium \
+    && mkdir -p /home/ubuntu1/.cache \
+    && ln -sfn /opt/ms-playwright /home/ubuntu1/.cache/ms-playwright \
+    && test -x /home/ubuntu1/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell
 
 RUN (cargo tauri --version >/dev/null 2>&1 \
       || cargo install tauri-cli --version '^2.0.0' --locked) \
