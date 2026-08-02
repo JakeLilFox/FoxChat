@@ -111,7 +111,7 @@
             "type": "cmd",
             "id": "bb021815-fee1-49c2-9d9d-860b0be6b15e",
             "cmd": [
-              "screen -dmS foxchat-ci-source-docker sudo dockerd --storage-driver=vfs && timeout 60 sh -c 'until sudo docker info >/dev/null 2>&1; do sleep 1; done'"
+              "screen -dmS foxchat-ci-source-docker sudo dockerd --storage-driver=overlay2 && timeout 60 sh -c 'until sudo docker info >/dev/null 2>&1; do sleep 1; done'"
             ]
           },
           {
