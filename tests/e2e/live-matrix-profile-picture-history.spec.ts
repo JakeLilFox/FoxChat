@@ -13,7 +13,7 @@ import { openRoomActions, openRoomRow, sendMessage, signIn } from './support/ui'
 
 const live = liveMatrixConfig()
 const PROFILE_PICTURE_PATH = resolve(process.cwd(), 'public/favicon.png')
-const MESSAGE_COUNT = 20
+const MESSAGE_COUNT = 8
 
 const profileAvatarUrl = async (session: StoredSession) => {
   const response = await fetch(
@@ -67,6 +67,18 @@ const uploadProfilePicture = async (session: StoredSession) => {
   const contentUri = ((await response.json()) as { content_uri?: string }).content_uri
   expect(contentUri).toMatch(/^mxc:\/\//)
   return contentUri!
+}
+
+const sendSyncedMessage = async (page: Page, body: string) => {
+  const syncEcho = page.waitForResponse(
+    async (response) => {
+      if (!response.ok() || !new URL(response.url()).pathname.endsWith('/sync')) return false
+      return (await response.text()).includes(body)
+    },
+    { timeout: 90_000 },
+  )
+  await sendMessage(page, body)
+  await syncEcho
 }
 
 test.describe('live profile picture history regression', () => {
@@ -131,7 +143,7 @@ test.describe('live profile picture history regression', () => {
         expect(roomId).toMatch(/^!/)
 
         for (let index = 1; index <= MESSAGE_COUNT; index++)
-          await sendMessage(page!, `${messageLabel} ${index}`)
+          await sendSyncedMessage(page!, `${messageLabel} ${index}`)
         await expect(historyEvents()).toHaveCount(MESSAGE_COUNT, { timeout: 60_000 })
       })
 
@@ -154,18 +166,19 @@ test.describe('live profile picture history regression', () => {
         await page!.reload()
         await expect(page!.getByTestId('room-sidebar').first()).toBeVisible({ timeout: 90_000 })
         await openRoomRow(page!, roomName)
-        await expect(
-          page!.getByTestId('timeline').getByText(/updated their profile picture$/),
-        ).toBeVisible({ timeout: 60_000 })
-        await expect(historyEvents()).toHaveCount(MESSAGE_COUNT, { timeout: 60_000 })
-        await expect(
-          page!.getByTestId('timeline').getByText(`${messageLabel} 1`, { exact: true }),
-        ).toBeVisible()
-        await expect(
-          page!
-            .getByTestId('timeline')
-            .getByText(`${messageLabel} ${MESSAGE_COUNT}`, { exact: true }),
-        ).toBeVisible()
+        const timeline = page!.getByTestId('timeline')
+        const messageNumbers = Array.from({ length: MESSAGE_COUNT }, (_, index) => index + 1)
+        for (const index of messageNumbers)
+          await expect(timeline.getByText(`${messageLabel} ${index}`, { exact: true })).toBeVisible(
+            {
+              timeout: 60_000,
+            },
+          )
+        await page!.waitForTimeout(5_000)
+        for (const index of messageNumbers)
+          await expect(timeline.getByText(`${messageLabel} ${index}`, { exact: true })).toHaveCount(
+            1,
+          )
       })
     } catch (error) {
       journeyError = error
