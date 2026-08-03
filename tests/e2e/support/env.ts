@@ -36,7 +36,7 @@ export const matrixTestAccount = (number: number): MatrixTestAccount | undefined
   }
 }
 
-export function matrixE2EAccountPool() {
+const accountPoolStats = () => {
   const completeNumbers = Object.keys(process.env)
     .flatMap((key) => {
       const match = /^MATRIX_E2E_ACCOUNT_(\d+)_USER$/.exec(key)
@@ -66,16 +66,33 @@ export function matrixE2EAccountPool() {
       configuredNumbers[offset + 3],
     ])
   }
+  return { completeNumbers, configuredNumbers, duplicateAccountNumbers, groups }
+}
 
+export function matrixE2EAccountGroups(): Array<[number, number, number, number]> {
+  return accountPoolStats().groups
+}
+
+const parallelWorkerIndex = () => {
   const parsedParallelIndex = Number(value('TEST_PARALLEL_INDEX'))
   const parsedWorkerIndex = Number(value('TEST_WORKER_INDEX'))
-  const parallelIndex =
-    Number.isInteger(parsedParallelIndex) && parsedParallelIndex >= 0
-      ? parsedParallelIndex
-      : Number.isInteger(parsedWorkerIndex) && parsedWorkerIndex >= 0
-        ? parsedWorkerIndex
-        : 0
-  const groupIndex = groups.length ? parallelIndex % groups.length : 0
+  return Number.isInteger(parsedParallelIndex) && parsedParallelIndex >= 0
+    ? parsedParallelIndex
+    : Number.isInteger(parsedWorkerIndex) && parsedWorkerIndex >= 0
+      ? parsedWorkerIndex
+      : 0
+}
+
+export function matrixE2EAccountPool() {
+  const { completeNumbers, configuredNumbers, duplicateAccountNumbers, groups } =
+    accountPoolStats()
+  const parallelIndex = parallelWorkerIndex()
+  const rawAssignments = value('MATRIX_E2E_POOL_ASSIGNMENTS')
+  const assignedGroupIndex = rawAssignments
+    ? (JSON.parse(rawAssignments) as Record<string, number>)[String(parallelIndex)]
+    : undefined
+  const groupIndex =
+    assignedGroupIndex ?? (groups.length ? parallelIndex % groups.length : 0)
   return {
     configuredAccounts: completeNumbers.length,
     uniqueAccounts: configuredNumbers.length,

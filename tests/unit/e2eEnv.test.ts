@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   liveMatrixConfig,
+  matrixE2EAccountGroups,
   matrixE2EAccountPool,
   recommendedMatrixWorkerCount,
 } from '../../tests/e2e/support/env'
@@ -10,6 +11,7 @@ const keys = [
   'MATRIX_E2E_ALLOW_ROOM_MUTATION',
   'MATRIX_E2E_ALLOW_DEVICE_RESET',
   'MATRIX_E2E_WORKERS',
+  'MATRIX_E2E_POOL_ASSIGNMENTS',
   'TEST_PARALLEL_INDEX',
   'TEST_WORKER_INDEX',
   ...Array.from({ length: 12 }, (_, offset) => offset + 1).flatMap((number) =>
@@ -135,6 +137,43 @@ describe('live Matrix environment safety', () => {
 
     process.env.TEST_PARALLEL_INDEX = '1'
     process.env.TEST_WORKER_INDEX = '42'
+    expect(matrixE2EAccountPool().accountNumbers).toEqual([5, 6, 7, 8])
+  })
+
+  it('exposes every four-account group for the reservation lock, independent of the caller', () => {
+    for (const number of [5, 6, 7, 8]) {
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_HOMESERVER`] = 'https://matrix.org'
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_USER`] = `@foxchat-e2e-${number}:matrix.org`
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_PASSWORD`] = 'test-password'
+    }
+
+    expect(matrixE2EAccountGroups()).toEqual([
+      [1, 2, 3, 4],
+      [5, 6, 7, 8],
+    ])
+  })
+
+  it('honors a reservation-lock group assignment over the default parallel-index modulo', () => {
+    for (const number of [5, 6, 7, 8]) {
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_HOMESERVER`] = 'https://matrix.org'
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_USER`] = `@foxchat-e2e-${number}:matrix.org`
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_PASSWORD`] = 'test-password'
+    }
+    process.env.TEST_PARALLEL_INDEX = '0'
+    process.env.MATRIX_E2E_POOL_ASSIGNMENTS = JSON.stringify({ '0': 1 })
+
+    expect(matrixE2EAccountPool().accountNumbers).toEqual([5, 6, 7, 8])
+  })
+
+  it('falls back to the default group when the reservation lock has no assignment for this worker', () => {
+    for (const number of [5, 6, 7, 8]) {
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_HOMESERVER`] = 'https://matrix.org'
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_USER`] = `@foxchat-e2e-${number}:matrix.org`
+      process.env[`MATRIX_E2E_ACCOUNT_${number}_PASSWORD`] = 'test-password'
+    }
+    process.env.TEST_PARALLEL_INDEX = '1'
+    process.env.MATRIX_E2E_POOL_ASSIGNMENTS = JSON.stringify({ '0': 1 })
+
     expect(matrixE2EAccountPool().accountNumbers).toEqual([5, 6, 7, 8])
   })
 

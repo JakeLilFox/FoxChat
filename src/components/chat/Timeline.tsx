@@ -377,6 +377,9 @@ function TimelineView({
     )
   }, [])
   const initializedRoom = useRef<string | undefined>(undefined)
+
+  const initializedPhysicalRoom = useRef<string | undefined>(undefined)
+  const skipInitialMarkRead = useRef(false)
   const lastEventId = useRef<string | undefined>(undefined)
   const lastVisibleEventCount = useRef(0)
   const atBottom = useRef(false)
@@ -386,11 +389,6 @@ function TimelineView({
   )
   const receiptTimer = useRef<number | undefined>(undefined)
   useEffect(() => {
-    // A pending debounced markVisibleRead was scheduled against whichever account was visible
-    // at the time (it reads visibleAccountIdRef.current fresh when it fires, not when it was
-    // scheduled). If the sending-as account changes before that timer fires, it would mark the
-    // newly-selected account read using stale scroll state from the previous account's view -
-    // cancel it so switching accounts can't silently erase the new account's real unread state.
     window.clearTimeout(receiptTimer.current)
   }, [visibleAccountId])
   const loadingRef = useRef(false)
@@ -1186,6 +1184,8 @@ function TimelineView({
   )
   useLayoutEffect(() => {
     const activeRoom = roomRef.current
+    skipInitialMarkRead.current = initializedPhysicalRoom.current === activeRoom?.roomId
+    initializedPhysicalRoom.current = activeRoom?.roomId
     historyPagingReady.current = false
     historyPagingRoom.current = undefined
     timelineUserInteracted.current = false
@@ -1224,8 +1224,6 @@ function TimelineView({
     positioningStartedAt.current = Date.now()
     setPositioningTimeline(!wasCached)
     void matrixService.retryRoomDecryption(activeRoom).then(() => render((x) => x + 1))
-    // The preferred readable room copy can change as combined-account events decrypt. Keep the
-    // same positioning lifecycle unless the logical room or selected sending account changes.
   }, [roomIdentity])
   useEffect(() => {
     if (!room || !positioningTimeline) return
@@ -1260,8 +1258,6 @@ function TimelineView({
     }
     const newestChanged = !!newestId && newestId !== lastEventId.current
     const addedEvents = addedVisibleEventCount(lastVisibleEventCount.current, allEvents.length)
-    // Encrypted events can decrypt out of order. Older messages may become visible after the
-    // newest message without changing newestId, so visible growth must also update the anchor.
     if (shouldHandleTimelineGrowth(newestChanged, addedEvents, loadingRef.current)) {
       positionStabilizerCleanup.current()
       mountPositionRetryCleanup.current()
@@ -1310,6 +1306,7 @@ function TimelineView({
   ])
   useLayoutEffect(() => {
     if (!room || positioningTimeline || initializedRoom.current !== roomIdentity) return
+    const skipMarkRead = skipInitialMarkRead.current
     const position = () => stabilizeTimelinePosition(unreadStart)
     const enableHistoryPaging = () => {
       if (initializedRoom.current !== roomIdentity) return
@@ -1321,14 +1318,14 @@ function TimelineView({
       requestAnimationFrame(() => {
         position()
         requestAnimationFrame(() => {
-          markVisibleRead()
+          if (!skipMarkRead) markVisibleRead()
           requestAnimationFrame(enableHistoryPaging)
         })
       }),
     )
     const retryPositionAndRead = () => {
       position()
-      requestAnimationFrame(markVisibleRead)
+      if (!skipMarkRead) requestAnimationFrame(markVisibleRead)
     }
     const firstRetry = window.setTimeout(retryPositionAndRead, 350)
     const secondRetry = window.setTimeout(retryPositionAndRead, 1_200)

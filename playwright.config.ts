@@ -28,11 +28,14 @@ if (process.env.MATRIX_E2E_ENABLED?.toLowerCase() === 'true') {
       `[matrix-e2e] Ignoring duplicate account slot(s): ${matrixPool.duplicateAccountNumbers.join(', ')}`,
     )
   }
+
+  process.env.MATRIX_E2E_RESERVED_WORKERS = String(matrixWorkers)
 }
 
 export default defineConfig({
   testDir: './tests/e2e',
   outputDir: 'test-results',
+  globalSetup: './tests/e2e/globalSetup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
