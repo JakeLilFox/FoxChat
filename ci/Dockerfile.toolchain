@@ -133,6 +133,7 @@ RUN rustup target add \
     && pip3 install --break-system-packages --user --quiet fdroidserver \
     && fdroid --version
 
+USER root
 WORKDIR /home/ubuntu1/build
 
 RUN test ! -e node_modules \
