@@ -837,20 +837,6 @@
           },
           {
             "type": "cmd",
-            "id": "fce18de5-979b-4b17-871a-ec63e4f53c51",
-            "cmd": [
-              "screen -dmS docker sudo dockerd --storage-driver=vfs"
-            ]
-          },
-          {
-            "type": "cmd",
-            "id": "31c3a219-a7bd-4a5d-8c2c-60165eab0cbb",
-            "cmd": [
-              "sleep 5"
-            ]
-          },
-          {
-            "type": "cmd",
             "id": "22686321-981e-414f-95bc-95aca834b051",
             "cmd": [
               "sudo docker build -t ${docker_container_name} ."
