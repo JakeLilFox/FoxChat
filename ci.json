@@ -394,6 +394,14 @@
         ]
       },
       {
+        "type": "asset",
+        "id": "8c3d4e5f-6071-4293-ac1d-2e3f4a5b6c7d",
+        "files": [
+          "test-results/"
+        ],
+        "prefix": ""
+      },
+      {
         "type": "cmd",
         "id": "70a06e06-29ef-49ed-9164-f89df8048aa2",
         "cmd": [
