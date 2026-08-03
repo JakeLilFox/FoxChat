@@ -197,12 +197,6 @@ const IMAGE_PACK_ORDER_EVENT = 'chat.foxchat.image_pack_order'
 export const IMAGE_PACK_LIST_TTL_MS = 60 * 60 * 1000
 const REACTION_PARENT_CACHE_LIMIT = 2_000
 const PRESENCE_IDLE_MS = 5 * 60 * 1000
-// TEMP DEBUG (remove once the read-positioning/notifications debug logging is removed):
-// account IDs are long `homeserver|userId|deviceId` strings - Chrome DevTools' console-message
-// object preview silently drops trailing object keys once the total preview size is exceeded,
-// so debug logs built from full account IDs (especially arrays of them) can lose fields without
-// any visible truncation marker. Log just the trailing device-id segment instead.
-const shortAccountId = (id?: string) => id?.split('|').at(-1) ?? id
 const normalizedPowerLevel = (value: unknown) =>
   value === null
     ? Number.MAX_SAFE_INTEGER
@@ -291,9 +285,6 @@ export class MatrixClientService {
   >()
   private replyEventCache = new Map<string, Promise<MatrixEvent | undefined>>()
   private reactionLoads = new Map<string, Promise<void>>()
-  // TEMP DEBUG (remove once live-matrix-notifications.spec.ts "bug 2" is root-caused):
-  // dedupes effectiveUnreadCount logging so it only fires when the value actually changes.
-  private lastLoggedUnread = new Map<string, number>()
   private sendQueues = new Map<string, Promise<void>>()
   private encryptionMembersPrepared = new WeakMap<MatrixClient, Set<string>>()
   private secondaryClients = new Map<string, MatrixClientService>()
@@ -1545,12 +1536,6 @@ export class MatrixClientService {
     )
     this.backupAccounts()
     const room = this.room(roomId)
-    // TEMP DEBUG (remove once live-matrix-notifications.spec.ts "bug 2" is root-caused):
-    console.debug('[DEBUG unread] selectRoomAccount', {
-      roomId,
-      accountId: shortAccountId(accountId),
-      effectiveUnreadCountAfter: this.effectiveUnreadCount(roomId),
-    })
     if (room) this.observers.forEach((observer) => observer.onRoom?.(room))
   }
 
@@ -3617,15 +3602,6 @@ export class MatrixClientService {
       ? joinedAccounts
       : joinedAccounts.filter((account) => account.id === selectedAccountId)
     const targets = accounts.length > 0 ? accounts : autoReadAll ? joinedAccounts.slice(0, 1) : []
-    console.debug('[DEBUG unread] markRead', {
-      roomId,
-      eventId: eventId.slice(-12),
-      visibleAccountId: shortAccountId(visibleAccountId),
-      selectedAccountId: shortAccountId(selectedAccountId),
-      autoReadAll,
-      joinedAccountIds: joinedAccounts.map((account) => shortAccountId(account.id)),
-      targetIds: targets.map((account) => shortAccountId(account.id)),
-    })
     const results = await Promise.allSettled(
       targets.map(async ({ client }) => {
         const accountRoom = client.getRoom(roomId)
@@ -3914,19 +3890,7 @@ export class MatrixClientService {
       return room ? this.filteredUnreadEventCount(room, client, ownUserIds) : 0
     }
     const selected = accounts.find((account) => account.id === this.selectedRoomAccountId(roomId))
-    const result = countFor(selected ?? accounts[0])
-    // TEMP DEBUG (remove once live-matrix-notifications.spec.ts "bug 2" is root-caused):
-    // only logs when the count actually changes, since this is called on every room-list render.
-    if (this.lastLoggedUnread.get(roomId) !== result) {
-      this.lastLoggedUnread.set(roomId, result)
-      console.debug('[DEBUG unread] effectiveUnreadCount', {
-        roomId,
-        selectedAccountId: shortAccountId((selected ?? accounts[0])?.id),
-        accountIds: accounts.map((account) => shortAccountId(account.id)),
-        result,
-      })
-    }
-    return result
+    return countFor(selected ?? accounts[0])
   }
 
   async loadOlderMessages(room: Room, limit = 30) {

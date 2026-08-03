@@ -2,7 +2,6 @@ import { expect, test, type Page } from '@playwright/test'
 import { liveMatrixConfig } from './support/env'
 import {
   cleanTestRoom,
-  debugRoomReceipts,
   inviteToRoom,
   joinRoomAs,
   rawLogin,
@@ -388,9 +387,6 @@ test.describe('live combined-account read-state positioning journey', () => {
         await expect
           .poll(() => scrollBottomDistance(page!), { timeout: 15_000 })
           .toBeGreaterThan(AWAY_FROM_BOTTOM)
-        // TEMP DEBUG (remove once the refresh step below is root-caused):
-        await debugRoomReceipts(account1Session!, roomId!, 'baseline after account2 selected')
-        await debugRoomReceipts(account2Session!, roomId!, 'baseline after account2 selected')
       })
 
       await test.step("switching sending-as back to the fully-read account 1 lands at the bottom, unaffected by account 2's encrypted backlog", async () => {
@@ -407,25 +403,14 @@ test.describe('live combined-account read-state positioning journey', () => {
           page!.locator('[data-event-id^="$"]').filter({ hasText: preservedUnreadLabel }).last(),
         ).toBeVisible({ timeout: 60_000 })
         await sendReadReceipt(account1Session!, roomId!, preservedUnreadEventId)
-        // TEMP DEBUG (remove once the refresh step below is root-caused):
-        await debugRoomReceipts(account1Session!, roomId!, 'after switch back to account1 + receipt')
-        await debugRoomReceipts(account2Session!, roomId!, 'after switch back to account1 + receipt')
       })
 
       await test.step('refresh keeps the encrypted room read for account 1 without erasing account 2 backlog', async () => {
-        // TEMP DEBUG (remove once root-caused): immediately before reload.
-        await debugRoomReceipts(account2Session!, roomId!, 'immediately before reload')
         await page!.waitForTimeout(1_000)
         await page!.reload()
         await expect(roomRow(page!, roomName)).toBeVisible({ timeout: 60_000 })
-        // TEMP DEBUG (remove once root-caused): right after reload, before re-selecting account1.
-        await debugRoomReceipts(account2Session!, roomId!, 'right after reload, room row visible')
         await openRoom(page!, roomName)
-        // TEMP DEBUG (remove once root-caused): room opened, before re-selecting sending-as.
-        await debugRoomReceipts(account2Session!, roomId!, 'room opened after reload')
         await selectSendingAs(page!, account1Id!)
-        // TEMP DEBUG (remove once root-caused): right after re-selecting account1 as sending-as.
-        await debugRoomReceipts(account2Session!, roomId!, 'account1 re-selected as sending-as')
         await expect(roomRow(page!, roomName).getByTestId('unread-badge')).toHaveCount(0, {
           timeout: 30_000,
         })
@@ -433,9 +418,6 @@ test.describe('live combined-account read-state positioning journey', () => {
         await expect
           .poll(() => scrollBottomDistance(page!), { timeout: 30_000 })
           .toBeLessThanOrEqual(NEAR_BOTTOM)
-        // TEMP DEBUG (remove once root-caused): right before the failing poll.
-        await debugRoomReceipts(account1Session!, roomId!, 'right before failing poll')
-        await debugRoomReceipts(account2Session!, roomId!, 'right before failing poll')
 
         await expect
           .poll(() => roomUnreadCount(account2Session!, roomId!), { timeout: 45_000 })
