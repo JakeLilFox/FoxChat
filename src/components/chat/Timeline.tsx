@@ -394,6 +394,8 @@ function TimelineView({
   const positioningStartedAt = useRef(0)
   const historyPagingReady = useRef(false)
   const historyPagingRoom = useRef<string | undefined>(undefined)
+  // TEMP DEBUG (remove once live-matrix-history-pagination.spec.ts is root-caused):
+  const historyFullyLoadedDebugKeyRef = useRef<string | undefined>(undefined)
   const timelineUserInteracted = useRef(false)
   const userScrollIntentUntil = useRef(0)
   const pendingJumpRef = useRef<{ eventId: string; attempts: number } | undefined>(undefined)
@@ -515,6 +517,23 @@ function TimelineView({
   // ever moving.
   const historyFullyLoaded =
     windowStart === 0 && !!room && !!timeline && !timeline.getPaginationToken(Direction.Backward)
+  // TEMP DEBUG (remove once live-matrix-history-pagination.spec.ts is root-caused):
+  // logs once per room+value change what's actually driving historyFullyLoaded, since the
+  // scroll-decision log alone can't tell whether it's the window or the SDK's own pagination
+  // token that's already exhausted.
+  const historyFullyLoadedDebugKey = `${roomIdentity}:${historyFullyLoaded}`
+  if (historyFullyLoadedDebugKeyRef.current !== historyFullyLoadedDebugKey) {
+    historyFullyLoadedDebugKeyRef.current = historyFullyLoadedDebugKey
+    console.debug('[DEBUG history] historyFullyLoaded changed', {
+      roomId: room?.roomId,
+      historyFullyLoaded,
+      windowStart,
+      windowEnd,
+      allEventsLength: allEvents.length,
+      rawTimelineEventCount: timeline?.getEvents().length,
+      hasBackwardPaginationToken: !!timeline?.getPaginationToken(Direction.Backward),
+    })
+  }
   const preJoinHistoryBoundaryReached = useMemo(() => {
     // Only the raw events older than what's currently windowed into view can tell us we've
     // truly hit the join wall. A pagination call can fetch a batch that straddles the join
@@ -864,8 +883,8 @@ function TimelineView({
     // TEMP DEBUG (remove once live-matrix-notifications.spec.ts "bug 2" is root-caused):
     console.debug('[DEBUG unread] markVisibleRead', {
       roomId: room.roomId,
-      visibleAccountId: visibleAccountIdRef.current,
-      eventId: event?.getId(),
+      visibleAccountId: visibleAccountIdRef.current?.split('|').at(-1),
+      eventId: event?.getId()?.slice(-12),
       atLiveEdge,
     })
     if (event) void matrixService.markRead(event, visibleAccountIdRef.current)
@@ -1709,8 +1728,6 @@ function TimelineView({
       roomId: room?.roomId,
       scrollTop: box.scrollTop,
       historyPagingReady: historyPagingReady.current,
-      historyPagingRoom: historyPagingRoom.current,
-      roomIdentity,
       roomMatch: historyPagingRoom.current === roomIdentity,
       timelineUserInteracted: timelineUserInteracted.current,
     })

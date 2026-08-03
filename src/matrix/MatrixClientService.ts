@@ -197,6 +197,12 @@ const IMAGE_PACK_ORDER_EVENT = 'chat.foxchat.image_pack_order'
 export const IMAGE_PACK_LIST_TTL_MS = 60 * 60 * 1000
 const REACTION_PARENT_CACHE_LIMIT = 2_000
 const PRESENCE_IDLE_MS = 5 * 60 * 1000
+// TEMP DEBUG (remove once the read-positioning/notifications debug logging is removed):
+// account IDs are long `homeserver|userId|deviceId` strings - Chrome DevTools' console-message
+// object preview silently drops trailing object keys once the total preview size is exceeded,
+// so debug logs built from full account IDs (especially arrays of them) can lose fields without
+// any visible truncation marker. Log just the trailing device-id segment instead.
+const shortAccountId = (id?: string) => id?.split('|').at(-1) ?? id
 const normalizedPowerLevel = (value: unknown) =>
   value === null
     ? Number.MAX_SAFE_INTEGER
@@ -1542,7 +1548,7 @@ export class MatrixClientService {
     // TEMP DEBUG (remove once live-matrix-notifications.spec.ts "bug 2" is root-caused):
     console.debug('[DEBUG unread] selectRoomAccount', {
       roomId,
-      accountId,
+      accountId: shortAccountId(accountId),
       effectiveUnreadCountAfter: this.effectiveUnreadCount(roomId),
     })
     if (room) this.observers.forEach((observer) => observer.onRoom?.(room))
@@ -3613,12 +3619,12 @@ export class MatrixClientService {
     const targets = accounts.length > 0 ? accounts : autoReadAll ? joinedAccounts.slice(0, 1) : []
     console.debug('[DEBUG unread] markRead', {
       roomId,
-      eventId,
-      visibleAccountId,
-      selectedAccountId,
+      eventId: eventId.slice(-12),
+      visibleAccountId: shortAccountId(visibleAccountId),
+      selectedAccountId: shortAccountId(selectedAccountId),
       autoReadAll,
-      joinedAccountIds: joinedAccounts.map((account) => account.id),
-      targetIds: targets.map((account) => account.id),
+      joinedAccountIds: joinedAccounts.map((account) => shortAccountId(account.id)),
+      targetIds: targets.map((account) => shortAccountId(account.id)),
     })
     const results = await Promise.allSettled(
       targets.map(async ({ client }) => {
@@ -3915,8 +3921,8 @@ export class MatrixClientService {
       this.lastLoggedUnread.set(roomId, result)
       console.debug('[DEBUG unread] effectiveUnreadCount', {
         roomId,
-        selectedAccountId: (selected ?? accounts[0])?.id,
-        accountIds: accounts.map((account) => account.id),
+        selectedAccountId: shortAccountId((selected ?? accounts[0])?.id),
+        accountIds: accounts.map((account) => shortAccountId(account.id)),
         result,
       })
     }

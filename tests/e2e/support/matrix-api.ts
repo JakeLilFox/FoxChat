@@ -555,6 +555,55 @@ export async function roomUnreadCount(session: StoredSession, roomId: string): P
   return sync.rooms?.join?.[roomId]?.unread_notifications?.notification_count ?? 0
 }
 
+// TEMP DEBUG (remove once live-matrix-combined-read-positioning.spec.ts's refresh step is
+// root-caused): logs a session's actual server-side receipt position and notification count
+// for a room via Node's console (not the page's), so CDP's object-preview truncation for long
+// Matrix account/device IDs can't drop fields the way it does for in-page console.debug calls.
+export async function debugRoomReceipts(session: StoredSession, roomId: string, label: string) {
+  const filter = JSON.stringify({
+    room: {
+      rooms: [roomId],
+      timeline: { limit: 1 },
+      state: { types: [] },
+      ephemeral: { types: ['m.receipt'] },
+      account_data: { types: [] },
+    },
+  })
+  const response = await fetch(
+    `${session.baseUrl}/_matrix/client/v3/sync?timeout=0&filter=${encodeURIComponent(filter)}`,
+    { headers: { Authorization: `Bearer ${session.accessToken}` } },
+  )
+  if (!response.ok) {
+    console.log('[DEBUG receipt]', label, 'sync failed', response.status, await response.text())
+    return
+  }
+  const sync = (await response.json()) as {
+    rooms?: {
+      join?: Record<
+        string,
+        {
+          unread_notifications?: { notification_count?: number }
+          ephemeral?: { events?: { type: string; content: Record<string, unknown> }[] }
+        }
+      >
+    }
+  }
+  const room = sync.rooms?.join?.[roomId]
+  const receiptEvent = room?.ephemeral?.events?.find((event) => event.type === 'm.receipt')
+  const receipts: Record<string, unknown> = {}
+  if (receiptEvent)
+    for (const [eventId, byType] of Object.entries(receiptEvent.content))
+      for (const [receiptType, byUser] of Object.entries(byType as Record<string, unknown>))
+        for (const userId of Object.keys(byUser as Record<string, unknown>))
+          receipts[`${userId} ${receiptType}`] = eventId
+  console.log('[DEBUG receipt]', label, {
+    userId: session.userId,
+    roomId,
+    notificationCount: room?.unread_notifications?.notification_count,
+    receipts,
+  })
+}
+
 export async function sendFillerMessages(
   session: StoredSession,
   roomId: string,
