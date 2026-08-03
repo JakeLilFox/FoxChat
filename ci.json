@@ -77,7 +77,6 @@
               "ci/import-internal-runner.sh",
               "package.json",
               "package-lock.json",
-              "playwright.config.ts",
               "foxchathomepage/package.json",
               "foxchathomepage/package-lock.json",
               "scripts/setup-android-ci.sh",

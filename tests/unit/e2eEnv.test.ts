@@ -9,6 +9,7 @@ const keys = [
   'MATRIX_E2E_ENABLED',
   'MATRIX_E2E_ALLOW_ROOM_MUTATION',
   'MATRIX_E2E_ALLOW_DEVICE_RESET',
+  'MATRIX_E2E_WORKERS',
   'TEST_PARALLEL_INDEX',
   'TEST_WORKER_INDEX',
   ...Array.from({ length: 12 }, (_, offset) => offset + 1).flatMap((number) =>
@@ -137,10 +138,11 @@ describe('live Matrix environment safety', () => {
     expect(matrixE2EAccountPool().accountNumbers).toEqual([5, 6, 7, 8])
   })
 
-  it('caps live Matrix concurrency by account and CPU budgets', () => {
-    expect(recommendedMatrixWorkerCount(31, 32)).toBe(4)
-    expect(recommendedMatrixWorkerCount(31, 4)).toBe(2)
-    expect(recommendedMatrixWorkerCount(2, 32)).toBe(2)
-    expect(recommendedMatrixWorkerCount(31, 1)).toBe(1)
+  it('defaults live Matrix concurrency to one and caps explicit opt-in by account and CPU budgets', () => {
+    expect(recommendedMatrixWorkerCount(31, 32)).toBe(1)
+    expect(recommendedMatrixWorkerCount(31, 32, 4)).toBe(4)
+    expect(recommendedMatrixWorkerCount(31, 4, 4)).toBe(2)
+    expect(recommendedMatrixWorkerCount(2, 32, 4)).toBe(2)
+    expect(recommendedMatrixWorkerCount(31, 1, 4)).toBe(1)
   })
 })

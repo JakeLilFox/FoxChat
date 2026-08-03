@@ -142,8 +142,13 @@ test.describe('live profile picture history regression', () => {
         roomId = new URL(page!.url()).searchParams.get('room') ?? undefined
         expect(roomId).toMatch(/^!/)
 
-        for (let index = 1; index <= MESSAGE_COUNT; index++)
-          await sendSyncedMessage(page!, `${messageLabel} ${index}`)
+        for (let index = 1; index <= MESSAGE_COUNT; index++) {
+          const body = `${messageLabel} ${index}`
+          await sendSyncedMessage(page!, body)
+          await expect(page!.getByTestId('timeline').getByText(body, { exact: true })).toBeVisible({
+            timeout: 60_000,
+          })
+        }
         await expect(historyEvents()).toHaveCount(MESSAGE_COUNT, { timeout: 60_000 })
       })
 

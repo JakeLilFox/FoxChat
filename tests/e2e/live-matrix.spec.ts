@@ -185,13 +185,8 @@ test.describe('live three-account Matrix journey', () => {
         })
         await expect(invitation).toBeVisible({ timeout: 60_000 })
 
-        const anotherRoom = page!
-          .locator('[data-testid="room-row"][data-room-type="room"]')
-          .filter({ hasNotText: roomName })
-          .first()
-        await expect(anotherRoom).toBeVisible()
-        await anotherRoom.click()
-        await expect(page!.getByTestId('room-header').getByRole('heading')).not.toHaveText(roomName)
+        await page!.keyboard.press('Escape')
+        await expect(page!.getByRole('heading', { name: 'Select a room' })).toBeVisible()
         await invitation.getByRole('button', { name: 'Accept' }).click()
         await expect(
           page!.getByTestId('room-header').getByRole('heading', {

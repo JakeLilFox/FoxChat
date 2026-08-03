@@ -88,12 +88,12 @@ export function matrixE2EAccountPool() {
 export function recommendedMatrixWorkerCount(
   accountWorkerCapacity: number,
   cpuParallelism: number,
+  requestedWorkers = 1,
 ) {
   const accountBudget = Math.max(1, Math.trunc(accountWorkerCapacity))
-  // One live test commonly owns multiple browser contexts, crypto workers, and sync loops.
-  // Reserving two CPU slots per Playwright worker avoids starving login and initial sync.
+  const requestedBudget = Math.max(1, Math.trunc(requestedWorkers))
   const cpuBudget = Math.max(1, Math.floor(cpuParallelism / 2))
-  return Math.min(accountBudget, cpuBudget, 4)
+  return Math.min(accountBudget, cpuBudget, requestedBudget, 4)
 }
 
 export function liveMatrixConfig(): LiveMatrixConfig {

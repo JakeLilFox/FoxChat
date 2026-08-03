@@ -277,7 +277,7 @@ test.describe('live space settings and permissions journey', () => {
         await roleItem.waitFor({ state: 'visible', timeout: 10_000 })
         await roleItem.dispatchEvent('click')
         await expect(page!.getByText(/Role assigned across \d+ rooms/)).toBeVisible({
-          timeout: 15_000,
+          timeout: 60_000,
         })
 
         await openChannelInSpace(page!, spaceName, channel2Name)

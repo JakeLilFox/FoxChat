@@ -198,6 +198,8 @@ Optional controls:
 - `E2E_SKIP_WEBSERVER=true` uses an already deployed test instance.
 - `E2E_ROOM_PREFIX` defaults to `FoxChat E2E`.
 - `E2E_TIMEOUT_MS` controls normal Playwright timeouts.
+- `MATRIX_E2E_WORKERS` opts into parallel live-Matrix execution (maximum 4). It defaults to 1
+  because homeserver and network capacity cannot be inferred from the runner's CPU count.
 - `E2E_HEADLESS` defaults to `true` and controls the audio-only browsers in
   `live-matrix-voice.spec.ts`; the screenshare test always launches headed
   regardless of this setting (see below).

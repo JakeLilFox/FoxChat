@@ -13,7 +13,12 @@ const devServerPort = new URL(baseURL).port || '4173'
 const timeout = Number(process.env.E2E_TIMEOUT_MS) || 90_000
 const matrixPool = matrixE2EAccountPool()
 const cpuParallelism = availableParallelism()
-const matrixWorkers = recommendedMatrixWorkerCount(matrixPool.workerCapacity, cpuParallelism)
+const requestedMatrixWorkers = Number(process.env.MATRIX_E2E_WORKERS) || 1
+const matrixWorkers = recommendedMatrixWorkerCount(
+  matrixPool.workerCapacity,
+  cpuParallelism,
+  requestedMatrixWorkers,
+)
 if (process.env.MATRIX_E2E_ENABLED?.toLowerCase() === 'true') {
   console.log(
     `[matrix-e2e] Detected ${matrixPool.uniqueAccounts}/${matrixPool.configuredAccounts} distinct complete accounts (${matrixPool.workerCapacity} four-account groups); using ${matrixWorkers} worker(s) for ${cpuParallelism} available CPU(s).`,

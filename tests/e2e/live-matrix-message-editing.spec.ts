@@ -11,7 +11,13 @@ import { openRoomActions, openRoomRow, sendMessage, signIn } from './support/ui'
 
 const live = liveMatrixConfig()
 
-const editMessage = async (page: Page, eventId: string, currentBody: string, nextBody: string) => {
+const editMessage = async (
+  page: Page,
+  roomName: string,
+  eventId: string,
+  currentBody: string,
+  nextBody: string,
+) => {
   const event = page.locator(`[data-event-id="${eventId}"]`)
   await expect(event).toContainText(currentBody, { timeout: 30_000 })
   await event.click({ button: 'right' })
@@ -21,11 +27,24 @@ const editMessage = async (page: Page, eventId: string, currentBody: string, nex
   await expect(composer).toHaveText(currentBody)
   await expect(page.getByText('Editing message', { exact: true })).toBeVisible()
   await composer.fill(nextBody)
+  const syncEcho = page.waitForResponse(
+    async (response) => {
+      if (!response.ok() || !new URL(response.url()).pathname.endsWith('/sync')) return false
+      return (await response.text()).includes(nextBody)
+    },
+    { timeout: 90_000 },
+  )
   await sendMessage(page, nextBody)
+  await syncEcho
 
   await expect(event).toContainText(nextBody, { timeout: 30_000 })
   await expect(event).not.toContainText(currentBody)
   await expect(event.getByText('(edited)', { exact: true })).toBeVisible()
+
+  await page.reload()
+  await expect(page.getByTestId('room-sidebar').first()).toBeVisible({ timeout: 90_000 })
+  await openRoomRow(page, roomName)
+  await expect(event).toContainText(nextBody, { timeout: 60_000 })
 }
 
 test.describe('live repeated-message-editing journey', () => {
@@ -87,7 +106,7 @@ test.describe('live repeated-message-editing journey', () => {
 
       await test.step('edit the original event three consecutive times', async () => {
         for (let index = 1; index < bodies.length; index++)
-          await editMessage(page!, eventId, bodies[index - 1], bodies[index])
+          await editMessage(page!, roomName, eventId, bodies[index - 1], bodies[index])
       })
 
       await test.step('reload and retain only the final non-empty message body', async () => {
