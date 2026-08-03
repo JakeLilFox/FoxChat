@@ -285,6 +285,9 @@ export class MatrixClientService {
   >()
   private replyEventCache = new Map<string, Promise<MatrixEvent | undefined>>()
   private reactionLoads = new Map<string, Promise<void>>()
+  // TEMP DEBUG (remove once live-matrix-notifications.spec.ts "bug 2" is root-caused):
+  // dedupes effectiveUnreadCount logging so it only fires when the value actually changes.
+  private lastLoggedUnread = new Map<string, number>()
   private sendQueues = new Map<string, Promise<void>>()
   private encryptionMembersPrepared = new WeakMap<MatrixClient, Set<string>>()
   private secondaryClients = new Map<string, MatrixClientService>()
@@ -1536,6 +1539,12 @@ export class MatrixClientService {
     )
     this.backupAccounts()
     const room = this.room(roomId)
+    // TEMP DEBUG (remove once live-matrix-notifications.spec.ts "bug 2" is root-caused):
+    console.debug('[DEBUG unread] selectRoomAccount', {
+      roomId,
+      accountId,
+      effectiveUnreadCountAfter: this.effectiveUnreadCount(roomId),
+    })
     if (room) this.observers.forEach((observer) => observer.onRoom?.(room))
   }
 
@@ -3602,6 +3611,15 @@ export class MatrixClientService {
       ? joinedAccounts
       : joinedAccounts.filter((account) => account.id === selectedAccountId)
     const targets = accounts.length > 0 ? accounts : autoReadAll ? joinedAccounts.slice(0, 1) : []
+    console.debug('[DEBUG unread] markRead', {
+      roomId,
+      eventId,
+      visibleAccountId,
+      selectedAccountId,
+      autoReadAll,
+      joinedAccountIds: joinedAccounts.map((account) => account.id),
+      targetIds: targets.map((account) => account.id),
+    })
     const results = await Promise.allSettled(
       targets.map(async ({ client }) => {
         const accountRoom = client.getRoom(roomId)
@@ -3890,7 +3908,19 @@ export class MatrixClientService {
       return room ? this.filteredUnreadEventCount(room, client, ownUserIds) : 0
     }
     const selected = accounts.find((account) => account.id === this.selectedRoomAccountId(roomId))
-    return countFor(selected ?? accounts[0])
+    const result = countFor(selected ?? accounts[0])
+    // TEMP DEBUG (remove once live-matrix-notifications.spec.ts "bug 2" is root-caused):
+    // only logs when the count actually changes, since this is called on every room-list render.
+    if (this.lastLoggedUnread.get(roomId) !== result) {
+      this.lastLoggedUnread.set(roomId, result)
+      console.debug('[DEBUG unread] effectiveUnreadCount', {
+        roomId,
+        selectedAccountId: (selected ?? accounts[0])?.id,
+        accountIds: accounts.map((account) => account.id),
+        result,
+      })
+    }
+    return result
   }
 
   async loadOlderMessages(room: Room, limit = 30) {

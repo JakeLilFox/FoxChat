@@ -74,6 +74,10 @@ test.describe('live timeline history-pagination journey', () => {
       remoteContext = await browser.newContext({ baseURL })
       page = await context.newPage()
       remotePage = await remoteContext.newPage()
+      // TEMP DEBUG (remove once this spec's flaky anchor-preservation step is root-caused):
+      remotePage.on('console', (m) => {
+        if (m.text().includes('[DEBUG')) console.log(m.text())
+      })
 
       await test.step("sign in account 1; get account 2 a session via the raw API only, so its tab isn't syncing yet", async () => {
         await signIn(page!, account1)

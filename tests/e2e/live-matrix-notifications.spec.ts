@@ -115,6 +115,10 @@ test.describe('live multi-account notification journey', () => {
       })
       page = await context.newPage()
       remotePage = await remoteContext.newPage()
+      // TEMP DEBUG (remove once "bug 2" sending-as/read-state failure is root-caused):
+      page.on('console', (m) => {
+        if (m.text().includes('[DEBUG')) console.log(m.text())
+      })
 
       await test.step('sign in two combined accounts and one independent (room admin) account', async () => {
         await signIn(page!, account1)

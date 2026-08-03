@@ -861,6 +861,13 @@ function TimelineView({
     const atLiveEdge =
       box.scrollHeight - box.scrollTop - box.clientHeight <= FOLLOW_LATEST_THRESHOLD
     const event = visibleReadBoundary(timelineEventsRef.current, id, atLiveEdge)
+    // TEMP DEBUG (remove once live-matrix-notifications.spec.ts "bug 2" is root-caused):
+    console.debug('[DEBUG unread] markVisibleRead', {
+      roomId: room.roomId,
+      visibleAccountId: visibleAccountIdRef.current,
+      eventId: event?.getId(),
+      atLiveEdge,
+    })
     if (event) void matrixService.markRead(event, visibleAccountIdRef.current)
   }, [room])
   useEffect(() => {
@@ -937,6 +944,17 @@ function TimelineView({
   )
   useEffect(() => () => positionStabilizerCleanup.current(), [roomIdentity])
   const loadOlder = useCallback(async () => {
+    // TEMP DEBUG (remove once live-matrix-history-pagination.spec.ts is root-caused):
+    console.debug('[DEBUG history] loadOlder:enter', {
+      roomId: room?.roomId,
+      hasTimeline: !!timeline,
+      preJoinHistoryBoundaryReached,
+      historyFullyLoaded,
+      loading: loadingRef.current,
+      historyPagingReady: historyPagingReady.current,
+      roomMatch: historyPagingRoom.current === roomIdentity,
+      windowStart,
+    })
     if (
       !room ||
       !timeline ||
@@ -955,6 +973,10 @@ function TimelineView({
     const captured = captureScrollAnchor()
     try {
       let availableBefore = windowStart
+      console.debug('[DEBUG history] loadOlder:branch', {
+        availableBefore,
+        willFetch: !availableBefore,
+      })
       if (!availableBefore) {
         const before = timeline
           .getEvents()
@@ -1682,6 +1704,16 @@ function TimelineView({
     const box = messagesRef.current
     if (!box) return
     updateTimelineDateHint()
+    // TEMP DEBUG (remove once live-matrix-history-pagination.spec.ts is root-caused):
+    console.debug('[DEBUG history] onScroll:enter', {
+      roomId: room?.roomId,
+      scrollTop: box.scrollTop,
+      historyPagingReady: historyPagingReady.current,
+      historyPagingRoom: historyPagingRoom.current,
+      roomIdentity,
+      roomMatch: historyPagingRoom.current === roomIdentity,
+      timelineUserInteracted: timelineUserInteracted.current,
+    })
     if (!historyPagingReady.current || historyPagingRoom.current !== roomIdentity) return
     const bottomDistance = box.scrollHeight - box.scrollTop - box.clientHeight
     atBottom.current = windowEndOffset === 0 && bottomDistance <= FOLLOW_LATEST_THRESHOLD
@@ -1696,6 +1728,20 @@ function TimelineView({
     }
     setShowJumpToLatest(!atBottom.current && !followLatest.current)
     const userMovedTimeline = timelineUserInteracted.current
+    // TEMP DEBUG (remove once live-matrix-history-pagination.spec.ts is root-caused):
+    console.debug('[DEBUG history] onScroll:decision', {
+      userMovedTimeline,
+      scrollTop: box.scrollTop,
+      preJoinHistoryBoundaryReached,
+      historyFullyLoaded,
+      windowStart,
+      windowEndOffset,
+      willLoadOlder:
+        userMovedTimeline &&
+        box.scrollTop < 80 &&
+        !preJoinHistoryBoundaryReached &&
+        !historyFullyLoaded,
+    })
     if (
       userMovedTimeline &&
       box.scrollTop < 80 &&
