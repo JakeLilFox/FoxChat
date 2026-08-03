@@ -3597,10 +3597,11 @@ export class MatrixClientService {
     if (!roomId || !isServerEventId(eventId)) return
     const joinedAccounts = this.roomAccounts(roomId)
     const selectedAccountId = visibleAccountId ?? this.selectedRoomAccountId(roomId)
-    const accounts = this.autoReadAllAccountsEnabled()
+    const autoReadAll = this.autoReadAllAccountsEnabled()
+    const accounts = autoReadAll
       ? joinedAccounts
       : joinedAccounts.filter((account) => account.id === selectedAccountId)
-    const targets = accounts.length > 0 ? accounts : joinedAccounts.slice(0, 1)
+    const targets = accounts.length > 0 ? accounts : autoReadAll ? joinedAccounts.slice(0, 1) : []
     const results = await Promise.allSettled(
       targets.map(async ({ client }) => {
         const accountRoom = client.getRoom(roomId)

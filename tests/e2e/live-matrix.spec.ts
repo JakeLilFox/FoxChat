@@ -455,13 +455,9 @@ test.describe('live three-account Matrix journey', () => {
           await expect(fullscreen).toBeVisible({ timeout: 2_000 })
         }).toPass({ timeout: 20_000, intervals: [100] })
 
-        const fullscreenElement = await fullscreen.elementHandle()
-        if (fullscreenElement) {
-          try {
-            await fullscreenElement.dispatchEvent('click')
-          } catch {
-            // A timeline refresh can already have detached the transient portal.
-          }
+        try {
+          await fullscreen.click({ position: { x: 5, y: 5 }, timeout: 5_000 })
+        } catch {
         }
         await expect(fullscreen).toBeHidden()
       })

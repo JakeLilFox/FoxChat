@@ -213,7 +213,7 @@ test.describe('live space settings and permissions journey', () => {
         await pinToggle.click()
 
         await panel.getByRole('button', { name: 'Sync baseline' }).click()
-        await page!.getByRole('button', { name: 'OK' }).click()
+        await page!.locator('.ant-popconfirm-buttons').getByRole('button', { name: 'OK', exact: true }).click()
         await expect(page!.getByText(/Roles synced to \d+ rooms/)).toBeVisible({
           timeout: 30_000,
         })
@@ -237,7 +237,7 @@ test.describe('live space settings and permissions journey', () => {
 
         const spacePanel = await openRoomSettings(page!, spaceName, 'Roles & permissions')
         await spacePanel.getByRole('button', { name: 'Sync baseline' }).click()
-        await page!.getByRole('button', { name: 'OK' }).click()
+        await page!.locator('.ant-popconfirm-buttons').getByRole('button', { name: 'OK', exact: true }).click()
         await expect(page!.getByText(/Roles synced to \d+ rooms/)).toBeVisible({
           timeout: 30_000,
         })
