@@ -125,7 +125,9 @@ dbus-run-session -- xvfb-run \
         cat "${APPIMAGE_E2E_OUTPUT_DIR}/microphone-loopback.log" >&2 || true
         exit 1
       fi
-      pactl set-default-source foxchat_e2e_source
+      # Keep the choice local to processes launched by this runner. Some
+      # PipeWire PulseAudio servers do not support changing the global default.
+      export PULSE_SOURCE=foxchat_e2e_source
       pactl info >"${APPIMAGE_E2E_OUTPUT_DIR}/pulseaudio-info.txt"
       pactl list short sources >"${APPIMAGE_E2E_OUTPUT_DIR}/microphone-sources.txt"
       pw-cli ls Node >"${APPIMAGE_E2E_OUTPUT_DIR}/pipewire-nodes.txt"

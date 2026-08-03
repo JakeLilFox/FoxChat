@@ -69,7 +69,10 @@ if ! pactl list short sources | grep -q foxchat_linux_call_source; then
   exit 1
 fi
 
-pactl set-default-source foxchat_linux_call_source
+# Select the virtual microphone for clients started by this runner. PipeWire's
+# PulseAudio compatibility server can reject set-default-source even though the
+# source itself is ready, while libpulse clients support PULSE_SOURCE directly.
+export PULSE_SOURCE=foxchat_linux_call_source
 pactl info >"${output_dir}/pulseaudio-info.txt"
 pactl list short sources >"${output_dir}/microphone-sources.txt"
 pw-cli ls Node >"${output_dir}/pipewire-nodes.txt"

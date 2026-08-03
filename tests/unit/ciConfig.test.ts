@@ -11,6 +11,8 @@ const sourceDockerfile = readFileSync(
   new URL('../../ci/Dockerfile.source', import.meta.url),
   'utf8',
 )
+const linuxCallRunner = readFileSync(new URL('../e2e/run-linux-call.sh', import.meta.url), 'utf8')
+const appImageRunner = readFileSync(new URL('../appimage/run.sh', import.meta.url), 'utf8')
 
 const findTask = (tasks: CiTask[], id: string): CiTask | undefined => {
   for (const task of tasks) {
@@ -48,5 +50,14 @@ describe('source CI image', () => {
       'mv /opt/foxchat-ci/homepage-dependencies/node_modules foxchathomepage/node_modules',
     )
     expect(sourceDockerfile).not.toMatch(/ln -s .*node_modules/)
+  })
+})
+
+describe('Linux virtual microphone runners', () => {
+  it('selects virtual sources per client without changing the PipeWire server default', () => {
+    expect(linuxCallRunner).toContain('export PULSE_SOURCE=foxchat_linux_call_source')
+    expect(appImageRunner).toContain('export PULSE_SOURCE=foxchat_e2e_source')
+    expect(linuxCallRunner).not.toContain('pactl set-default-source')
+    expect(appImageRunner).not.toContain('pactl set-default-source')
   })
 })
