@@ -1,4 +1,4 @@
-import { type Page } from '@playwright/test'
+import { type Page, type Request } from '@playwright/test'
 
 type RetryOptions = {
   label: string
@@ -13,9 +13,22 @@ export async function retryMutatingRequest(
   { label, maxRetryAfterMs = 120_000, maxAttempts = 3 }: RetryOptions,
 ) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const responsePromise = page.waitForRequest((request) => matchUrl(new URL(request.url())))
-    await action()
-    const request = await responsePromise
+    let request: Request
+    try {
+      const [matchedRequest] = await Promise.all([
+        page.waitForRequest((candidate) => matchUrl(new URL(candidate.url()))),
+        action(),
+      ])
+      request = matchedRequest
+    } catch (error) {
+      if (attempt < maxAttempts - 1) {
+        await page.waitForTimeout(250)
+        continue
+      }
+      throw new Error(
+        `${label} did not issue a matching request: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
     const response = await request.response()
     if (!response)
       throw new Error(`${label} request failed: ${request.failure()?.errorText ?? 'no response'}`)

@@ -74,7 +74,13 @@ const visibleEscapeLayer = () =>
   ].some((element) => {
     if (element.closest('.ant-drawer')) return false
     const style = getComputedStyle(element)
-    return !element.hidden && style.display !== 'none' && style.visibility !== 'hidden'
+    return (
+      !element.hidden &&
+      element.getClientRects().length > 0 &&
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      style.pointerEvents !== 'none'
+    )
   })
 
 export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => void }) {

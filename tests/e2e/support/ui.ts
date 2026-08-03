@@ -129,7 +129,12 @@ export async function expectNoHorizontalOverflow(page: Page) {
 }
 
 export async function closeDialog(page: Page) {
-  await page.getByRole('dialog').locator('.ant-modal-close').last().click()
+  const dialog = page.locator('[role="dialog"]:visible').last()
+  await expect(dialog).toBeVisible()
+  const closingDialog = await dialog.elementHandle()
+  if (!closingDialog) throw new Error('Visible dialog disappeared before it could be closed')
+  await dialog.locator('.ant-modal-close').click()
+  await closingDialog.waitForElementState('hidden')
 }
 
 export async function openRoomRow(page: Page, name: string) {

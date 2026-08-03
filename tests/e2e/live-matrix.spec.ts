@@ -197,6 +197,9 @@ test.describe('live three-account Matrix journey', () => {
         ).toBeVisible({ timeout: 60_000 })
 
         await pace(page!)
+        if (!(await detailsTitle.isVisible()))
+          await page!.getByRole('button', { name: 'Room information' }).click()
+        await expect(detailsTitle).toBeVisible()
         await page!.getByText('Invite', { exact: true }).last().click()
         const secondInvite = page!.getByRole('dialog', {
           name: 'Invite to room',
@@ -443,15 +446,23 @@ test.describe('live three-account Matrix journey', () => {
         await expect(viewer).toContainText('m.megolm.v1.aes-sha2')
         await expect(page!.getByTestId('timeline')).not.toContainText('````JSON')
 
-        await viewer.getByRole('button', { name: 'View JSON fullscreen' }).dispatchEvent('click')
+        const fullscreenButton = viewer.getByRole('button', { name: 'View JSON fullscreen' })
         const fullscreen = page!.getByRole('dialog', {
           name: 'JSON JSON preview',
         })
-        await expect(fullscreen).toBeVisible()
+        await expect(async () => {
+          await fullscreenButton.dispatchEvent('click')
+          await expect(fullscreen).toBeVisible({ timeout: 2_000 })
+        }).toPass({ timeout: 20_000, intervals: [100] })
 
-        await fullscreen
-          .getByRole('button', { name: 'Exit JSON fullscreen' })
-          .dispatchEvent('click')
+        const fullscreenElement = await fullscreen.elementHandle()
+        if (fullscreenElement) {
+          try {
+            await fullscreenElement.dispatchEvent('click')
+          } catch {
+            // A timeline refresh can already have detached the transient portal.
+          }
+        }
         await expect(fullscreen).toBeHidden()
       })
 

@@ -153,6 +153,12 @@ test.describe('live timeline history-pagination journey', () => {
           }
           await route.continue()
         })
+        const historyResponse = remotePage!.waitForResponse(
+          (response) =>
+            response.request().method() === 'GET' &&
+            new URL(response.url()).pathname.endsWith('/messages'),
+          { timeout: 30_000 },
+        )
 
         await timeline.hover()
         await expect
@@ -176,18 +182,27 @@ test.describe('live timeline history-pagination journey', () => {
         })
         expect(anchor.eventId).toBeTruthy()
 
+        await historyResponse
         await expect
           .poll(() => timeline.evaluate((element) => element.scrollTop), { timeout: 30_000 })
           .toBeGreaterThan(80)
-        const restoredOffset = await timeline
-          .locator(`[data-event-id="${anchor.eventId}"]`)
-          .evaluate((node) => {
-            const timelineElement = node.closest<HTMLElement>('[data-testid="timeline"]')
-            return (
-              node.getBoundingClientRect().top - (timelineElement?.getBoundingClientRect().top ?? 0)
-            )
-          })
-        expect(Math.abs(restoredOffset - anchor.offset)).toBeLessThan(20)
+        const restoredAnchor = timeline.locator(`[data-event-id="${anchor.eventId}"]`)
+        await expect
+          .poll(
+            async () => {
+              if (!(await restoredAnchor.count())) return Number.POSITIVE_INFINITY
+              const restoredOffset = await restoredAnchor.evaluate((node) => {
+                const timelineElement = node.closest<HTMLElement>('[data-testid="timeline"]')
+                return (
+                  node.getBoundingClientRect().top -
+                  (timelineElement?.getBoundingClientRect().top ?? 0)
+                )
+              })
+              return Math.abs(restoredOffset - anchor.offset)
+            },
+            { timeout: 30_000, intervals: [100] },
+          )
+          .toBeLessThan(20)
         await remotePage!.unroute(historyRoute)
       })
 

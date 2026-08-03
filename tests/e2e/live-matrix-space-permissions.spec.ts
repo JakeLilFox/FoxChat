@@ -150,6 +150,7 @@ test.describe('live space settings and permissions journey', () => {
           { label: `Matrix createRoom (${name})` },
         )
         await expect(page!.getByText('Channel created')).toBeVisible({ timeout: 30_000 })
+        await expect(dialog).toBeHidden()
         await closeDialog(page!)
         await pace(page!)
         await openChannelInSpace(page!, spaceName, name)
