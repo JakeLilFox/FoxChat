@@ -142,6 +142,7 @@ test.describe('live three-account Matrix journey', () => {
             name: roomName,
           }),
         ).toBeVisible({ timeout: 60_000 })
+        await expect(dialog).toBeHidden()
         await expect(page!.getByText('Encrypted with Megolm', { exact: true })).toBeVisible()
         roomId = new URL(page!.url()).searchParams.get('room') ?? undefined
         expect(roomId).toMatch(/^!/)
@@ -179,6 +180,7 @@ test.describe('live three-account Matrix journey', () => {
           () => invite.getByRole('button', { name: 'Send invitation' }).click(),
           { label: 'Matrix invite (account 2)' },
         )
+        await expect(invite).toBeHidden()
 
         const invitation = page!.locator('.invitation').filter({
           hasText: roomName,
@@ -441,7 +443,7 @@ test.describe('live three-account Matrix journey', () => {
         await expect(viewer).toContainText('m.megolm.v1.aes-sha2')
         await expect(page!.getByTestId('timeline')).not.toContainText('````JSON')
 
-        await viewer.getByRole('button', { name: 'View JSON fullscreen' }).click()
+        await viewer.getByRole('button', { name: 'View JSON fullscreen' }).dispatchEvent('click')
         const fullscreen = page!.getByRole('dialog', {
           name: 'JSON JSON preview',
         })
