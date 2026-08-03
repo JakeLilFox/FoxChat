@@ -13,7 +13,7 @@ const devServerPort = new URL(baseURL).port || '4173'
 const timeout = Number(process.env.E2E_TIMEOUT_MS) || 90_000
 const matrixPool = matrixE2EAccountPool()
 const cpuParallelism = availableParallelism()
-const requestedMatrixWorkers = Number(process.env.MATRIX_E2E_WORKERS) || 1
+const requestedMatrixWorkers = Number(process.env.MATRIX_E2E_WORKERS) || 8
 const matrixWorkers = recommendedMatrixWorkerCount(
   matrixPool.workerCapacity,
   cpuParallelism,
