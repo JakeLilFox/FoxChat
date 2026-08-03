@@ -883,8 +883,8 @@
           "desktop/src-tauri/target/release/bundle/appimage/FoxChat_${version}_amd64.AppImage",
           "desktop/src-tauri/target/release/bundle/deb/FoxChat_${version}_amd64.deb.sig",
           "desktop/src-tauri/target/release/bundle/deb/FoxChat_${version}_amd64.deb",
-          "desktop/src-tauri/target/release/bundle/deb/FoxChat-${version}-1.x86_64.rpm.sig",
-          "desktop/src-tauri/target/release/bundle/deb/FoxChat-${version}-1.x86_64.rpm",
+          "desktop/src-tauri/target/release/bundle/rpm/FoxChat-${version}-1.x86_64.rpm.sig",
+          "desktop/src-tauri/target/release/bundle/rpm/FoxChat-${version}-1.x86_64.rpm",
           "desktop/bridge/dist/FoxChatBridge-linux-x86_64",
           "android-apk/android-artifacts/FoxChat_${version}_android.apk"
         ]
