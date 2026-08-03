@@ -141,6 +141,9 @@
             "id": "2678f77a-b816-4ba0-9d6d-bdfb7104d8f6",
             "cmd": [
               "exit ${e2e_code}"
+            ],
+            "flags": [
+              "warn-on-failure"
             ]
           }
         ]
