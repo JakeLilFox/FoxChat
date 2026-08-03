@@ -41,7 +41,7 @@ import { Shell, themes } from '../styles'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Drawer, Input, Modal, Segmented, Spin, App as AntApp } from 'antd'
 import { Room, RoomType } from 'matrix-js-sdk'
-import { type VerificationRequest } from 'matrix-js-sdk/lib/crypto-api'
+import { VerificationPhase, type VerificationRequest } from 'matrix-js-sdk/lib/crypto-api'
 import { AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT, matrixService } from '../matrix/MatrixClientService'
 import {
   listenForNativeNotificationReplies,
@@ -538,6 +538,18 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
             deviceId,
           )
         : await matrixService.requestOwnDeviceVerification()
+      // The crypto SDK can hand back a previously cancelled/completed request instead of
+      // starting a new one if it still considers the old one "in flight". Opening the dialog
+      // on that stale request would just show a dead end with no way to retry.
+      if (
+        request.phase === VerificationPhase.Cancelled ||
+        request.phase === VerificationPhase.Done
+      ) {
+        message.error(
+          'The previous verification attempt is still settling. Please try again in a moment, or start verification from the other device instead.',
+        )
+        return
+      }
       showVerification(request)
       // Keep Settings beneath the verification history entry.
       setSettings(false)
