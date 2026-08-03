@@ -94,65 +94,6 @@
   },
   {
     "type": "worker",
-    "id": "2f201815-fee1-49c2-9d9d-860b0be6b15e",
-    "name": "CI Source Image",
-    "children": [
-      {
-        "type": "step",
-        "id": "bb001815-fee1-49c2-9d9d-860b0be6b15e",
-        "name": "Build source image",
-        "tasks": [
-          {
-            "type": "checkout",
-            "id": "bb011815-fee1-49c2-9d9d-860b0be6b15e"
-          },
-          {
-            "type": "cmd",
-            "id": "bb021815-fee1-49c2-9d9d-860b0be6b15e",
-            "cmd": [
-              "screen -dmS foxchat-ci-source-docker sudo dockerd --storage-driver=overlay2 && timeout 60 sh -c 'until sudo docker info >/dev/null 2>&1; do sleep 1; done'"
-            ]
-          },
-          {
-            "type": "task",
-            "id": "bb051815-fee1-49c2-9d9d-860b0be6b15e",
-            "tasks": [
-              "dockerLogin"
-            ]
-          },
-          {
-            "type": "cmd",
-            "id": "bb031815-fee1-49c2-9d9d-860b0be6b15e",
-            "cmd": [
-              "sudo docker pull repo.zenzon.net/foxchat-ci-toolchain:latest && sudo docker build -f ci/Dockerfile.source -t repo.zenzon.net/foxchat-ci-source:latest ."
-            ]
-          },
-          {
-            "type": "cmd",
-            "id": "bb041815-fee1-49c2-9d9d-860b0be6b15e",
-            "cmd": [
-              "sudo docker push repo.zenzon.net/foxchat-ci-source:latest"
-            ]
-          }
-        ]
-      }
-    ],
-    "image": "build-container-tauri",
-    "depends": [
-      "CI Toolchain Image"
-    ],
-    "trigger": {
-      "logic": {
-        "and": [
-          {
-            "branch": "main"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "type": "worker",
     "id": "21179be3-a2a2-4661-9063-45e1545242cd",
     "name": "Test",
     "children": [
@@ -161,6 +102,10 @@
         "id": "ea29f575-ed22-4c4f-90a5-5d419f032a81",
         "name": "Test",
         "tasks": [
+          {
+            "type": "checkout",
+            "id": "bb011815-fee1-49c2-9d9d-860b0be6b15e"
+          },
           {
             "type": "grapsecrets",
             "id": "94f7ecf4-d799-441c-a5bf-651884eb9f32",
@@ -201,9 +146,9 @@
         ]
       }
     ],
-    "image": "repo.zenzon.net/foxchat-ci-source:latest",
+    "image": "repo.zenzon.net/foxchat-ci-toolchain:latest",
     "depends": [
-      "CI Source Image"
+      "CI Toolchain Image"
     ],
     "trigger": {
       "logic": {
@@ -220,6 +165,10 @@
     "id": "6c719b9f-5bf4-4f4e-bc80-e26fe8fce9ea",
     "name": "Marketing",
     "children": [
+      {
+        "type": "checkout",
+        "id": "bb011816-fee1-49c2-9d9d-860b0be6b15e"
+      },
       {
         "type": "step",
         "id": "1194dcf5-6a25-4c80-8724-40c063137a97",
@@ -260,7 +209,7 @@
         ]
       }
     ],
-    "image": "repo.zenzon.net/foxchat-ci-source:latest",
+    "image": "repo.zenzon.net/foxchat-ci-toolchain:latest",
     "depends": [
       "Test"
     ],
@@ -279,6 +228,10 @@
     "id": "9f73307f-3fc3-49a7-8654-7b0b3109722f",
     "name": "HomeBuild",
     "children": [
+      {
+        "type": "checkout",
+        "id": "bb011817-fee1-49c2-9d9d-860b0be6b15e"
+      },
       {
         "type": "step",
         "id": "595fa7fa-18ee-4878-ac34-383d4b3f4e3e",
@@ -302,7 +255,7 @@
         ]
       }
     ],
-    "image": "repo.zenzon.net/foxchat-ci-source:latest",
+    "image": "repo.zenzon.net/foxchat-ci-toolchain:latest",
     "depends": [
       "Test",
       "Marketing"
@@ -322,6 +275,10 @@
     "id": "9f73307f-3fc3-49a7-8654-7b0b3109721f",
     "name": "Web",
     "children": [
+      {
+        "type": "checkout",
+        "id": "bb011818-fee1-49c2-9d9d-860b0be6b15e"
+      },
       {
         "type": "step",
         "id": "595fa7fa-18ee-4878-ac34-383d4b3f4e2e",
@@ -345,7 +302,7 @@
         ]
       }
     ],
-    "image": "repo.zenzon.net/foxchat-ci-source:latest",
+    "image": "repo.zenzon.net/foxchat-ci-toolchain:latest",
     "depends": [
       "Test"
     ],
@@ -364,6 +321,10 @@
     "id": "75c71204-9b3f-4457-bdd4-2890325daad7",
     "name": "Desktop",
     "children": [
+      {
+        "type": "checkout",
+        "id": "bb011819-fee1-49c2-9d9d-860b0be6b15e"
+      },
       {
         "type": "grapsecrets",
         "id": "a7c83855-6017-44c3-88fd-b27b8bfd1da2",
@@ -531,7 +492,7 @@
         "status": []
       }
     ],
-    "image": "repo.zenzon.net/foxchat-ci-source:latest",
+    "image": "repo.zenzon.net/foxchat-ci-toolchain:latest",
     "depends": [
       "Test"
     ],
@@ -550,6 +511,10 @@
     "id": "9b506600-bd3a-4065-bf0d-a85428d53531",
     "name": "Android",
     "children": [
+      {
+        "type": "checkout",
+        "id": "bb011825-fee1-49c2-9d9d-860b0be6b15e"
+      },
       {
         "type": "grapsecrets",
         "id": "94f7ecf4-d799-441c-a5bf-651784eb9f32"
@@ -669,7 +634,7 @@
         ]
       }
     ],
-    "image": "repo.zenzon.net/foxchat-ci-source:latest",
+    "image": "repo.zenzon.net/foxchat-ci-toolchain:latest",
     "depends": [
       "Test"
     ],
@@ -824,6 +789,10 @@
     "name": "Push",
     "children": [
       {
+        "type": "checkout",
+        "id": "bb011835-fee1-49c2-9d9d-860b0be6b15e"
+      },
+      {
         "type": "step",
         "id": "337f4e25-8d13-4761-b2f7-82eaf9d64dd0",
         "name": "Build push image",
@@ -880,7 +849,7 @@
         ]
       }
     ],
-    "image": "repo.zenzon.net/foxchat-ci-source:latest",
+    "image": "repo.zenzon.net/foxchat-ci-toolchain:latest",
     "depends": [
       "Test"
     ],

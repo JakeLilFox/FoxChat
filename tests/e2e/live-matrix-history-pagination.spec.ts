@@ -159,6 +159,7 @@ test.describe('live timeline history-pagination journey', () => {
             new URL(response.url()).pathname.endsWith('/messages'),
           { timeout: 30_000 },
         )
+        void historyResponse.catch(() => undefined)
 
         await timeline.hover()
         await expect

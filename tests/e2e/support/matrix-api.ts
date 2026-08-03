@@ -606,7 +606,7 @@ export async function sendReplyMessage(
   body: string,
   replyToEventId: string,
 ): Promise<string> {
-  const txnId = `foxchat-e2e-reply-${Date.now()}`
+  const txnId = `foxchat-e2e-reply-${Date.now()}-${Math.random().toString(36).slice(2)}`
   return withRetry(
     `Matrix send reply message to ${roomId}`,
     () =>

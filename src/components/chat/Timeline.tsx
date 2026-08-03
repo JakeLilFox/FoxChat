@@ -278,6 +278,8 @@ function TimelineView({
   const [threadView, setThreadView] = useState<string | undefined>(threadViewFromUrl)
   const roomRef = useRef(room)
   roomRef.current = room
+  const visibleAccountIdRef = useRef(visibleAccountId)
+  visibleAccountIdRef.current = visibleAccountId
   const draftRef = useRef('')
   const editingRef = useRef<MatrixEvent | undefined>(undefined)
   const pendingImagesRef = useRef<File[]>([])
@@ -859,8 +861,8 @@ function TimelineView({
     const atLiveEdge =
       box.scrollHeight - box.scrollTop - box.clientHeight <= FOLLOW_LATEST_THRESHOLD
     const event = visibleReadBoundary(timelineEventsRef.current, id, atLiveEdge)
-    if (event) void matrixService.markRead(event, visibleAccountId)
-  }, [room, visibleAccountId])
+    if (event) void matrixService.markRead(event, visibleAccountIdRef.current)
+  }, [room])
   useEffect(() => {
     const applyPreference = () => {
       if (matrixService.autoReadAllAccountsEnabled()) markVisibleRead()
@@ -1756,7 +1758,7 @@ function TimelineView({
             }
             markVisibleRead()
           }
-          if (latest) void matrixService.markRead(latest, visibleAccountId)
+          if (latest) void matrixService.markRead(latest, visibleAccountIdRef.current)
         })
       }),
     )
