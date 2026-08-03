@@ -7,6 +7,10 @@ type CiWorker = { name?: string; children?: CiTask[] }
 const workers = JSON.parse(
   readFileSync(new URL('../../ci.json', import.meta.url), 'utf8'),
 ) as CiWorker[]
+const sourceDockerfile = readFileSync(
+  new URL('../../ci/Dockerfile.source', import.meta.url),
+  'utf8',
+)
 
 const findTask = (tasks: CiTask[], id: string): CiTask | undefined => {
   for (const task of tasks) {
@@ -32,5 +36,17 @@ describe('Android CI', () => {
     expect(e2e).toContain(`APK_PATH=${artifact}`)
     expect(e2e).not.toContain('find ')
     expect(release?.files).toContain(`android-apk/${artifact}`)
+  })
+})
+
+describe('source CI image', () => {
+  it('moves cached dependencies into the workspace instead of serving through external symlinks', () => {
+    expect(sourceDockerfile).toContain(
+      'mv /opt/foxchat-ci/root-dependencies/node_modules node_modules',
+    )
+    expect(sourceDockerfile).toContain(
+      'mv /opt/foxchat-ci/homepage-dependencies/node_modules foxchathomepage/node_modules',
+    )
+    expect(sourceDockerfile).not.toMatch(/ln -s .*node_modules/)
   })
 })

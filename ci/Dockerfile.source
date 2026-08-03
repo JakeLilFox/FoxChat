@@ -8,8 +8,8 @@ COPY --chown=ubuntu1:ubuntu1 . .
 
 RUN test ! -e node_modules \
     && test ! -e foxchathomepage/node_modules \
-    && ln -s /opt/foxchat-ci/root-dependencies/node_modules node_modules \
-    && ln -s /opt/foxchat-ci/homepage-dependencies/node_modules foxchathomepage/node_modules
+    && mv /opt/foxchat-ci/root-dependencies/node_modules node_modules \
+    && mv /opt/foxchat-ci/homepage-dependencies/node_modules foxchathomepage/node_modules
 
 USER root
 RUN mkdir -p /run/sshd
