@@ -141,6 +141,9 @@ describe('live Matrix environment safety', () => {
   it('defaults live Matrix concurrency to one and caps explicit opt-in by account and CPU budgets', () => {
     expect(recommendedMatrixWorkerCount(31, 32)).toBe(1)
     expect(recommendedMatrixWorkerCount(31, 32, 4)).toBe(4)
+    expect(recommendedMatrixWorkerCount(31, 56, 8)).toBe(8)
+    expect(recommendedMatrixWorkerCount(7, 56, 8)).toBe(7)
+    expect(recommendedMatrixWorkerCount(31, 8, 8)).toBe(4)
     expect(recommendedMatrixWorkerCount(31, 4, 4)).toBe(2)
     expect(recommendedMatrixWorkerCount(2, 32, 4)).toBe(2)
     expect(recommendedMatrixWorkerCount(31, 1, 4)).toBe(1)

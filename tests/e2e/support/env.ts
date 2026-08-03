@@ -93,7 +93,7 @@ export function recommendedMatrixWorkerCount(
   const accountBudget = Math.max(1, Math.trunc(accountWorkerCapacity))
   const requestedBudget = Math.max(1, Math.trunc(requestedWorkers))
   const cpuBudget = Math.max(1, Math.floor(cpuParallelism / 2))
-  return Math.min(accountBudget, cpuBudget, requestedBudget, 4)
+  return Math.min(accountBudget, cpuBudget, requestedBudget, 8)
 }
 
 export function liveMatrixConfig(): LiveMatrixConfig {
