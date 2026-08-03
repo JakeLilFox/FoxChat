@@ -385,6 +385,14 @@ function TimelineView({
     undefined,
   )
   const receiptTimer = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    // A pending debounced markVisibleRead was scheduled against whichever account was visible
+    // at the time (it reads visibleAccountIdRef.current fresh when it fires, not when it was
+    // scheduled). If the sending-as account changes before that timer fires, it would mark the
+    // newly-selected account read using stale scroll state from the previous account's view -
+    // cancel it so switching accounts can't silently erase the new account's real unread state.
+    window.clearTimeout(receiptTimer.current)
+  }, [visibleAccountId])
   const loadingRef = useRef(false)
   const positionStabilizerCleanup = useRef<() => void>(() => {})
   const positionStabilizerUserCancelled = useRef(false)
