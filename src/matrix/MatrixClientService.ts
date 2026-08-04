@@ -2781,11 +2781,26 @@ export class MatrixClientService {
   }
 
   // Preserve thread relations and the reply currently shown by the composer.
-  async editMessage(event: MatrixEvent, body: string, replyToEventId?: string) {
-    const roomId = event.getRoomId()
+  async editMessage(rawEvent: MatrixEvent, body: string, replyToEventId?: string) {
+    const roomId = rawEvent.getRoomId()
+    const client = this.clientForEventAuthor(rawEvent)
+    if (!client || !roomId) throw new Error('Cannot edit this message')
+    const room = client.getRoom(roomId)
+    let event = rawEvent
+    const visited = new Set<string>()
+    for (
+      let relation = event.getRelation();
+      relation?.rel_type === RelationType.Replace && relation.event_id;
+      relation = event.getRelation()
+    ) {
+      if (visited.has(event.getId() ?? '')) break
+      visited.add(event.getId() ?? '')
+      const parent = room?.findEventById(relation.event_id)
+      if (!parent) break
+      event = parent
+    }
     const eventId = event.getId()
-    const client = this.clientForEventAuthor(event)
-    if (!client || !roomId || !eventId) throw new Error('Cannot edit this message')
+    if (!eventId) throw new Error('Cannot edit this message')
     const txnId = client.makeTxnId()
     const originalRelation = event.getOriginalContent()['m.relates_to'] as
       | { rel_type?: string; 'm.in_reply_to'?: { event_id: string } }
@@ -2803,7 +2818,6 @@ export class MatrixClientService {
     return this.queueSend(
       roomId,
       async () => {
-        const room = client.getRoom(roomId)
         const send = client.sendEvent(
           roomId,
           EventType.RoomMessage,

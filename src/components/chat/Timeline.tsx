@@ -751,6 +751,10 @@ function TimelineView({
       return
     }
     pendingJumpRef.current = { eventId, attempts }
+    followLatest.current = false
+    atBottom.current = false
+    scrollAnchor.current = undefined
+    setShowJumpToLatest(true)
     const visibleIndex =
       timelineEvents
         .slice(0, localIndex + 1)
@@ -950,7 +954,8 @@ function TimelineView({
       historyFullyLoaded ||
       loadingRef.current ||
       !historyPagingReady.current ||
-      historyPagingRoom.current !== roomIdentity
+      historyPagingRoom.current !== roomIdentity ||
+      pendingJumpRef.current
     )
       return
     const box = messagesRef.current
@@ -1561,6 +1566,7 @@ function TimelineView({
         .find(
           (item) =>
             item.getSender() === userId &&
+            isVisibleMessageEvent(item) &&
             item.getType() === EventType.RoomMessage &&
             item.getContent().msgtype === 'm.text' &&
             item.getId(),
