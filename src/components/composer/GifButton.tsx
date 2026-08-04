@@ -356,6 +356,7 @@ export function GifPickerPanel({
       <Tabs
         size="small"
         activeKey={tab}
+        destroyOnHidden
         onChange={(key) => {
           if (key !== 'browse' && key !== 'saved' && key !== 'recent') return
           setTab(key)
