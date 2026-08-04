@@ -90,11 +90,11 @@ const stripGifMetadata = async (file: File) => {
     throw new Error('This GIF is not valid')
   }
 
-  const output: number[] = [...input.subarray(0, 13)]
+  const chunks: Uint8Array[] = [input.subarray(0, 13)]
   let offset = 13
   if (input[10] & 0x80) {
     const colorTableSize = 3 * 2 ** ((input[10] & 0x07) + 1)
-    output.push(...input.subarray(offset, offset + colorTableSize))
+    chunks.push(input.subarray(offset, offset + colorTableSize))
     offset += colorTableSize
   }
 
@@ -112,7 +112,7 @@ const stripGifMetadata = async (file: File) => {
     const blockStart = offset
     const marker = input[offset++]
     if (marker === 0x3b) {
-      output.push(marker)
+      chunks.push(input.subarray(blockStart, offset))
       break
     }
     if (marker === 0x2c) {
@@ -122,7 +122,7 @@ const stripGifMetadata = async (file: File) => {
       if (packed & 0x80) offset += 3 * 2 ** ((packed & 0x07) + 1)
       offset++
       offset = subBlocksEnd(offset)
-      output.push(...input.subarray(blockStart, offset))
+      chunks.push(input.subarray(blockStart, offset))
       continue
     }
     if (marker !== 0x21 || offset >= input.length) {
@@ -142,11 +142,18 @@ const stripGifMetadata = async (file: File) => {
       label === 0xff ? new TextDecoder('ascii').decode(input.subarray(offset + 1, headerEnd)) : ''
     offset = subBlocksEnd(headerEnd)
     if (!applicationName.startsWith('XMP DataXMP')) {
-      output.push(...input.subarray(blockStart, offset))
+      chunks.push(input.subarray(blockStart, offset))
     }
   }
 
-  return new File([new Uint8Array(output)], file.name, {
+  const output = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0))
+  let writeOffset = 0
+  for (const chunk of chunks) {
+    output.set(chunk, writeOffset)
+    writeOffset += chunk.length
+  }
+
+  return new File([output], file.name, {
     type: file.type,
     lastModified: Date.now(),
   })
