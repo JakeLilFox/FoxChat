@@ -3063,11 +3063,10 @@ export const GifGrid = styled.div`
   }
   .gifLoadMore {
     grid-column: 1 / -1;
+    display: grid;
+    place-items: center;
     padding: 8px;
-    border: 0;
-    background: transparent;
-    color: ${(p) => p.theme.accent};
-    cursor: pointer;
+    min-height: 1px;
   }
   @media (max-width: 760px) {
     grid-template-columns: repeat(2, 1fr);

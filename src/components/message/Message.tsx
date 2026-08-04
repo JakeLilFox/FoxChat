@@ -782,7 +782,7 @@ export const Message = memo(function Message({
     <LinkPreview url={previewUrl} client={client} timestamp={event.getTs()} />
   ) : null
   const caption =
-    body && body !== c.filename ? (
+    body && body !== c.filename && !isGifMessage ? (
       <div className="caption">
         <MarkdownText text={body} />
       </div>

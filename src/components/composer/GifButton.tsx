@@ -198,6 +198,7 @@ export function GifPickerPanel({
   const [error, setError] = useState<string>()
   const [, forceUpdate] = useState(0)
   const requestId = useRef(0)
+  const loadMoreRef = useRef<HTMLDivElement>(null)
   const client = matrixService.clientForRoom(room.roomId)
   const recentGifs = useRecents<KlipyGif>(recentGifsStorage)
 
@@ -228,6 +229,22 @@ export function GifPickerPanel({
     return () => window.clearTimeout(handle)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, search])
+  // Auto-load the next page as the sentinel below the grid scrolls into view, instead of a
+  // "Load more" button. Re-runs whenever the page/loading state changes so it immediately keeps
+  // loading if the sentinel is still on screen once a fetch finishes (e.g. a tall viewport).
+  useEffect(() => {
+    const node = loadMoreRef.current
+    if (tab !== 'browse' || !node || loading || !page?.hasNext) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) runQuery(search, (page.page ?? 1) + 1, true)
+      },
+      { rootMargin: '200px' },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, page, loading, search])
 
   const savedItems = matrixService.savedGifs(client)
   const isSavedKlipy = (slug: string) => savedItems.some((item) => savedGifKey(item) === slug)
@@ -283,14 +300,9 @@ export function GifPickerPanel({
         <Spin size="small" style={{ gridColumn: '1 / -1', margin: '20px auto' }} />
       )}
       {page?.hasNext && (
-        <button
-          type="button"
-          className="gifLoadMore"
-          disabled={loading}
-          onClick={() => runQuery(search, (page.page ?? 1) + 1, true)}
-        >
-          {loading ? 'Loading…' : 'Load more'}
-        </button>
+        <div ref={loadMoreRef} className="gifLoadMore">
+          {loading && page.items.length > 0 && <Spin size="small" />}
+        </div>
       )}
     </GifGrid>
   )
