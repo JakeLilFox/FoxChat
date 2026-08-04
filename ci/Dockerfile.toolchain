@@ -140,8 +140,10 @@ RUN mv /opt/foxchat-ci/root-dependencies/node_modules node_modules \
     && mkdir foxchathomepage/ \
     && mv /opt/foxchat-ci/homepage-dependencies/node_modules foxchathomepage/node_modules
 
+RUN mkdir -p /run/screen/
 RUN mkdir -p /run/sshd
 RUN chmod 0755 /run/sshd
+RUN chmod 0777 /run/screen
 
 RUN chown -R ubuntu1:ubuntu1 /home/ubuntu1
 
