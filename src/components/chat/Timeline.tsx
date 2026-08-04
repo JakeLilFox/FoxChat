@@ -270,6 +270,7 @@ function TimelineView({
   const visibleAccountId = room ? matrixService.selectedRoomAccountId(room.roomId) : undefined
   const { message } = AntApp.useApp()
   const [draft, setDraft] = useState('')
+  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false)
   const [availableInlineEmotes, setAvailableInlineEmotes] = useState<MatrixEmote[]>([])
   const recentInlineEmotes = useRecents<StoredEmote>(recentStorage.emojis)
   const [roomModal, setRoomModal] = useState<RoomModalView | undefined>(roomModalFromUrl)
@@ -2070,6 +2071,7 @@ function TimelineView({
     draftRef.current = value
     composerRevisionRef.current++
     setDraft(value)
+    setSuggestionsDismissed(false)
     const typing = !!value.trim()
     if (typing && !typingActive.current) {
       typingActive.current = true
@@ -2686,7 +2688,7 @@ function TimelineView({
               </ComposeTray>
             )}
             <Composer data-testid="composer-bar">
-              {emoteOptions.length > 0 && (
+              {emoteOptions.length > 0 && !suggestionsDismissed && (
                 <MentionMenu role="listbox" aria-label="Emoji suggestions">
                   {emoteOptions.map((emote, index) => (
                     <button
@@ -2709,7 +2711,7 @@ function TimelineView({
                   ))}
                 </MentionMenu>
               )}
-              {mentionOptions.length > 0 && (
+              {mentionOptions.length > 0 && !suggestionsDismissed && (
                 <MentionMenu>
                   {mentionOptions.map((option, index) => (
                     <button
@@ -2782,7 +2784,15 @@ function TimelineView({
                 emotes={inlineEmotesRef.current}
                 onChange={change}
                 onKeyDown={(e) => {
-                  if ((e.key === 'Tab' || e.key === 'Enter') && emoteOptions[0]) {
+                  if (
+                    e.key === 'Escape' &&
+                    !suggestionsDismissed &&
+                    (emoteOptions.length > 0 || mentionOptions.length > 0)
+                  ) {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setSuggestionsDismissed(true)
+                  } else if ((e.key === 'Tab' || e.key === 'Enter') && emoteOptions[0]) {
                     e.preventDefault()
                     chooseInlineEmote(emoteOptions[0])
                   } else if (e.key === 'Tab' && mentionOptions[0]) {
