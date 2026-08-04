@@ -1385,6 +1385,13 @@ async function main() {
       const session = await rawLogin(accounts[index])
       rawSessions.push(session)
     }
+
+    for (let index = 0; index < rawSessions.length; index++) {
+      const cleanup = await cleanupNonAdminRooms(rawSessions[index])
+      console.log(
+        `Startup cleanup account ${accounts[index].slot}: left ${cleanup.left}, declined ${cleanup.declined}, preserved ${cleanup.preserved}.`,
+      )
+    }
     await recoverInterruptedRun(rawSessions)
     for (const session of rawSessions) originalProfiles.push(await readProfile(session))
     saveRecoveryState(rawSessions, originalProfiles)
