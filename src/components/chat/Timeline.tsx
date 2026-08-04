@@ -184,25 +184,26 @@ const isUnavailablePreJoinEvent = (event: MatrixEvent, fallbackRoom?: Room) => {
 const isAvailableTimelineMessage = (event: MatrixEvent, room?: Room) =>
   isVisibleMessageEvent(event) && !isUnavailablePreJoinEvent(event, room)
 
-const linkedRoomTimelineEvents = (room: Room) => {
-  const live = room.getLiveTimeline()
-  const timelines = [live]
-  const seen = new Set([live])
-  let previous = live.getNeighbouringTimeline(Direction.Backward)
-  while (previous && !seen.has(previous)) {
-    seen.add(previous)
-    timelines.unshift(previous)
-    previous = previous.getNeighbouringTimeline(Direction.Backward)
+const linkedTimelineEvents = (start: EventTimeline, directions: Direction[]) => {
+  const timelines = [start]
+  const seen = new Set([start])
+  for (const direction of directions) {
+    let neighbour = start.getNeighbouringTimeline(direction)
+    while (neighbour && !seen.has(neighbour)) {
+      seen.add(neighbour)
+      if (direction === Direction.Backward) timelines.unshift(neighbour)
+      else timelines.push(neighbour)
+      neighbour = neighbour.getNeighbouringTimeline(direction)
+    }
   }
   return mergeTimelineEventSegments(...timelines.map((timeline) => timeline.getEvents()))
 }
+const linkedRoomTimelineEvents = (room: Room) =>
+  linkedTimelineEvents(room.getLiveTimeline(), [Direction.Backward])
 
 const cachedEventWindow = (room: Room) => {
   const freshEvents = linkedRoomTimelineEvents(room)
   const previous = roomTimelineCache.get(timelineRoomIdentity(room))?.events ?? []
-  // A limited sync can replace the live timeline with only a profile membership event. Retain
-  // the previously rendered window as well as any older SDK timeline segments linked to the new
-  // live segment, so that the sync cannot visually erase the conversation.
   const source = mergeTimelineEventSegments(previous, freshEvents)
   const visible = source.filter((event) => isAvailableTimelineMessage(event, room))
   const first = visible.at(-MESSAGE_WINDOW_SIZE)
@@ -495,7 +496,7 @@ function TimelineView({
     void matrixRevision
     void renderTick
     const liveTimelineEvents = contextTimeline
-      ? (timeline?.getEvents() ?? [])
+      ? linkedTimelineEvents(contextTimeline, [Direction.Backward, Direction.Forward])
       : room
         ? linkedRoomTimelineEvents(room)
         : []
@@ -509,7 +510,7 @@ function TimelineView({
         ? baseTimelineEvents.map((event) => matrixService.eventForReading(event))
         : matrixService.combinedRoomEvents(room, baseTimelineEvents)
       : baseTimelineEvents
-  }, [room, roomIdentity, contextTimeline, timeline, matrixRevision, renderTick])
+  }, [room, roomIdentity, contextTimeline, matrixRevision, renderTick])
   const timelineEventsRef = useRef(timelineEvents)
   timelineEventsRef.current = timelineEvents
   const allEvents = useMemo(
@@ -518,18 +519,9 @@ function TimelineView({
   )
   const windowEnd = Math.max(0, allEvents.length - windowEndOffset)
   const windowStart = Math.max(0, windowEnd - MESSAGE_WINDOW_SIZE)
-  // Nothing left to reveal by shifting the window (windowStart === 0) and the server has
-  // confirmed there's nothing more to fetch either (no backward pagination token) - trying
-  // again would just repeat the same no-op fetch on every scroll tick without the scrollbar
-  // ever moving.
   const historyFullyLoaded =
     windowStart === 0 && !!room && !!timeline && !timeline.getPaginationToken(Direction.Backward)
   const preJoinHistoryBoundaryReached = useMemo(() => {
-    // Only the raw events older than what's currently windowed into view can tell us we've
-    // truly hit the join wall. A pagination call can fetch a batch that straddles the join
-    // boundary (some decryptable, some not) before the window has scrolled far enough back to
-    // show the still-decryptable ones, so scanning the whole loaded timeline here would trip
-    // this early and hide history that's already cached and available to show.
     if (windowStart > 0) return false
     const earliestAvailable = allEvents[0]
     const earliestAvailableIndex = earliestAvailable
@@ -556,10 +548,6 @@ function TimelineView({
       scrollHeight: box.scrollHeight,
     }
   }, [])
-  // Guards against two independent restore sessions (loadOlder's own pagination and the
-  // combined-account backfill effect can each request one around the same time) correcting
-  // scrollTop on top of one another - that double-correction was what made scrolling visibly
-  // teleport. Only one session drives scrollTop at a time.
   const scrollRestoreActiveRef = useRef(false)
   const restoreScrollAnchor = useCallback(
     (captured: ReturnType<typeof captureScrollAnchor> | undefined) =>
@@ -571,21 +559,12 @@ function TimelineView({
         }
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
-            // Only start a session while the user is still sitting at the top where the load
-            // was triggered from - if they've since scrolled away, leave their position alone.
             if (box.scrollTop >= 80) {
               resolve()
               return
             }
             scrollRestoreActiveRef.current = true
             const restore = () => {
-              // Re-check on every call, not just once: scrollTop can legitimately still be
-              // small right when a huge shift is requested, because the browser clamps it to
-              // scrollHeight - clientHeight and scrollHeight hasn't finished growing to fit the
-              // newly inserted content yet. Bailing out here the first time scrollTop happens to
-              // read >=80 would abandon the correction partway once clamping briefly undershoots
-              // it, leaving it stuck below the intended position instead of catching up once
-              // more content is measurable.
               const target = captured.eventId
                 ? box.querySelector<HTMLElement>(
                     `[data-event-id="${CSS.escape(captured.eventId)}"]`,
@@ -597,22 +576,11 @@ function TimelineView({
                   box.getBoundingClientRect().top -
                   captured.offset
               } else {
-                // The anchor can be missing outright (nothing was visible yet), evicted by a
-                // large window shift, or - when the newly merged content came from a combined
-                // account's own backfill rather than this timeline's pagination - simply never
-                // rendered by this account's DOM at all. Compensate by the height that grew
-                // instead of leaving scrollTop pinned at the top.
                 const grown = box.scrollHeight - captured.scrollHeight
                 if (grown) box.scrollTop += grown
               }
             }
             restore()
-            // Content can still settle a little after this first pass - not just existing rows
-            // resizing, but new siblings appearing entirely (grouping collapsing an avatar/name
-            // header as the newly loaded messages connect to what was already there, read
-            // receipts, etc.), which a resize observer on the current children never sees since
-            // none of them individually changed size. A mutation observer catches insertions
-            // too, matching stabilizeTimelinePosition's approach to the same class of problem.
             const resizeObserver = new ResizeObserver(restore)
             const observeChildren = () =>
               [...box.children].forEach((child) => resizeObserver.observe(child))
@@ -623,10 +591,6 @@ function TimelineView({
               restore()
             })
             mutationObserver.observe(box, { childList: true, subtree: true })
-            // Resolve only once this session actually ends (settled or user took over), not as
-            // soon as it starts - loadOlder awaits this before clearing its own in-flight guard,
-            // so a scroll event our own correction triggers can't start a second loadOlder call
-            // that shifts the window again while this session is still adjusting scrollTop.
             const stop = () => {
               scrollRestoreActiveRef.current = false
               resizeObserver.disconnect()
@@ -650,17 +614,7 @@ function TimelineView({
     if (matrixService.roomAccounts(room.roomId).length < 2) return
     let cancelled = false
     void (async () => {
-      // Hitting the wall only means the primary account's own history ran out - another
-      // logged-in account sharing this room may still have (and be able to decrypt) the
-      // messages just past it. Keep backfilling every joined account's timeline for a few
-      // rounds; combinedRoomEvents will pick up a decrypted copy as soon as one appears, which
-      // flips preJoinHistoryBoundaryReached back to false and this effect stops re-running.
-      // The newly merged history isn't reached through this timeline's own pagination, so
-      // nothing else would otherwise keep the scroll position stable while it's spliced in.
       for (let attempt = 0; attempt < 6 && !cancelled; attempt++) {
-        // Share loadOlder/loadNewer's own in-flight lock instead of firing a second history
-        // request alongside theirs - wait for whatever's already in flight (including its
-        // render/scroll-settle tail) to finish rather than overlapping with it.
         while (loadingRef.current && !cancelled) {
           await new Promise((resolve) => window.setTimeout(resolve, 100))
         }
@@ -729,6 +683,8 @@ function TimelineView({
           const targetTimeline = await matrixService.loadEventContext(targetRoom, eventId)
           if (!targetTimeline?.getEvents().some((candidate) => candidate.getId() === eventId))
             throw new Error('The server could not return that message')
+          followLatest.current = false
+          atBottom.current = false
           setContextTimeline(targetTimeline)
           setWindowEndOffset(0)
           setShowJumpToLatest(true)
@@ -819,9 +775,6 @@ function TimelineView({
     if (windowEndOffset !== 0 || scrollAnchor.current?.type !== 'bottom') return
     const box = messagesRef.current
     if (!box) return
-    // Revealing the live window can mount its final row after the jump handler has run. Align in
-    // the commit that contains that row instead of relying only on a fixed number of animation
-    // frames, which can leave one message-height below the real bottom under load.
     box.scrollTop = box.scrollHeight
     atBottom.current = true
     followLatest.current = true
@@ -1053,77 +1006,81 @@ function TimelineView({
     captureScrollAnchor,
     restoreScrollAnchor,
   ])
-  const loadNewer = useCallback(async () => {
-    if (
-      !room ||
-      !contextTimeline ||
-      loadingRef.current ||
-      !historyPagingReady.current ||
-      historyPagingRoom.current !== roomIdentity
-    )
-      return
-    const box = messagesRef.current
-    if (!box) return
-    loadingRef.current = true
-    setLoadingHistory(true)
-    scrollAnchor.current = undefined
-    const bounds = box.getBoundingClientRect()
-    const visible = [...box.querySelectorAll<HTMLElement>('[data-event-id]')].filter((node) => {
-      const rect = node.getBoundingClientRect()
-      return rect.bottom > bounds.top && rect.top < bounds.bottom
-    })
-    const anchor = visible.at(-1) ?? visible[0]
-    const anchorId = anchor?.dataset.eventId
-    const anchorOffset = anchor ? anchor.getBoundingClientRect().top - bounds.top : 0
-    try {
-      let paginationTimeout: number | undefined
-      await Promise.race([
-        matrixService.paginateTimeline(room, contextTimeline, false),
-        new Promise<never>((_, reject) => {
-          paginationTimeout = window.setTimeout(
-            () => reject(new Error('Loading newer messages timed out')),
-            20_000,
-          )
-        }),
-      ]).finally(() => window.clearTimeout(paginationTimeout))
-      render((x) => x + 1)
-      if (!contextTimeline.getPaginationToken(Direction.Forward)) {
-        followLatest.current = true
-        scrollAnchor.current = { type: 'bottom' }
-        setContextTimeline(undefined)
-        setWindowEndOffset(0)
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            stabilizeTimelinePosition()
-            requestAnimationFrame(markVisibleRead)
-          }),
-        )
-        return
-      }
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            if (anchorId) {
-              const target = box.querySelector<HTMLElement>(
-                `[data-event-id="${CSS.escape(anchorId)}"]`,
-              )
-              if (target)
-                box.scrollTop +=
-                  target.getBoundingClientRect().top -
-                  box.getBoundingClientRect().top -
-                  anchorOffset
-            }
-            resolve()
-          }),
-        ),
+  const loadNewer = useCallback(
+    async (options: { auto?: boolean } = {}) => {
+      if (
+        !room ||
+        !contextTimeline ||
+        loadingRef.current ||
+        !historyPagingReady.current ||
+        historyPagingRoom.current !== roomIdentity
       )
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Could not load newer messages')
-    } finally {
-      loadingRef.current = false
-      setLoadingHistory(false)
-    }
-  }, [room, roomIdentity, contextTimeline, message, stabilizeTimelinePosition, markVisibleRead])
+        return
+      const box = messagesRef.current
+      if (!box) return
+      loadingRef.current = true
+      setLoadingHistory(true)
+      scrollAnchor.current = undefined
+      const bounds = box.getBoundingClientRect()
+      const visible = [...box.querySelectorAll<HTMLElement>('[data-event-id]')].filter((node) => {
+        const rect = node.getBoundingClientRect()
+        return rect.bottom > bounds.top && rect.top < bounds.bottom
+      })
+      const anchor = visible.at(-1) ?? visible[0]
+      const anchorId = anchor?.dataset.eventId
+      const anchorOffset = anchor ? anchor.getBoundingClientRect().top - bounds.top : 0
+      try {
+        let paginationTimeout: number | undefined
+        await Promise.race([
+          matrixService.paginateTimeline(room, contextTimeline, false),
+          new Promise<never>((_, reject) => {
+            paginationTimeout = window.setTimeout(
+              () => reject(new Error('Loading newer messages timed out')),
+              20_000,
+            )
+          }),
+        ]).finally(() => window.clearTimeout(paginationTimeout))
+        render((x) => x + 1)
+        if (!contextTimeline.getPaginationToken(Direction.Forward)) {
+          if (options.auto) return
+          followLatest.current = true
+          scrollAnchor.current = { type: 'bottom' }
+          setContextTimeline(undefined)
+          setWindowEndOffset(0)
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              stabilizeTimelinePosition()
+              requestAnimationFrame(markVisibleRead)
+            }),
+          )
+          return
+        }
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              if (anchorId) {
+                const target = box.querySelector<HTMLElement>(
+                  `[data-event-id="${CSS.escape(anchorId)}"]`,
+                )
+                if (target)
+                  box.scrollTop +=
+                    target.getBoundingClientRect().top -
+                    box.getBoundingClientRect().top -
+                    anchorOffset
+              }
+              resolve()
+            }),
+          ),
+        )
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : 'Could not load newer messages')
+      } finally {
+        loadingRef.current = false
+        setLoadingHistory(false)
+      }
+    },
+    [room, roomIdentity, contextTimeline, message, stabilizeTimelinePosition, markVisibleRead],
+  )
   useEffect(() => {
     if (!room || !historyPagingEnabled || historyPagingRoom.current !== roomIdentity) return
     const frame = requestAnimationFrame(() => {
@@ -1160,7 +1117,7 @@ function TimelineView({
       const box = messagesRef.current
       const hasNewer = !!contextTimeline.getPaginationToken(Direction.Forward)
       if (hasNewer && box && (allEvents.length === 0 || box.scrollHeight <= box.clientHeight + 2))
-        void loadNewer()
+        void loadNewer({ auto: true })
     })
     return () => cancelAnimationFrame(frame)
   }, [
@@ -1236,7 +1193,7 @@ function TimelineView({
   useEffect(() => {
     if (!room || !positioningTimeline) return
     const liveEvents = contextTimeline
-      ? (timeline?.getEvents() ?? [])
+      ? linkedTimelineEvents(contextTimeline, [Direction.Backward, Direction.Forward])
       : linkedRoomTimelineEvents(room)
     const position = initialRoomPosition(
       room,
@@ -1273,14 +1230,13 @@ function TimelineView({
       mountPositionRetryCleanup.current()
       positionStabilizerSuperseded.current = true
       const bottomDistance = box.scrollHeight - box.scrollTop - box.clientHeight
-      if (
-        shouldFollowAddedEvents(
-          followLatest.current,
-          windowEndOffset,
-          bottomDistance,
-          FOLLOW_LATEST_THRESHOLD,
-        )
-      ) {
+      const followBottom = shouldFollowAddedEvents(
+        followLatest.current,
+        windowEndOffset,
+        bottomDistance,
+        FOLLOW_LATEST_THRESHOLD,
+      )
+      if (followBottom && !contextTimeline) {
         scrollAnchor.current = { type: 'bottom' }
         atBottom.current = true
         followLatest.current = true
@@ -1295,6 +1251,8 @@ function TimelineView({
             markVisibleRead()
           }),
         )
+      } else if (followBottom) {
+        // Context timeline: window grows with loaded events without flipping followLatest/atBottom. only explicit "Jump to latest" or manual scroll back resets it.
       } else if (addedEvents > 0) {
         followLatest.current = false
         scrollAnchor.current = undefined
@@ -1313,6 +1271,7 @@ function TimelineView({
     centerEvent,
     markVisibleRead,
     positioningTimeline,
+    contextTimeline,
   ])
   useLayoutEffect(() => {
     if (!room || positioningTimeline || initializedRoom.current !== roomIdentity) return
@@ -2158,8 +2117,6 @@ function TimelineView({
             .map((candidate) => ({
               key: candidate.roomId,
               label: candidate.name,
-              // A room isn't guaranteed to have a canonical alias, but its room ID always
-              // resolves per the Matrix spec - a fabricated "#room-name" alias would not.
               id: candidate.getCanonicalAlias() || candidate.roomId,
               avatar: <RoomAvatar room={candidate} size={28} />,
             }))

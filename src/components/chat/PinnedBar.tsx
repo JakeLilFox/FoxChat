@@ -22,17 +22,27 @@ export function PinnedBar({ room }: { room: Room }) {
       ?.getContent<{ pinned?: string[] }>()?.pinned ?? []
   const pinnedKey = pinnedIds.join(',')
   const [resolved, setResolved] = useState<Map<string, MatrixEvent | null>>(() => new Map())
+  const resolvedRef = useRef(resolved)
+  resolvedRef.current = resolved
   const [index, setIndex] = useState(0)
   const [listOpen, setListOpen] = useState(false)
-  const requested = useRef<Set<string>>(new Set())
+  const [revision, setRevision] = useState(0)
   useEffect(() => {
     setIndex(0)
   }, [pinnedKey])
+  useEffect(
+    () =>
+      matrixService.subscribe({
+        onEvent: (_event, changedRoom) => {
+          if (changedRoom?.roomId === room.roomId) setRevision((value) => value + 1)
+        },
+      }),
+    [room],
+  )
   useEffect(() => {
     let cancelled = false
     for (const id of pinnedKey ? pinnedKey.split(',') : []) {
-      if (requested.current.has(id)) continue
-      requested.current.add(id)
+      if (resolvedRef.current.has(id)) continue
       const local = room.findEventById(id)
       if (local) {
         setResolved((current) => new Map(current).set(id, local))
@@ -45,7 +55,7 @@ export function PinnedBar({ room }: { room: Room }) {
     return () => {
       cancelled = true
     }
-  }, [room, pinnedKey])
+  }, [room, pinnedKey, revision])
   if (!pinnedIds.length) return null
   const currentId = pinnedIds[index % pinnedIds.length]!
   const currentEvent = resolved.get(currentId)
