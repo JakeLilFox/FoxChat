@@ -1,4 +1,5 @@
 export { EmojiButton } from './EmojiButton'
+export { GifButton, GifPickerPanel, type GifSelection } from './GifButton'
 export { type ChatFollower, FollowingChatHost } from './FollowingChatHost'
 export { MessageComposerInput } from './MessageComposerInput'
 export { PollComposerModal } from './PollComposerModal'

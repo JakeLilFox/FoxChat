@@ -3014,6 +3014,68 @@ export const PackCollection = styled.div`
     overscroll-behavior: auto;
   }
 `
+export const GifGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 4px 4px 0;
+  overscroll-behavior: contain;
+  button {
+    position: relative;
+    display: block;
+    width: 100%;
+    aspect-ratio: 1.1;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: ${(p) => p.theme.hover};
+    color: ${(p) => p.theme.text};
+    overflow: hidden;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+    user-select: none;
+  }
+  button:hover {
+    outline: 2px solid ${(p) => p.theme.accent};
+    outline-offset: -2px;
+  }
+  img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .gifSavedBadge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    font-size: 11px;
+  }
+  .gifLoadMore {
+    grid-column: 1 / -1;
+    padding: 8px;
+    border: 0;
+    background: transparent;
+    color: ${(p) => p.theme.accent};
+    cursor: pointer;
+  }
+  @media (max-width: 760px) {
+    grid-template-columns: repeat(2, 1fr);
+    max-height: none;
+    overflow: visible;
+    overscroll-behavior: auto;
+  }
+`
 export const PackEditorWrap = styled.div`
   color: ${(p) => p.theme.text};
   .packNameInput {

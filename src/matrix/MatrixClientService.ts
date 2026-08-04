@@ -38,7 +38,7 @@ import {
 } from 'matrix-js-sdk/lib/crypto-api'
 import { deriveRecoveryKeyFromPassphrase } from 'matrix-js-sdk/lib/crypto-api/key-passphrase.js'
 import { decodeRecoveryKey, encodeRecoveryKey } from 'matrix-js-sdk/lib/crypto-api/recovery-key.js'
-import type { ImageInfo } from 'matrix-js-sdk/lib/@types/media'
+import type { EncryptedFile, ImageInfo } from 'matrix-js-sdk/lib/@types/media'
 import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts'
 import { GroupCallIntent, GroupCallType, type GroupCall } from 'matrix-js-sdk/lib/webrtc/groupCall'
 import { SetPresence } from 'matrix-js-sdk/lib/sync'
@@ -70,6 +70,8 @@ import {
   type RoomImagePackLocation,
   type RoomImagePackStateEvent,
 } from '../lib/emojiData'
+import { downloadAndDecryptMedia } from '../lib/mediaDecrypt'
+import { gifItemsBySlug, pickGifFile, triggerGifShare, type KlipyGif } from '../lib/gifs'
 
 declare global {
   interface Window {
@@ -92,6 +94,20 @@ export type MatrixRegistrationDetails = {
   password: string
   displayName?: string
 }
+
+export type SavedGifItem =
+  | { source: 'klipy'; slug: string; title?: string; preview: string; savedAt: number }
+  | {
+      source: 'matrix'
+      url: string
+      file?: EncryptedFile
+      info?: ImageInfo
+      body?: string
+      savedAt: number
+    }
+const SAVED_GIFS_EVENT_TYPE = 'chat.foxchat.saved_gifs'
+const SAVED_GIFS_MAX_ITEMS = 200
+const savedGifKey = (item: SavedGifItem) => (item.source === 'klipy' ? item.slug : item.url)
 
 export type MatrixRegistrationResult =
   | { status: 'challenge'; challenge: RegistrationChallenge }
@@ -3018,6 +3034,118 @@ export class MatrixClientService {
       {
         order: [...new Set(order)],
       } as never,
+    )
+  }
+
+  savedGifs(client = this.client): SavedGifItem[] {
+    const items = client
+      ?.getAccountData(SAVED_GIFS_EVENT_TYPE as never)
+      ?.getContent<{ items?: SavedGifItem[] }>().items
+    return Array.isArray(items) ? items : []
+  }
+
+  async saveGifItem(item: SavedGifItem, client = this.client) {
+    if (!client) throw new Error('Matrix client is not ready')
+    const key = savedGifKey(item)
+    const next = [
+      item,
+      ...this.savedGifs(client).filter((existing) => savedGifKey(existing) !== key),
+    ].slice(0, SAVED_GIFS_MAX_ITEMS)
+    await client.setAccountData(SAVED_GIFS_EVENT_TYPE as never, { items: next } as never)
+  }
+
+  async removeSavedGifItem(key: string, client = this.client) {
+    if (!client) throw new Error('Matrix client is not ready')
+    const next = this.savedGifs(client).filter((existing) => savedGifKey(existing) !== key)
+    await client.setAccountData(SAVED_GIFS_EVENT_TYPE as never, { items: next } as never)
+  }
+
+  saveGifFromEvent(event: MatrixEvent) {
+    const client = this.clientForEvent(event)
+    if (!client) throw new Error('Matrix client is not ready')
+    const content = event.getContent()
+    const url = content.url as string | undefined
+    if (!url) throw new Error('This GIF is not available to save')
+    return this.saveGifItem(
+      {
+        source: 'matrix',
+        url,
+        file: content.file as EncryptedFile | undefined,
+        info: content.info as ImageInfo | undefined,
+        body: typeof content.body === 'string' ? content.body : undefined,
+        savedAt: Date.now(),
+      },
+      client,
+    )
+  }
+
+  async sendGif(
+    roomId: string,
+    gif: KlipyGif,
+    query: string,
+    reply?: MatrixEvent,
+    accountId?: string,
+  ) {
+    const client = this.clientForRoomAccount(roomId, accountId)
+    if (!client) throw new Error('Client is not started')
+    const variant = pickGifFile(gif, 'md', 'gif') ?? pickGifFile(gif, 'hd', 'gif')
+    if (!variant) throw new Error('This GIF is not available')
+    const response = await fetch(variant.url)
+    if (!response.ok) throw new Error('Could not download this GIF')
+    const blob = await response.blob()
+    const upload = await client.uploadContent(blob, {
+      name: `${gif.slug}.gif`,
+      type: blob.type || 'image/gif',
+    })
+    triggerGifShare(gif.slug, query)
+    const replyId = reply?.getId()
+    return this.queueSend(
+      roomId,
+      () =>
+        client.sendEvent(roomId, EventType.RoomMessage, {
+          msgtype: MsgType.Image,
+          body: gif.title || gif.slug,
+          url: upload.content_uri,
+          info: {
+            mimetype: blob.type || 'image/gif',
+            size: blob.size,
+            w: variant.width,
+            h: variant.height,
+          },
+          ...(replyId ? { 'm.relates_to': { 'm.in_reply_to': { event_id: replyId } } } : {}),
+        }),
+      client,
+    )
+  }
+
+  async sendSavedGif(roomId: string, item: SavedGifItem, reply?: MatrixEvent, accountId?: string) {
+    const client = this.clientForRoomAccount(roomId, accountId)
+    if (!client) throw new Error('Client is not started')
+    if (item.source === 'klipy') {
+      const [gif] = await gifItemsBySlug([item.slug])
+      if (!gif) throw new Error('This GIF is no longer available')
+      return this.sendGif(roomId, gif, '', reply, accountId)
+    }
+    const { blob, mimetype } = await downloadAndDecryptMedia(
+      { url: item.url, file: item.file, info: item.info },
+      client,
+    )
+    const upload = await client.uploadContent(blob, {
+      name: item.body || 'gif.gif',
+      type: mimetype,
+    })
+    const replyId = reply?.getId()
+    return this.queueSend(
+      roomId,
+      () =>
+        client.sendEvent(roomId, EventType.RoomMessage, {
+          msgtype: MsgType.Image,
+          body: item.body || 'GIF',
+          url: upload.content_uri,
+          info: { ...item.info, mimetype },
+          ...(replyId ? { 'm.relates_to': { 'm.in_reply_to': { event_id: replyId } } } : {}),
+        }),
+      client,
     )
   }
 

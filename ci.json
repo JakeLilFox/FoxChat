@@ -794,6 +794,93 @@
     }
   },
   {
+    "type": "variable",
+    "id": "e1e9091f-6dfe-4c83-95f2-22c615c2f52c",
+    "variables": {
+      "docker_container_name_gif": "foxchat-gif"
+    }
+  },
+  {
+    "type": "worker",
+    "id": "6dd074ce-d173-4fb8-98a0-97b05ef41e64",
+    "name": "Gif",
+    "children": [
+      {
+        "type": "checkout",
+        "id": "bb011835-fee1-49c2-9d9d-860b0be6b15f"
+      },
+      {
+        "type": "step",
+        "id": "337f4e25-8d13-4761-b2f7-82eaf9d64dd1",
+        "name": "Build gif gateway image",
+        "tasks": [
+          {
+            "type": "cmd",
+            "id": "83624b15-37d0-4304-9d4f-771abc151de6",
+            "cmd": [
+              "source /home/ubuntu1/.nvm/nvm.sh && nvm use 22 && export VITE_BUILD_VERSION=${version} && npm run build"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "22686321-981e-414f-95bc-95aca834b052",
+            "cmd": [
+              "sudo docker build -f Dockerfile.gif -t ${docker_container_name_gif} ."
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "6625748f-bc11-4002-aef4-2e344efc7617",
+            "cmd": [
+              "sudo docker tag ${docker_container_name_gif} repo.zenzon.net/${docker_container_name_gif}"
+            ]
+          },
+          {
+            "type": "task",
+            "id": "95c420bd-23a6-4b2b-a7ec-4513c99ce68a",
+            "tasks": [
+              "dockerLogin"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "a49477eb-582f-495f-a211-18dbdb8cbd06",
+            "cmd": [
+              "sudo docker push repo.zenzon.net/${docker_container_name_gif}"
+            ]
+          },
+          {
+            "type": "task",
+            "id": "cff95d62-3779-4880-a95c-46a8d8e1d643",
+            "tasks": [
+              "Cluster"
+            ]
+          },
+          {
+            "type": "cmd",
+            "id": "c6c10d35-92ab-493d-9938-54ba6ddcada7",
+            "cmd": [
+              "curl -X POST -H \"X-Global-Auth-Key: ${cluster_key}\" -d \"repo.zenzon.net/${docker_container_name_gif}:latest\" ${cluster} "
+            ]
+          }
+        ]
+      }
+    ],
+    "image": "build-container-tauri",
+    "depends": [
+      "Test"
+    ],
+    "trigger": {
+      "logic": {
+        "and": [
+          {
+            "branch": "main"
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "worker",
     "id": "6dd074ce-d173-4fb8-98a0-97b05ef41e63",
     "name": "Push",
@@ -859,7 +946,7 @@
         ]
       }
     ],
-    "image": "repo.zenzon.net/foxchat-ci-toolchain:latest",
+    "image": "build-container-tauri",
     "depends": [
       "Test"
     ],

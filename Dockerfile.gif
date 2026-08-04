@@ -1,0 +1,8 @@
+FROM node:lts-slim
+
+ADD gif-gateway/ ./
+RUN npm install
+
+EXPOSE 3987
+
+CMD ["npm", "run", "start"]

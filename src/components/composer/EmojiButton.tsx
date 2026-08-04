@@ -1,4 +1,6 @@
 import { MatrixEmoteImage } from '../message'
+import { GifPickerPanel, type GifSelection } from './GifButton'
+import { useMediaQuery } from '../../lib/hooks'
 import {
   type MatrixEmote,
   type MatrixEmotePack,
@@ -493,12 +495,14 @@ export function EmojiButton({
   onUnicode,
   onEmote,
   onSticker,
+  onSelectGif,
   onAvailableEmotes,
 }: {
   room: Room
   onUnicode: (emoji: string) => void
   onEmote: (emote: MatrixEmote) => void
   onSticker: (emote: MatrixEmote) => void
+  onSelectGif?: (selection: GifSelection) => void
   onAvailableEmotes?: (emotes: MatrixEmote[]) => void
 }) {
   const { message } = AntApp.useApp()
@@ -508,6 +512,14 @@ export function EmojiButton({
   const [matrixContentTab, setMatrixContentTab] = useState(matrixPickerContentTab)
   const triggerRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  // The GIF tab only exists on small screens, where a separate composer button doesn't fit.
+  const showGifTab = useMediaQuery('(max-width:760px)') && !!onSelectGif
+  useEffect(() => {
+    if (sourceTab === 'gif' && !showGifTab) {
+      setSourceTab('unicode')
+      setEmojiPickerSourceTab('unicode')
+    }
+  }, [showGifTab, sourceTab])
   useEffect(() => {
     const sync = () => setOpen(emojiOpenFromUrl())
     window.addEventListener('popstate', sync)
@@ -909,7 +921,7 @@ export function EmojiButton({
         size="small"
         activeKey={sourceTab}
         onChange={(tab) => {
-          if (tab !== 'unicode' && tab !== 'matrix') return
+          if (tab !== 'unicode' && tab !== 'matrix' && tab !== 'gif') return
           setSourceTab(tab)
           setEmojiPickerSourceTab(tab)
         }}
@@ -920,6 +932,23 @@ export function EmojiButton({
             label: `Matrix (${allCustom.length})`,
             children: matrixTabs,
           },
+          ...(showGifTab && onSelectGif
+            ? [
+                {
+                  key: 'gif',
+                  label: 'GIF',
+                  children: (
+                    <GifPickerPanel
+                      room={room}
+                      onSelect={(selection) => {
+                        onSelectGif(selection)
+                        close()
+                      }}
+                    />
+                  ),
+                },
+              ]
+            : []),
         ]}
       />
     </EmojiPanel>

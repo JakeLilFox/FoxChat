@@ -301,6 +301,21 @@ export const openEmojiUrl = () => {
 export const closeEmojiUrl = () => {
   if (emojiOpenFromUrl()) history.back()
 }
+export const gifOpenFromUrl = () => new URL(window.location.href).searchParams.get('gif') === 'true'
+export const openGifUrl = () => {
+  if (gifOpenFromUrl()) return
+  const url = new URL(window.location.href)
+  url.searchParams.set('gif', 'true')
+  history.pushState(
+    { ...history.state, foxchatGif: true },
+    '',
+    `${url.pathname}${url.search}${url.hash}`,
+  )
+}
+// Consume the pushed gif-picker entry so it cannot reappear on the next Back.
+export const closeGifUrl = () => {
+  if (gifOpenFromUrl()) history.back()
+}
 export const messageMenuOpenFromUrl = () =>
   new URL(window.location.href).searchParams.get('messageMenu') === 'true'
 export const openMessageMenuUrl = () => {

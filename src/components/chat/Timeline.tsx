@@ -1,5 +1,6 @@
 import { CallMembershipStatus } from '../calls/CallMembershipStatus'
 import { EmojiButton } from '../composer'
+import { GifButton, type GifSelection } from '../composer'
 import { type ChatFollower } from '../composer'
 import { MemberAvatar } from '../profile'
 import { MatrixEmoteImage, MembershipStatus } from '../message'
@@ -45,7 +46,7 @@ import {
 } from '../../lib/eventHelpers'
 import { formatFileSize } from '../../lib/format'
 import { assignGalleryIds, galleryTimelineItems } from '../../lib/gallery'
-import { useMediaUrl } from '../../lib/hooks'
+import { useMediaQuery, useMediaUrl } from '../../lib/hooks'
 import {
   anonymizedFile,
   compressedImageFile,
@@ -269,6 +270,7 @@ function TimelineView({
   const roomIdentity = room ? timelineRoomIdentity(room) : undefined
   const visibleAccountId = room ? matrixService.selectedRoomAccountId(room.roomId) : undefined
   const { message } = AntApp.useApp()
+  const isSmallScreen = useMediaQuery('(max-width:760px)')
   const [draft, setDraft] = useState('')
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false)
   const [availableInlineEmotes, setAvailableInlineEmotes] = useState<MatrixEmote[]>([])
@@ -2026,6 +2028,24 @@ function TimelineView({
       message.error(e instanceof Error ? e.message : 'Sticker failed')
     }
   }
+  const sendGif = async (selection: GifSelection) => {
+    try {
+      const accountId = matrixService.selectedRoomAccountId(room.roomId)
+      if (selection.type === 'live')
+        await matrixService.sendGif(
+          room.roomId,
+          selection.gif,
+          selection.query,
+          replyingTo,
+          accountId,
+        )
+      else await matrixService.sendSavedGif(room.roomId, selection.item, replyingTo, accountId)
+      setReplyingTo(undefined)
+      render((x) => x + 1)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'GIF failed')
+    }
+  }
   const insertInlineEmote = (emote: MatrixEmote) => {
     const token = `:${emote.name}:`
     inlineEmotesRef.current.set(token, emote)
@@ -2196,6 +2216,7 @@ function TimelineView({
   const sendingAccountUserId = sendingAccount?.userId || readingUserId
   const sendingRoom = sendingAccount?.client.getRoom(room.roomId)
   const canSendMessages = sendingRoom?.maySendMessage() === true
+  const composerEmpty = !editing && !draft.trim() && pendingImages.length === 0
   const addPendingFiles = (files: File[]) => {
     if (!canSendMessages || !files.length) return
     setPendingImages((current) => [...current, ...files])
@@ -2823,8 +2844,12 @@ function TimelineView({
                 onUnicode={(emoji) => change(draftRef.current + emoji)}
                 onEmote={insertInlineEmote}
                 onSticker={(emote) => void sendSticker(emote)}
+                onSelectGif={(selection) => void sendGif(selection)}
                 onAvailableEmotes={setAvailableInlineEmotes}
               />
+              {!isSmallScreen && (
+                <GifButton room={room} onSelect={(selection) => void sendGif(selection)} />
+              )}
               {recording ? (
                 <>
                   <span
@@ -2852,19 +2877,33 @@ function TimelineView({
                   />
                 </>
               ) : (
-                <IconBtn
-                  aria-label="Record a voice message"
-                  shape="circle"
-                  icon={<AudioOutlined />}
-                  onClick={() => void startRecording()}
-                />
+                <>
+                  {isSmallScreen && composerEmpty ? (
+                    <SendBtn
+                      aria-label="Record a voice message"
+                      onClick={() => void startRecording()}
+                      icon={<AudioOutlined />}
+                    />
+                  ) : (
+                    <>
+                      {!isSmallScreen && (
+                        <IconBtn
+                          aria-label="Record a voice message"
+                          shape="circle"
+                          icon={<AudioOutlined />}
+                          onClick={() => void startRecording()}
+                        />
+                      )}
+                      <SendBtn
+                        aria-label="Send message"
+                        disabled={!canSendMessages}
+                        onClick={() => void send()}
+                        icon={<SendOutlined />}
+                      />
+                    </>
+                  )}
+                </>
               )}
-              <SendBtn
-                aria-label="Send message"
-                disabled={!canSendMessages}
-                onClick={() => void send()}
-                icon={<SendOutlined />}
-              />
             </Composer>
             {sendingAccountPicker}
           </ComposerArea>

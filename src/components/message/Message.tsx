@@ -89,6 +89,7 @@ import {
   ExpandOutlined,
   FileOutlined,
   FlagOutlined,
+  GifOutlined,
   LockOutlined,
   MessageOutlined,
   PushpinOutlined,
@@ -243,6 +244,14 @@ export const Message = memo(function Message({
   const sender = event.sender
   const name = sender?.name || event.getSender() || 'Unknown'
   const type = event.getType() === 'm.sticker' ? 'm.sticker' : c.msgtype
+  const isGifMessage =
+    type === 'm.image' &&
+    (String(c.info?.mimetype ?? '').toLowerCase() === 'image/gif' ||
+      /\.gif(\?|$)/i.test(String(c.url ?? c.body ?? '')))
+  const gifSaved =
+    isGifMessage &&
+    !!c.url &&
+    matrixService.savedGifs(client).some((item) => item.source === 'matrix' && item.url === c.url)
   const mediaCacheCategory =
     type === 'm.sticker'
       ? 'other-stickers'
@@ -270,6 +279,7 @@ export const Message = memo(function Message({
     x: number
     y: number
     image?: boolean
+    isGif?: boolean
     selection?: string
   }>()
   const [reactionText, setReactionText] = useState('')
@@ -288,7 +298,7 @@ export const Message = memo(function Message({
     )
     return belongsToMessage ? text : undefined
   }
-  const openMenu = (value: { x: number; y: number; image?: boolean }) => {
+  const openMenu = (value: { x: number; y: number; image?: boolean; isGif?: boolean }) => {
     if (isAndroidApp()) openMessageMenuUrl()
     setMenu({ ...value, selection: selectedMessageText() })
   }
@@ -427,6 +437,24 @@ export const Message = memo(function Message({
       await saveBlobDownload(blob, filename)
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Could not save image')
+    }
+  }
+  const saveGif = async () => {
+    closeMenu()
+    try {
+      await matrixService.saveGifFromEvent(event)
+      message.success('GIF saved')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Could not save GIF')
+    }
+  }
+  const removeSavedGif = async () => {
+    closeMenu()
+    try {
+      await matrixService.removeSavedGifItem(String(c.url), client)
+      message.success('Removed from saved GIFs')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Could not update saved GIFs')
     }
   }
   const remove = () => {
@@ -1127,10 +1155,12 @@ export const Message = memo(function Message({
       }}
       onContextMenu={(e) => {
         e.preventDefault()
+        const overImage = !!(e.target as HTMLElement).closest('img')
         openMenu({
           x: e.clientX,
           y: e.clientY,
-          image: !!mediaUrl && !!(e.target as HTMLElement).closest('img'),
+          image: !!mediaUrl && overImage,
+          isGif: isGifMessage && overImage,
         })
       }}
       onTouchStart={(e) => {
@@ -1339,6 +1369,17 @@ export const Message = memo(function Message({
                       label: 'Save image',
                       icon: <DownloadOutlined />,
                       onClick: () => void saveImage(),
+                    },
+                    { type: 'divider' as const },
+                  ]
+                : []),
+              ...(menu?.isGif
+                ? [
+                    {
+                      key: 'save-gif',
+                      label: gifSaved ? 'Remove saved GIF' : 'Save GIF',
+                      icon: <GifOutlined />,
+                      onClick: () => void (gifSaved ? removeSavedGif() : saveGif()),
                     },
                     { type: 'divider' as const },
                   ]

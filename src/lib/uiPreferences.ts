@@ -1,12 +1,14 @@
-export type EmojiPickerSourceTab = 'unicode' | 'matrix'
+export type EmojiPickerSourceTab = 'unicode' | 'matrix' | 'gif'
 export type MatrixPickerContentTab = 'emoticon' | 'sticker'
 
 export const EMOJI_PICKER_SOURCE_TAB_KEY = 'foxchat.emojiPicker.sourceTab'
 export const MATRIX_PICKER_CONTENT_TAB_KEY = 'foxchat.emojiPicker.matrixContentTab'
 export const DESKTOP_DETAILS_OPEN_KEY = 'foxchat.desktopDetailsOpen'
 
-export const emojiPickerSourceTab = (): EmojiPickerSourceTab =>
-  localStorage.getItem(EMOJI_PICKER_SOURCE_TAB_KEY) === 'matrix' ? 'matrix' : 'unicode'
+export const emojiPickerSourceTab = (): EmojiPickerSourceTab => {
+  const stored = localStorage.getItem(EMOJI_PICKER_SOURCE_TAB_KEY)
+  return stored === 'matrix' || stored === 'gif' ? stored : 'unicode'
+}
 
 export const setEmojiPickerSourceTab = (tab: EmojiPickerSourceTab) =>
   localStorage.setItem(EMOJI_PICKER_SOURCE_TAB_KEY, tab)

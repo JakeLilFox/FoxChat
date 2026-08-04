@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
 import { MatrixClient } from 'matrix-js-sdk'
-import { Attachment, EncryptedAttachment } from '@matrix-org/matrix-sdk-crypto-wasm'
 import { matrixService } from '../matrix/MatrixClientService'
 import { getCachedMedia, putCachedMedia, type MediaCacheCategory } from './mediaCache'
+import { downloadAndDecryptMedia } from './mediaDecrypt'
 
-type MediaDownload = { bytes: ArrayBuffer; mime?: string | null }
-const mediaDownloads = new Map<string, Promise<MediaDownload>>()
+const mediaDownloads = new Map<string, Promise<{ blob: Blob; mimetype: string }>>()
 
 export type MediaCacheHint = {
   category: MediaCacheCategory
@@ -34,51 +33,14 @@ export function useMediaUrl(
     let retryTimer: number | undefined
     let cancelled = false
     const retryDelays = [0, 1000, 3000, 10000, 30000]
-    const request = async () => {
-      if (authenticated) {
-        try {
-          const response = await fetch(authenticated, {
-            headers: client?.getAccessToken()
-              ? { Authorization: `Bearer ${client.getAccessToken()}` }
-              : {},
-          })
-          if (response.ok) return response
-        } catch {
-          /* try the legacy endpoint */
-        }
-      }
-      if (legacy) {
-        try {
-          const response = await fetch(legacy)
-          if (response.ok) return response
-        } catch {
-          /* retry below */
-        }
-      }
-      throw new Error('Media download failed')
-    }
     const download = () => {
       const key = `${authenticated ?? ''}|${legacy ?? ''}|${client?.getAccessToken() ?? ''}|${encrypted ? JSON.stringify(encrypted) : ''}`
       const existing = mediaDownloads.get(key)
       if (existing) return existing
-      const pending = (async (): Promise<MediaDownload> => {
-        const response = await request()
-        const data = await response.arrayBuffer()
-        let bytes: ArrayBuffer = data
-        if (encrypted?.url) {
-          const attachment = new EncryptedAttachment(
-            new Uint8Array(data),
-            JSON.stringify(encrypted),
-          )
-          const clear = Attachment.decrypt(attachment)
-          attachment.free()
-          bytes = clear.buffer.slice(
-            clear.byteOffset,
-            clear.byteOffset + clear.byteLength,
-          ) as ArrayBuffer
-        }
-        return { bytes, mime: response.headers.get('content-type') }
-      })()
+      const pending = downloadAndDecryptMedia(
+        { url: uri, file: encrypted, info: { mimetype: content.info?.mimetype } },
+        client,
+      )
       mediaDownloads.set(key, pending)
       void pending.finally(() => mediaDownloads.delete(key)).catch(() => {})
       return pending
@@ -100,9 +62,7 @@ export function useMediaUrl(
             return
           }
         }
-        const { bytes, mime } = await download()
-        const mimetype = content.info?.mimetype ?? mime ?? 'application/octet-stream'
-        const blob = new Blob([bytes], { type: mimetype })
+        const { blob, mimetype } = await download()
         const nextUrl = URL.createObjectURL(blob)
         if (cancelled) {
           URL.revokeObjectURL(nextUrl)
