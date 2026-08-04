@@ -1213,7 +1213,7 @@ function TimelineView({
     cacheRoomTimeline(activeRoom, true)
     const mountEvents = matrixService.combinedRoomEvents(
       activeRoom,
-      activeRoom.getLiveTimeline().getEvents(),
+      linkedRoomTimelineEvents(activeRoom),
     )
     positioningBoundaryEventId.current = mountEvents.at(-1)?.getId() ?? null
     const position = initialRoomPosition(activeRoom, mountEvents)
@@ -1227,7 +1227,9 @@ function TimelineView({
   }, [roomIdentity])
   useEffect(() => {
     if (!room || !positioningTimeline) return
-    const liveEvents = timeline?.getEvents() ?? []
+    const liveEvents = contextTimeline
+      ? (timeline?.getEvents() ?? [])
+      : linkedRoomTimelineEvents(room)
     const position = initialRoomPosition(
       room,
       matrixService.combinedRoomEvents(
@@ -1245,7 +1247,7 @@ function TimelineView({
     const delay = Math.max(0, Math.min(450, 1_800 - elapsed))
     const timer = window.setTimeout(() => setPositioningTimeline(false), delay)
     return () => window.clearTimeout(timer)
-  }, [room, roomIdentity, matrixRevision, positioningTimeline, timeline])
+  }, [room, roomIdentity, matrixRevision, positioningTimeline, timeline, contextTimeline])
   useLayoutEffect(() => {
     if (!room) return
     const box = messagesRef.current

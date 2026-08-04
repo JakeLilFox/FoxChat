@@ -168,11 +168,33 @@ function MatrixPackBrowser({
 }) {
   const collectionRef = useRef<HTMLDivElement>(null)
   const packRefs = useRef(new Map<string, HTMLDivElement>())
+  const jumpButtonRefs = useRef(new Map<string, HTMLButtonElement>())
+  const touchDragSuppressClickRef = useRef(false)
+  const touchDragRef = useRef<{
+    pointerId: number
+    source: string
+    startX: number
+    startY: number
+    active: boolean
+    timer: number
+    button: HTMLButtonElement
+  } | null>(null)
   const [drag, setDrag] = useState<{
     source: string
     target?: string
     edge?: 'before' | 'after'
   }>()
+  // Native HTML5 drag-and-drop (used above) never fires on touch devices, so pack reordering on
+  // mobile needs its own touch-and-hold gesture. Movement before the hold completes is treated as
+  // the user scrolling the pack bar and cancels the drag instead of hijacking the scroll.
+  const packAtPoint = (x: number, y: number) => {
+    for (const [orderKey, node] of jumpButtonRefs.current) {
+      const bounds = node.getBoundingClientRect()
+      if (x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom)
+        return orderKey
+    }
+    return undefined
+  }
   const searching = !!search.trim()
   const availableItems = groups.flatMap((group) => group.items)
   const restoreStoredItem = (item: StoredEmote): MatrixEmote =>
@@ -296,6 +318,10 @@ function MatrixPackBrowser({
           <button
             key={pack.id}
             type="button"
+            ref={(node) => {
+              if (node) jumpButtonRefs.current.set(pack.orderKey, node)
+              else jumpButtonRefs.current.delete(pack.orderKey)
+            }}
             className={[
               drag?.source === pack.orderKey ? 'dragging' : '',
               drag?.target === pack.orderKey && drag.edge ? `drop-${drag.edge}` : '',
@@ -305,7 +331,13 @@ function MatrixPackBrowser({
             draggable={pack.reorderable}
             title={pack.label}
             aria-label={`Jump to ${pack.label}`}
-            onClick={() => jumpToPack(pack.id)}
+            onClick={() => {
+              if (touchDragSuppressClickRef.current) {
+                touchDragSuppressClickRef.current = false
+                return
+              }
+              jumpToPack(pack.id)
+            }}
             onDragStart={(event) => {
               if (!pack.reorderable) return
               setDrag({ source: pack.orderKey })
@@ -330,6 +362,86 @@ function MatrixPackBrowser({
               if (drag?.source && drag.source !== pack.orderKey) {
                 onMovePack(drag.source, pack.orderKey, drag.edge ?? 'before')
               }
+              setDrag(undefined)
+            }}
+            onPointerDown={(event) => {
+              if (!pack.reorderable || event.pointerType !== 'touch') return
+              const button = event.currentTarget
+              const pointerId = event.pointerId
+              const startX = event.clientX
+              const startY = event.clientY
+              const timer = window.setTimeout(() => {
+                const state = touchDragRef.current
+                if (!state || state.pointerId !== pointerId) return
+                state.active = true
+                button.style.touchAction = 'none'
+                try {
+                  button.setPointerCapture(pointerId)
+                } catch {
+                  // Pointer may already have been released; the move/up handlers below still
+                  // work without capture since touch pointer events implicitly target the
+                  // element the gesture started on.
+                }
+                if (navigator.vibrate) navigator.vibrate(10)
+                setDrag({ source: pack.orderKey })
+              }, LONG_PRESS_MS)
+              touchDragRef.current = {
+                pointerId,
+                source: pack.orderKey,
+                startX,
+                startY,
+                active: false,
+                timer,
+                button,
+              }
+            }}
+            onPointerMove={(event) => {
+              const state = touchDragRef.current
+              if (!state || state.pointerId !== event.pointerId) return
+              if (!state.active) {
+                if (Math.hypot(event.clientX - state.startX, event.clientY - state.startY) > 8) {
+                  window.clearTimeout(state.timer)
+                  touchDragRef.current = null
+                }
+                return
+              }
+              event.preventDefault()
+              const targetKey = packAtPoint(event.clientX, event.clientY)
+              const targetPack = packs.find((candidate) => candidate.orderKey === targetKey)
+              if (!targetPack?.reorderable || targetPack.orderKey === state.source || !targetKey) {
+                setDrag({ source: state.source })
+                return
+              }
+              const targetBounds = jumpButtonRefs.current.get(targetKey)?.getBoundingClientRect()
+              if (!targetBounds) return
+              const edge =
+                event.clientX < targetBounds.left + targetBounds.width / 2 ? 'before' : 'after'
+              setDrag((current) =>
+                current?.target === targetKey && current.edge === edge
+                  ? current
+                  : { source: state.source, target: targetKey, edge },
+              )
+            }}
+            onPointerUp={(event) => {
+              const state = touchDragRef.current
+              if (!state || state.pointerId !== event.pointerId) return
+              window.clearTimeout(state.timer)
+              if (state.active) {
+                state.button.style.touchAction = ''
+                touchDragSuppressClickRef.current = true
+                if (drag?.source && drag.target && drag.source !== drag.target) {
+                  onMovePack(drag.source, drag.target, drag.edge ?? 'before')
+                }
+                setDrag(undefined)
+              }
+              touchDragRef.current = null
+            }}
+            onPointerCancel={(event) => {
+              const state = touchDragRef.current
+              if (!state || state.pointerId !== event.pointerId) return
+              window.clearTimeout(state.timer)
+              if (state.active) state.button.style.touchAction = ''
+              touchDragRef.current = null
               setDrag(undefined)
             }}
           >

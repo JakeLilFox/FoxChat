@@ -2926,6 +2926,9 @@ export const PackJumpBar = styled.div`
     background: transparent;
     color: ${(p) => p.theme.text};
     cursor: pointer;
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+    user-select: none;
   }
   button:hover,
   button:focus-visible {
