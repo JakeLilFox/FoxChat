@@ -1,4 +1,4 @@
-import { isDesktopApp } from './desktopUpdates'
+import { isNativeApp } from './nativeBackground'
 
 const EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:'])
 
@@ -14,7 +14,7 @@ export function isExternalUrl(value: string) {
 export async function openExternalUrl(value: string) {
   if (!isExternalUrl(value)) throw new Error('FoxChat refused to open an unsafe external URL.')
 
-  if (isDesktopApp()) {
+  if (isNativeApp()) {
     const { openUrl } = await import('@tauri-apps/plugin-opener')
     await openUrl(value)
     return
@@ -24,7 +24,7 @@ export async function openExternalUrl(value: string) {
 }
 
 export function listenForDesktopExternalLinks(target: Document = document) {
-  if (!isDesktopApp()) return () => undefined
+  if (!isNativeApp()) return () => undefined
 
   const openLink = (event: MouseEvent) => {
     if (event.defaultPrevented || event.button !== 0) return

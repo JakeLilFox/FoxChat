@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop-external-links",
-  "description": "Allows FoxChat desktop to open safe external URLs with their default application",
+  "description": "Allows FoxChat to open safe external URLs with their default application",
   "windows": ["main"],
-  "platforms": ["linux", "macOS", "windows"],
+  "platforms": ["linux", "macOS", "windows", "android"],
   "permissions": ["opener:allow-open-url", "opener:allow-default-urls"]
 }
