@@ -24,7 +24,6 @@ tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-remote-push = { path = "vendor/tauri-plugin-remote-push" }
-tauri-plugin-opener = "2"
 futures-util = "0.3"
 tokio = { version = "1", features = ["macros", "net", "sync", "time"] }
 tokio-tungstenite = "0.28"
@@ -32,8 +31,12 @@ tokio-tungstenite = "0.28"
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 notify-rust = "4"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
+
+[target."cfg(target_os = \"android\")".dependencies]
+tauri-plugin-opener = "2"
 
 [target."cfg(target_os = \"linux\")".dependencies]
 gtk = { version = "0.18", features = ["v3_24"] }
