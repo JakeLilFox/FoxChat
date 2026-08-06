@@ -78,4 +78,33 @@ describe('desktop unread badge', () => {
     expect(badgeMocks.setOverlayIcon).toHaveBeenCalledWith(expect.objectContaining({ rid: 1 }))
     expect(badgeMocks.closeImage).toHaveBeenCalledOnce()
   })
+
+  it('re-applies the latest count after a slow update resolves late, instead of getting stuck', async () => {
+    window.__TAURI__ = {}
+
+    await updateDesktopUnreadBadge(1)
+    badgeMocks.setBadgeCount.mockClear()
+
+    let resolveFirst: () => void = () => {}
+    badgeMocks.setBadgeCount.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (resolveFirst = resolve)),
+    )
+
+    const first = updateDesktopUnreadBadge(5)
+    const second = updateDesktopUnreadBadge(0)
+    await second
+
+    await vi.waitFor(() => expect(badgeMocks.setBadgeCount).toHaveBeenCalledWith(5))
+    resolveFirst()
+    await first
+
+    const calls = badgeMocks.setBadgeCount.mock.calls.map(([value]) => value)
+    expect(calls).toEqual([5, undefined])
+
+    badgeMocks.setBadgeCount.mockClear()
+    await updateDesktopUnreadBadge(0)
+    expect(badgeMocks.setBadgeCount).not.toHaveBeenCalled()
+    await updateDesktopUnreadBadge(3)
+    expect(badgeMocks.setBadgeCount).toHaveBeenCalledWith(3)
+  })
 })

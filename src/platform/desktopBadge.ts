@@ -3,6 +3,9 @@ const BADGE_SIZE = 32
 
 let lastUnreadCount: number | undefined
 
+let pendingCount: number | undefined
+let applying = false
+
 function badgePixels(label: string) {
   const canvas = document.createElement('canvas')
   canvas.width = BADGE_SIZE
@@ -23,11 +26,7 @@ function badgePixels(label: string) {
   return context.getImageData(0, 0, BADGE_SIZE, BADGE_SIZE).data
 }
 
-export async function updateDesktopUnreadBadge(unreadCount: number) {
-  if (!window.__TAURI__) return
-  const count = Math.max(0, Math.floor(unreadCount))
-  if (count === lastUnreadCount) return
-
+async function applyBadge(count: number) {
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window')
     const currentWindow = getCurrentWindow()
@@ -58,6 +57,27 @@ export async function updateDesktopUnreadBadge(unreadCount: number) {
   }
 }
 
+export async function updateDesktopUnreadBadge(unreadCount: number) {
+  if (!window.__TAURI__) return
+  const count = Math.max(0, Math.floor(unreadCount))
+  if (count === lastUnreadCount) return
+  pendingCount = count
+  if (applying) return
+
+  applying = true
+  try {
+    while (pendingCount !== undefined && pendingCount !== lastUnreadCount) {
+      const target = pendingCount
+      pendingCount = undefined
+      await applyBadge(target)
+    }
+  } finally {
+    applying = false
+  }
+}
+
 export function resetDesktopUnreadBadgeForTests() {
   lastUnreadCount = undefined
+  pendingCount = undefined
+  applying = false
 }
