@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const badgeMocks = vi.hoisted(() => {
   const closeImage = vi.fn(() => Promise.resolve())
   return {
-    setBadgeCount: vi.fn(() => Promise.resolve()),
+    setBadgeCount: vi.fn((_count?: number) => Promise.resolve()),
     setOverlayIcon: vi.fn(() => Promise.resolve()),
     closeImage,
     newImage: vi.fn(() => Promise.resolve({ rid: 1, close: closeImage })),
@@ -98,7 +98,7 @@ describe('desktop unread badge', () => {
     resolveFirst()
     await first
 
-    const calls = badgeMocks.setBadgeCount.mock.calls.map(([value]) => value)
+    const calls = badgeMocks.setBadgeCount.mock.calls.map((call) => call[0])
     expect(calls).toEqual([5, undefined])
 
     badgeMocks.setBadgeCount.mockClear()
