@@ -2941,7 +2941,12 @@ export class MatrixClientService {
   getRoomNotificationMode(roomId: string, accountId?: string): RoomNotificationMode {
     const client = this.clientForRoomAccount(roomId, accountId) ?? this.accountClient(accountId)
     const rule = client?.getRoomPushRule('global', roomId)
-    if (rule?.actions.includes(PushRuleActionName.DontNotify)) return 'none'
+    if (rule?.actions.includes(PushRuleActionName.DontNotify)) {
+      const isMentionsOnly = rule.actions.some(
+        (action) => typeof action === 'object' && action.set_tweak === TweakName.Highlight,
+      )
+      return isMentionsOnly ? 'mentions' : 'none'
+    }
     if (rule?.actions.includes(PushRuleActionName.Notify)) return 'all'
     return 'mentions'
   }
@@ -2978,6 +2983,9 @@ export class MatrixClientService {
         } else if (mode === 'all') {
           await client.addPushRule('global', PushRuleKind.RoomSpecific, targetId, {
             actions: [PushRuleActionName.Notify, { set_tweak: TweakName.Sound, value: 'default' }],
+          })
+          await client.addPushRule('global', PushRuleKind.RoomSpecific, targetId, {
+            actions: [PushRuleActionName.DontNotify, { set_tweak: TweakName.Highlight, value: false }],
           })
         }
       }),
