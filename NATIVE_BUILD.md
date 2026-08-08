@@ -37,3 +37,10 @@ npm run android:aab
 ## Notifications
 
 The native notification plugin requests permission and displays new incoming Matrix messages while FoxChat is running but unfocused. Receiving messages after Android has terminated the process requires a Matrix push gateway and an FCM-backed push service; that server-side infrastructure is separate from the app build.
+
+## CLI / headless mode
+
+The desktop binary can be launched non-interactively with `--homeserver`,
+`--username`, `--password`, `--recovery-key`, `--persist`, `--automation-port`,
+`--automation-key`, and `--headless` flags — including on Linux servers with no
+display at all. See [DESKTOP_CLI.md](DESKTOP_CLI.md).

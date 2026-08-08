@@ -34,6 +34,9 @@ that don't spam you.
   event/state inspector for debugging rooms
 - **Local automation API:** an optional local WebSocket API for stream
   decks, overlays, and bots; see [AUTOMATION_API.md](AUTOMATION_API.md)
+- **Desktop CLI mode:** sign in, unlock encryption, and enable the automation
+  API from command-line flags for unattended/headless use; see
+  [DESKTOP_CLI.md](DESKTOP_CLI.md)
 
 ## Repository layout
 

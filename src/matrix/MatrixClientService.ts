@@ -219,7 +219,7 @@ const normalizedPowerLevel = (value: unknown) =>
     : typeof value === 'number' && Number.isFinite(value)
       ? value
       : 0
-const normalizeHomeserverInput = (value: string) => {
+export const normalizeHomeserverInput = (value: string) => {
   const normalized = value.replace(/\/$/, '')
   if (/^https?:\/\//i.test(normalized)) return normalized
   if (normalized.startsWith('//')) return `https:${normalized}`

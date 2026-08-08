@@ -10,6 +10,7 @@ import { ThemeProvider } from 'styled-components'
 import { matrixService } from '../matrix/MatrixClientService'
 import { listenForAndroidResume, syncNativeBackground } from '../platform/nativeBackground'
 import { startAutomationApiIntegration } from '../platform/automationApi'
+import { applyCliLogin, fetchCliLoginOptions } from '../platform/cliBootstrap'
 import { listenForDesktopExternalLinks } from '../platform/externalLinks'
 
 export function Root() {
@@ -47,16 +48,30 @@ export function Root() {
     }
   }, [])
   useEffect(() => {
-    const session = matrixService.restoreSession()
-    if (!session) {
-      setAuth('guest')
-      return
-    }
-    setAuth('syncing')
-    matrixService
-      .start(session)
-      .then(() => setAuth('ready'))
-      .catch(() => setAuth('guest'))
+    void (async () => {
+      const cliOptions = await fetchCliLoginOptions()
+      if (cliOptions) {
+        setAuth('syncing')
+        const result = await applyCliLogin(cliOptions)
+        if (result === 'guest') {
+          const { exit } = await import('@tauri-apps/plugin-process')
+          await exit(1)
+          return
+        }
+        setAuth('ready')
+        return
+      }
+      const session = matrixService.restoreSession()
+      if (!session) {
+        setAuth('guest')
+        return
+      }
+      setAuth('syncing')
+      matrixService
+        .start(session)
+        .then(() => setAuth('ready'))
+        .catch(() => setAuth('guest'))
+    })()
   }, [])
   return (
     <ConfigProvider

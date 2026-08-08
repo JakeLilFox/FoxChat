@@ -97,9 +97,10 @@ Common error codes are `invalid_request`, `invalid_params`, `not_found`,
 | Method | Parameters | Result/purpose |
 | --- | --- | --- |
 | `system.ping` | none | Protocol health and version |
-| `rooms.list` | none | Joined/known rooms, names, membership, unread counts, avatars |
+| `rooms.list` | none | Joined/known rooms, sorted the same way as the room list in the app |
 | `room.get` | `room_id` | One room’s status |
 | `room.read` | `room_id` | Mark the latest known event as read |
+| `room.timeline` | `room_id`; optional `limit`, `before_event_id`, `after_event_id` | A page of a room’s message timeline, for scrolling through history |
 | `message.send` | `room_id`, `body` | Send a plain Matrix text message |
 | `user.get` | `user_id`, optional `room_id` | Display name, avatar, banner, presence, and room membership |
 | `user.avatar.get` | `user_id`, optional `room_id` | Matrix and downloadable HTTP avatar URLs |
@@ -119,6 +120,134 @@ Call input and screen-share viewing commands require that the corresponding
 call is currently open in FoxChat. They return `call_unavailable` otherwise.
 Volume changes are local playback preferences and do not mute another user for
 other participants.
+
+### Listing rooms
+
+`rooms.list` returns every joined room, sorted exactly like the room list in
+FoxChat itself: pinned rooms first (in the order you pinned them), then
+everything else by most recent activity.
+
+```json
+{"type":"request","id":"list-1","method":"rooms.list","params":{}}
+```
+
+```json
+{
+  "type": "response",
+  "id": "list-1",
+  "ok": true,
+  "result": [
+    {
+      "room_id": "!room:example.org",
+      "name": "Alice",
+      "membership": "join",
+      "unread_count": 2,
+      "avatar_url": "mxc://example.org/abc123",
+      "pinned": true,
+      "last_activity_ts": 1784894400000,
+      "last_message": "See you tomorrow!"
+    }
+  ]
+}
+```
+
+`room.get` returns the same shape for a single `room_id`. `name` is the
+display name as FoxChat shows it — a direct message shows the other person’s
+name, a room with a local nickname shows that nickname, and everything else
+falls back to the room’s Matrix name — not necessarily the raw
+`m.room.name` state event. `pinned` reflects the `m.favourite` room tag.
+`last_message` is a short, human-readable preview of the newest message
+(media/polls/etc. are summarized, e.g. `Image`), matching what the room list
+subtitle shows.
+
+### Room timeline
+
+`room.timeline` returns a page of a room’s message timeline, letting a
+consumer scroll through history the same way the app does.
+
+With no `before_event_id`/`after_event_id`, it returns the most recent
+messages (newest last, i.e. oldest-to-newest reading order):
+
+```json
+{"type":"request","id":"tl-1","method":"room.timeline","params":{"room_id":"!room:example.org","limit":30}}
+```
+
+```json
+{
+  "type": "response",
+  "id": "tl-1",
+  "ok": true,
+  "result": {
+    "room_id": "!room:example.org",
+    "messages": [
+      {
+        "room_id": "!room:example.org",
+        "event_id": "$event1",
+        "sender": "@alice:example.org",
+        "sender_display_name": "Alice",
+        "timestamp": 1784894400000,
+        "body": "Hey, are we still on for tomorrow?",
+        "msgtype": "m.text"
+      }
+    ],
+    "start_reached": false
+  }
+}
+```
+
+To scroll **up** for older messages, pass `before_event_id` set to the
+`event_id` of the oldest message you already have — the response returns the
+`limit` messages immediately before it, plus `start_reached: true` once
+there’s nothing older left in the room:
+
+```json
+{"type":"request","id":"tl-2","method":"room.timeline","params":{"room_id":"!room:example.org","before_event_id":"$event1","limit":30}}
+```
+
+To scroll **down** toward the present from a point in the past, pass
+`after_event_id` instead — the response returns up to `limit` messages after
+it, plus `end_reached: true` once you’ve caught back up to the live timeline:
+
+```json
+{"type":"request","id":"tl-3","method":"room.timeline","params":{"room_id":"!room:example.org","after_event_id":"$event1","limit":30}}
+```
+
+`limit` defaults to 30 and is capped at 100. Only visible message events are
+included — no state events, redactions, or the original copy of an edited
+message (edits are applied in place, so `body` already reflects the latest
+edit). Fetching backward history that FoxChat hasn’t loaded yet triggers the
+same pagination the app uses when you scroll up, so the first call for a
+quiet room may take a moment; an `before_event_id`/`after_event_id` that
+can’t be found anywhere in the room’s history (including after exhausting
+backward pagination) returns `not_found`.
+
+#### Stickers and images
+
+Sticker and `m.image` messages carry a `media` object with the file already
+downloaded and decrypted — no separate request, and no need to handle
+`m.room.encrypted` file keys yourself:
+
+```json
+{
+  "room_id": "!room:example.org",
+  "event_id": "$event2",
+  "sender": "@alice:example.org",
+  "sender_display_name": "Alice",
+  "timestamp": 1784894400000,
+  "body": "cat.png",
+  "msgtype": "m.image",
+  "media": {
+    "mimetype": "image/png",
+    "size": 48213,
+    "base64": "iVBORw0KGgoAAAANSUhEUgAAA..."
+  }
+}
+```
+
+`base64` is omitted (leaving just `mimetype`/`size`) when the file is larger
+than 5 MB or could not be downloaded — check for its presence before trying
+to decode. Other attachment types (video, audio, files) are not inlined; they
+still appear with their `msgtype` and a `body` naming the file.
 
 ### Current call
 
@@ -220,7 +349,10 @@ Delivered event:
 
 Message events may include messages sent by the current user. Consumers that
 only want incoming messages should filter the `sender` against their own
-Matrix user ID.
+Matrix user ID. Stickers are included as `message.msgtype: "m.sticker"`.
+Stickers and `m.image` messages include a `message.media` object shaped
+exactly like `room.timeline`’s (see [Stickers and images](#stickers-and-images)
+above) — already decrypted, base64-encoded, and omitting `base64` past 5 MB.
 
 ## Minimal JavaScript client
 

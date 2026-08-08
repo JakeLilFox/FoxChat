@@ -1,5 +1,42 @@
 use tauri::Manager;
 mod automation_api;
+mod cli;
+
+/// A `--headless` launch on Linux still needs a working X11/Wayland connection
+/// for WebKitGTK to initialize, even though the window is never shown. If
+/// there is no display available, transparently re-exec under `xvfb-run` so
+/// `--headless` works out of the box on a display-less server, rather than
+/// failing deep inside GTK with an opaque error.
+#[cfg(target_os = "linux")]
+fn ensure_display_for_headless(headless: bool) {
+    if !headless || std::env::var_os("FOXCHAT_XVFB_WRAPPED").is_some() {
+        return;
+    }
+    if std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return;
+    }
+    let Some(xvfb_run) = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join("xvfb-run"))
+            .find(|candidate| candidate.is_file())
+    }) else {
+        eprintln!(
+            "FoxChat --headless needs a display, but no $DISPLAY or $WAYLAND_DISPLAY was found \
+             and `xvfb-run` is not on PATH. Install the `xvfb` package (e.g. `apt install \
+             xvfb`) so FoxChat can run under a virtual framebuffer, or run it inside an \
+             existing X11/Wayland session."
+        );
+        std::process::exit(1);
+    };
+    let exe = std::env::current_exe().unwrap_or_else(|_| "foxchat".into());
+    let status = std::process::Command::new(xvfb_run)
+        .arg("-a")
+        .arg(exe)
+        .args(std::env::args().skip(1))
+        .env("FOXCHAT_XVFB_WRAPPED", "1")
+        .status();
+    std::process::exit(status.ok().and_then(|status| status.code()).unwrap_or(1));
+}
 
 #[cfg(desktop)]
 fn open_notification_room(app: &tauri::AppHandle, room_id: &str) {
@@ -195,6 +232,11 @@ fn load_matrix_accounts(app: tauri::AppHandle) -> Result<Option<String>, String>
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(desktop)]
+    let cli_options = cli::parse();
+    #[cfg(target_os = "linux")]
+    ensure_display_for_headless(cli_options.headless);
+
     let builder = tauri::Builder::default()
         .manage(automation_api::AutomationApiState::default())
         .plugin(tauri_plugin_dialog::init())
@@ -206,25 +248,33 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(cli::CliState(std::sync::Mutex::new(cli_options.clone())));
     builder
         .invoke_handler(tauri::generate_handler![
             save_matrix_accounts,
             load_matrix_accounts,
             #[cfg(desktop)]
             show_desktop_notification,
+            #[cfg(desktop)]
+            cli::cli_login_options,
             automation_api::start_automation_api,
             automation_api::stop_automation_api,
             automation_api::automation_api_status,
             automation_api::publish_automation_event,
             automation_api::respond_automation_api
         ])
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(desktop)]
             {
                 if let Some(icon) = app.default_window_icon() {
                     for window in app.webview_windows().values() {
                         let _ = window.set_icon(icon.clone());
+                    }
+                }
+                if cli_options.headless {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
                     }
                 }
             }

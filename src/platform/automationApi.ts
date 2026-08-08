@@ -1,9 +1,12 @@
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { EventType, type MatrixEvent, type Room } from 'matrix-js-sdk'
+import { Direction, EventType, type MatrixEvent, type Room } from 'matrix-js-sdk'
 import * as VoiceAudioMixer from '../components/calls/ElementCallAudioMixer'
 import { matrixService } from '../matrix/MatrixClientService'
 import { matrixRTCActiveSpeakers, matrixRTCVoiceMembers } from '../components/calls/voiceRoom'
+import { eventBody, isVisibleMessageEvent } from '../lib/eventHelpers'
+import { lastMessagePreview, roomLatestTs } from '../lib/timelineHelpers'
+import { downloadAndDecryptMedia } from '../lib/mediaDecrypt'
 
 export const AUTOMATION_ENABLED_KEY = 'foxchat.automation.enabled'
 export const AUTOMATION_PORT_KEY = 'foxchat.automation.port'
@@ -160,11 +163,123 @@ const apiError = (code: string, message: string) => Object.assign(new Error(mess
 
 const roomJson = (room: Room) => ({
   room_id: room.roomId,
+  // Matches what the room list/chat header show: local overrides and DM naming are already
+  // baked into `room.name` by MatrixClientService, not just the raw m.room.name state event.
   name: room.name,
   membership: room.getMyMembership(),
   unread_count: room.getUnreadNotificationCount(),
   avatar_url: room.getMxcAvatarUrl(),
+  pinned: !!room.tags['m.favourite'],
+  last_activity_ts: roomLatestTs(room),
+  last_message: lastMessagePreview(room),
 })
+
+// Same ordering as the room list sidebar: pinned rooms first (by their favourite order),
+// then everything else by most recent activity.
+const sortedRooms = (rooms: Room[]) => {
+  const pinnedIndex = new Map(
+    rooms
+      .filter((room) => !!room.tags['m.favourite'])
+      .sort(
+        (a, b) =>
+          (Number(a.tags['m.favourite']?.order) || 0.5) -
+          (Number(b.tags['m.favourite']?.order) || 0.5),
+      )
+      .map((room, index) => [room.roomId, index] as const),
+  )
+  return [...rooms].sort((a, b) => {
+    const ai = pinnedIndex.get(a.roomId)
+    const bi = pinnedIndex.get(b.roomId)
+    if (ai !== undefined || bi !== undefined)
+      return ai === undefined ? 1 : bi === undefined ? -1 : ai - bi
+    return roomLatestTs(b) - roomLatestTs(a)
+  })
+}
+
+// Stickers and images are inlined as decrypted base64 so a consumer never has to repeat
+// FoxChat's own decryption (mxc download + m.room.encrypted file unwrapping) itself. Capped so a
+// large photo can't stall the socket or bloat every timeline/notification payload.
+const INLINE_MEDIA_MAX_BYTES = 5 * 1024 * 1024
+
+const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += chunkSize)
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize))
+  return btoa(binary)
+}
+
+const isInlineableMedia = (event: MatrixEvent) =>
+  event.getType() === EventType.Sticker || event.getContent().msgtype === 'm.image'
+
+const mediaAttachmentJson = async (event: MatrixEvent, room: Room) => {
+  if (!isInlineableMedia(event)) return undefined
+  const content = event.getContent()
+  const declaredSize = Number(content.info?.size) || undefined
+  const declaredMimetype =
+    typeof content.info?.mimetype === 'string' ? content.info.mimetype : 'application/octet-stream'
+  if (declaredSize && declaredSize > INLINE_MEDIA_MAX_BYTES)
+    return { mimetype: declaredMimetype, size: declaredSize }
+  try {
+    const client = matrixService.clientForRoomInstance(room)
+    const { blob, mimetype } = await downloadAndDecryptMedia(content, client)
+    if (blob.size > INLINE_MEDIA_MAX_BYTES) return { mimetype, size: blob.size }
+    return { mimetype, size: blob.size, base64: arrayBufferToBase64(await blob.arrayBuffer()) }
+  } catch {
+    return { mimetype: declaredMimetype, size: declaredSize }
+  }
+}
+
+const messageEventJson = async (event: MatrixEvent, room: Room) => {
+  const content = event.getContent()
+  const msgtype =
+    typeof content.msgtype === 'string'
+      ? content.msgtype
+      : event.getType() === EventType.Sticker
+        ? 'm.sticker'
+        : undefined
+  const media = await mediaAttachmentJson(event, room)
+  return {
+    room_id: room.roomId,
+    event_id: event.getId(),
+    sender: event.getSender(),
+    sender_display_name: room.getMember(event.getSender() ?? '')?.name,
+    timestamp: event.getTs(),
+    body: eventBody(event),
+    msgtype,
+    ...(media ? { media } : {}),
+  }
+}
+
+const TIMELINE_DEFAULT_LIMIT = 30
+const TIMELINE_MAX_LIMIT = 100
+const timelineLimit = (value: unknown) =>
+  Math.min(TIMELINE_MAX_LIMIT, Math.max(1, Number(value) || TIMELINE_DEFAULT_LIMIT))
+
+// Fetches (paginating backwards as needed) enough of the room's live timeline to cover the
+// requested window, anchored on `anchorEventId` when given. This is the same live timeline the
+// app itself scrolls, so a running FoxChat window and automation clients see consistent history.
+const loadRoomTimelineEvents = async (
+  room: Room,
+  anchorEventId: string | undefined,
+  count: number,
+) => {
+  const timeline = room.getLiveTimeline()
+  const visible = () => timeline.getEvents().filter(isVisibleMessageEvent)
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const events = visible()
+    const anchorIndex = anchorEventId
+      ? events.findIndex((event) => event.getId() === anchorEventId)
+      : -1
+    const haveEnough = anchorEventId
+      ? anchorIndex !== -1 && anchorIndex >= count
+      : events.length >= count
+    if (haveEnough || !timeline.getPaginationToken(Direction.Backward)) return events
+    if (!(await matrixService.loadOlderMessages(room, count))) return events
+  }
+  return visible()
+}
 
 const userJson = async (userId: string, room?: Room) => {
   const client = room ? matrixService.clientForRoom(room.roomId) : matrixService.matrixClient
@@ -217,7 +332,7 @@ async function handleMethod(method: string, params: Record<string, unknown>) {
     case 'system.ping':
       return { pong: true, version: 1 }
     case 'rooms.list':
-      return matrixService.rooms().map(roomJson)
+      return sortedRooms(matrixService.rooms()).map(roomJson)
     case 'room.get':
       return roomJson(roomFor(params.room_id))
     case 'room.read': {
@@ -225,6 +340,53 @@ async function handleMethod(method: string, params: Record<string, unknown>) {
       const event = room.getLiveTimeline().getEvents().at(-1)
       if (event) await matrixService.markRead(event)
       return { room_id: room.roomId, event_id: event?.getId(), read: !!event }
+    }
+    case 'room.timeline': {
+      const room = roomFor(params.room_id)
+      const limit = timelineLimit(params.limit)
+      const beforeEventId =
+        typeof params.before_event_id === 'string' ? params.before_event_id : undefined
+      const afterEventId =
+        typeof params.after_event_id === 'string' ? params.after_event_id : undefined
+      if (beforeEventId && afterEventId)
+        throw apiError('invalid_params', 'Use only one of before_event_id or after_event_id')
+      const anchorEventId = beforeEventId ?? afterEventId
+      const events = await loadRoomTimelineEvents(room, anchorEventId, limit)
+      const timeline = room.getLiveTimeline()
+      if (anchorEventId) {
+        const anchorIndex = events.findIndex((event) => event.getId() === anchorEventId)
+        if (anchorIndex === -1)
+          throw apiError(
+            'not_found',
+            `${beforeEventId ? 'before_event_id' : 'after_event_id'} was not found in this room's history`,
+          )
+        if (beforeEventId) {
+          const start = Math.max(0, anchorIndex - limit)
+          return {
+            room_id: room.roomId,
+            messages: await Promise.all(
+              events.slice(start, anchorIndex).map((event) => messageEventJson(event, room)),
+            ),
+            start_reached: start === 0 && !timeline.getPaginationToken(Direction.Backward),
+          }
+        }
+        const end = Math.min(events.length, anchorIndex + 1 + limit)
+        return {
+          room_id: room.roomId,
+          messages: await Promise.all(
+            events.slice(anchorIndex + 1, end).map((event) => messageEventJson(event, room)),
+          ),
+          end_reached: end >= events.length,
+        }
+      }
+      const start = Math.max(0, events.length - limit)
+      return {
+        room_id: room.roomId,
+        messages: await Promise.all(
+          events.slice(start).map((event) => messageEventJson(event, room)),
+        ),
+        start_reached: start === 0 && !timeline.getPaginationToken(Direction.Backward),
+      }
     }
     case 'message.send': {
       const room = roomFor(params.room_id)
@@ -338,20 +500,31 @@ async function answer(payload: ApiRequest) {
 
 const publishMessage = (event: MatrixEvent, room?: Room) => {
   if (!automationEnabled()) return
-  if (!room || event.getType() !== EventType.RoomMessage || event.isRedacted()) return
-  const content = event.getContent()
-  const data = {
-    room_id: room.roomId,
-    room_name: room.name,
-    event_id: event.getId(),
-    sender: event.getSender(),
-    sender_display_name: room.getMember(event.getSender() ?? '')?.name,
-    timestamp: event.getTs(),
-    message: { msgtype: content.msgtype, body: content.body },
-  }
-  publish('message.received', data)
-  const client = matrixService.clientForRoom(room.roomId)
-  if (client?.getPushActionsForEvent(event)?.notify) publish('notification.received', data)
+  const isMessageLike =
+    event.getType() === EventType.RoomMessage || event.getType() === EventType.Sticker
+  if (!room || !isMessageLike || event.isRedacted()) return
+  void (async () => {
+    const content = event.getContent()
+    const msgtype =
+      typeof content.msgtype === 'string'
+        ? content.msgtype
+        : event.getType() === EventType.Sticker
+          ? 'm.sticker'
+          : undefined
+    const media = await mediaAttachmentJson(event, room)
+    const data = {
+      room_id: room.roomId,
+      room_name: room.name,
+      event_id: event.getId(),
+      sender: event.getSender(),
+      sender_display_name: room.getMember(event.getSender() ?? '')?.name,
+      timestamp: event.getTs(),
+      message: { msgtype, body: content.body, ...(media ? { media } : {}) },
+    }
+    publish('message.received', data)
+    const client = matrixService.clientForRoom(room.roomId)
+    if (client?.getPushActionsForEvent(event)?.notify) publish('notification.received', data)
+  })()
 }
 
 const pollCalls = () => {
