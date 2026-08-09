@@ -147,7 +147,10 @@ everything else by most recent activity.
       "avatar_url": "mxc://example.org/abc123",
       "pinned": true,
       "last_activity_ts": 1784894400000,
-      "last_message": "See you tomorrow!"
+      "last_message": "See you tomorrow!",
+      "room_type": "room",
+      "parent_space_ids": ["!community:example.org"],
+      "child_room_ids": []
     }
   ]
 }
@@ -161,6 +164,11 @@ falls back to the room’s Matrix name — not necessarily the raw
 `last_message` is a short, human-readable preview of the newest message
 (media/polls/etc. are summarized, e.g. `Image`), matching what the room list
 subtitle shows.
+
+Hierarchy metadata is included for folder-style clients. `room_type` is `space` for Matrix spaces
+and `room` otherwise. `parent_space_ids` contains joined spaces that directly contain the room;
+`child_room_ids` contains the joined direct children of a space, in its state-event order. These
+arrays are empty for ungrouped rooms and non-space rooms respectively.
 
 ### Room timeline
 

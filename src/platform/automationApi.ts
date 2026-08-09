@@ -1,6 +1,6 @@
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { Direction, EventType, type MatrixEvent, type Room } from 'matrix-js-sdk'
+import { Direction, EventType, RoomType, type MatrixEvent, type Room } from 'matrix-js-sdk'
 import * as VoiceAudioMixer from '../components/calls/ElementCallAudioMixer'
 import { matrixService } from '../matrix/MatrixClientService'
 import { matrixRTCActiveSpeakers, matrixRTCVoiceMembers } from '../components/calls/voiceRoom'
@@ -161,18 +161,40 @@ const roomFor = (roomId: unknown) => {
 
 const apiError = (code: string, message: string) => Object.assign(new Error(message), { code })
 
-const roomJson = (room: Room) => ({
-  room_id: room.roomId,
-  // Matches what the room list/chat header show: local overrides and DM naming are already
-  // baked into `room.name` by MatrixClientService, not just the raw m.room.name state event.
-  name: room.name,
-  membership: room.getMyMembership(),
-  unread_count: room.getUnreadNotificationCount(),
-  avatar_url: room.getMxcAvatarUrl(),
-  pinned: !!room.tags['m.favourite'],
-  last_activity_ts: roomLatestTs(room),
-  last_message: lastMessagePreview(room),
-})
+const roomJson = (room: Room) => {
+  const client = matrixService.clientForRoom(room.roomId)
+  const joined = client?.getRooms().filter((candidate) => candidate.getMyMembership() === 'join') ?? []
+  const joinedIds = new Set(joined.map((candidate) => candidate.roomId))
+  const parentSpaceIds = joined
+    .filter((candidate) => candidate.getType() === RoomType.Space)
+    .filter((space) => {
+      const event = space.currentState.getStateEvents(EventType.SpaceChild, room.roomId)
+      return !!event && Array.isArray(event.getContent().via)
+    })
+    .map((space) => space.roomId)
+  const childRoomIds = room.getType() === RoomType.Space
+    ? room.currentState
+        .getStateEvents(EventType.SpaceChild)
+        .filter((event) => Array.isArray(event.getContent().via))
+        .map((event) => event.getStateKey())
+        .filter((roomId): roomId is string => !!roomId && joinedIds.has(roomId))
+    : []
+  return {
+    room_id: room.roomId,
+    // Matches what the room list/chat header show: local overrides and DM naming are already
+    // baked into `room.name` by MatrixClientService, not just the raw m.room.name state event.
+    name: room.name,
+    membership: room.getMyMembership(),
+    unread_count: room.getUnreadNotificationCount(),
+    avatar_url: room.getMxcAvatarUrl(),
+    pinned: !!room.tags['m.favourite'],
+    last_activity_ts: roomLatestTs(room),
+    last_message: lastMessagePreview(room),
+    room_type: room.getType() === RoomType.Space ? 'space' : 'room',
+    parent_space_ids: parentSpaceIds,
+    child_room_ids: childRoomIds,
+  }
+}
 
 // Same ordering as the room list sidebar: pinned rooms first (by their favourite order),
 // then everything else by most recent activity.
