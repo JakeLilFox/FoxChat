@@ -424,6 +424,40 @@ async function handleMethod(method: string, params: Record<string, unknown>) {
       const roomFilter = typeof params.room_id === 'string' ? roomFor(params.room_id) : undefined
       return recentMessages(sinceTs, roomFilter, recentLimit(params.limit))
     }
+    case 'messages.search': {
+      const query = typeof params.query === 'string' ? params.query.trim() : ''
+      if (!query) throw apiError('invalid_params', 'query is required')
+      const room = typeof params.room_id === 'string' ? roomFor(params.room_id) : undefined
+
+      const accountId = room
+        ? matrixService.selectedRoomAccountId(room.roomId)
+        : (matrixService.activeAccountId() ?? matrixService.availableAccounts()[0]?.id)
+      if (!accountId)
+        throw apiError('not_ready', 'No signed-in account is available to search with')
+      const limit = timelineLimit(params.limit)
+      const response = await matrixService.searchMessages(accountId, query, room?.roomId)
+      const matches = response.results
+        .map((result) => {
+          const event = result.context.ourEvent
+          const eventRoomId = event.getRoomId()
+          const eventRoom = eventRoomId
+            ? matrixService.clientForRoom(eventRoomId)?.getRoom(eventRoomId)
+            : undefined
+          return eventRoom ? { event, room: eventRoom } : undefined
+        })
+        .filter((match): match is { event: MatrixEvent; room: Room } => !!match)
+        .slice(0, limit)
+      const messages = await Promise.all(
+        matches.map(({ event, room }) => messageEventJson(event, room)),
+      )
+      const contributingRooms = new Map(matches.map(({ room }) => [room.roomId, room]))
+      return {
+        query,
+        messages,
+        rooms: [...contributingRooms.values()].map(roomJson),
+        has_more: !!response.next_batch,
+      }
+    }
     case 'message.send': {
       const room = roomFor(params.room_id)
       const body = typeof params.body === 'string' ? params.body.trim() : ''

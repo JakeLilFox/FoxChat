@@ -102,6 +102,7 @@ Common error codes are `invalid_request`, `invalid_params`, `not_found`,
 | `room.read` | `room_id` | Mark the latest known event as read |
 | `room.timeline` | `room_id`; optional `limit`, `before_event_id`, `after_event_id` | A page of a room’s message timeline, for scrolling through history |
 | `messages.recent` | optional `since_ts`, `room_id`, `limit` | The last N messages across all rooms (or one room), including your own; with `since_ts`, only what's new since that cursor. Includes basic info for each contributing room |
+| `messages.search` | `query`; optional `room_id`, `limit` | Server-side full-text search for messages, across all rooms or scoped to one |
 | `message.send` | `room_id`, `body` | Send a plain Matrix text message |
 | `user.get` | `user_id`, optional `room_id` | Display name, avatar, banner, presence, and room membership |
 | `user.avatar.get` | `user_id`, optional `room_id` | Matrix and downloadable HTTP avatar URLs |
@@ -346,6 +347,66 @@ memory — it never triggers backward pagination, so it’s cheap to poll
 frequently, but a room
 FoxChat hasn’t synced any history for yet won’t contribute older messages
 this way (use `room.timeline` for that).
+
+### Searching messages
+
+`messages.search` runs FoxChat’s message search — the same server-side
+full-text search behind the app’s search box — either across every room or
+scoped to one with `room_id`:
+
+```json
+{"type":"request","id":"search-1","method":"messages.search","params":{"query":"tomorrow"}}
+```
+
+```json
+{"type":"request","id":"search-2","method":"messages.search","params":{"query":"tomorrow","room_id":"!room:example.org"}}
+```
+
+```json
+{
+  "type": "response",
+  "id": "search-1",
+  "ok": true,
+  "result": {
+    "query": "tomorrow",
+    "messages": [
+      {
+        "room_id": "!room:example.org",
+        "room_name": "Alice",
+        "event_id": "$event1",
+        "sender": "@alice:example.org",
+        "sender_display_name": "Alice",
+        "timestamp": 1784894400000,
+        "body": "Hey, are we still on for tomorrow?",
+        "msgtype": "m.text"
+      }
+    ],
+    "rooms": [
+      {
+        "room_id": "!room:example.org",
+        "name": "Alice",
+        "membership": "join",
+        "unread_count": 0,
+        "avatar_url": "mxc://example.org/abc123",
+        "pinned": false,
+        "last_activity_ts": 1784894400000,
+        "last_message": "Hey, are we still on for tomorrow?"
+      }
+    ],
+    "has_more": false
+  }
+}
+```
+
+`messages` and `rooms` are the same shapes `messages.recent` returns.
+Results come back in the homeserver’s own ranking, not strictly by time.
+Search runs against a single account — a room-scoped search uses whichever
+account is showing that room, an unscoped one uses your active account, the
+same as the search box in the app; it does not merge results from every
+account you’re logged into. `limit` defaults to 30 and is capped at 100.
+`has_more: true` means the server has additional matches beyond this page;
+there’s currently no way to fetch further pages through the API, so narrow
+the `query` (or add `room_id`) if you need to see more specific results.
 
 ### Current call
 
