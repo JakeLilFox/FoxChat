@@ -3535,6 +3535,35 @@ export class MatrixClientService {
     }
   }
 
+  favoriteImagePackSelection(roomId: string, client = this.client): string[] | undefined {
+    for (const type of ['m.image_pack.rooms', 'im.ponies.emote_rooms']) {
+      const packs = (
+        client?.getAccountData(type as never)?.getContent<{
+          rooms?: Record<string, { packs?: unknown }>
+        }>().rooms?.[roomId] as { packs?: unknown } | undefined
+      )?.packs
+      if (Array.isArray(packs)) return packs.filter((key): key is string => typeof key === 'string')
+    }
+    return undefined
+  }
+
+  async setFavoriteImagePackSelection(
+    roomId: string,
+    stateKeys: string[] | undefined,
+    client = this.client,
+  ) {
+    if (!client) throw new Error('Matrix client is not ready')
+    for (const type of ['m.image_pack.rooms', 'im.ponies.emote_rooms']) {
+      const current = client.getAccountData(type as never)?.getContent() as
+        | { rooms?: Record<string, Record<string, unknown>> }
+        | undefined
+      const rooms = { ...(current?.rooms ?? {}) }
+      const { packs: _existingPacks, ...roomEntry } = rooms[roomId] ?? {}
+      rooms[roomId] = stateKeys ? { ...roomEntry, packs: [...new Set(stateKeys)] } : roomEntry
+      await client.setAccountData(type as never, { ...current, rooms } as never)
+    }
+  }
+
   async unpinRoom(roomId: string) {
     const client = this.clientForRoom(roomId)
     if (!client) throw new Error('Client is not started')

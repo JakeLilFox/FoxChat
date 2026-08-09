@@ -1,9 +1,17 @@
 import { type MatrixEmote } from '../../lib/emojiData'
 import { useMediaUrl } from '../../lib/hooks'
-import { useEffect, useRef, useState } from 'react'
+import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import { Spin } from 'antd'
 
-export function MatrixEmoteImage({ emote, lazy = false }: { emote: MatrixEmote; lazy?: boolean }) {
+export function MatrixEmoteImage({
+  emote,
+  lazy = false,
+  style,
+}: {
+  emote: MatrixEmote
+  lazy?: boolean
+  style?: CSSProperties
+}) {
   const placeholderRef = useRef<HTMLSpanElement>(null)
   const [visible, setVisible] = useState(!lazy || typeof IntersectionObserver === 'undefined')
   const shouldLoad = !lazy || visible
@@ -30,7 +38,7 @@ export function MatrixEmoteImage({ emote, lazy = false }: { emote: MatrixEmote; 
     },
   )
   return url ? (
-    <img src={url} alt={emote.body} />
+    <img src={url} alt={emote.body} style={style} />
   ) : (
     <span ref={placeholderRef}>
       <Spin size="small" />

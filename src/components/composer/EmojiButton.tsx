@@ -643,18 +643,24 @@ export function EmojiButton({
             roomId,
             source.client,
           )
-          return packs.map(({ pack, stateKey }, index) => {
-            return {
-              id: `favorite-${roomId}-${stateKey || index}`,
-              favoriteKey: `${roomId}\u0000${stateKey}`,
-              roomPackKey: `${roomId}\u0000${stateKey}`,
-              orderKey: `room\u0000${roomId}\u0000${stateKey}`,
-              label: `Favorite · ${pack.pack?.display_name || known?.name || roomId}`,
-              pack,
-              client: source.client,
-              mine: true,
-            }
-          })
+          const selection = source.rooms[roomId]?.packs
+          const allowedStateKeys = Array.isArray(selection)
+            ? new Set(selection.filter((key): key is string => typeof key === 'string'))
+            : undefined
+          return packs
+            .filter((location) => !allowedStateKeys || allowedStateKeys.has(location.stateKey))
+            .map(({ pack, stateKey }, index) => {
+              return {
+                id: `favorite-${roomId}-${stateKey || index}`,
+                favoriteKey: `${roomId}\u0000${stateKey}`,
+                roomPackKey: `${roomId}\u0000${stateKey}`,
+                orderKey: `room\u0000${roomId}\u0000${stateKey}`,
+                label: `Favorite · ${pack.pack?.display_name || known?.name || roomId}`,
+                pack,
+                client: source.client,
+                mine: true,
+              }
+            })
         }),
       ),
     ).then((results) => {
