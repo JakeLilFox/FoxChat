@@ -258,6 +258,8 @@ pub fn run() {
             show_desktop_notification,
             #[cfg(desktop)]
             cli::cli_login_options,
+-            #[cfg(desktop)]
+            cli::cli_log,
             automation_api::start_automation_api,
             automation_api::stop_automation_api,
             automation_api::automation_api_status,

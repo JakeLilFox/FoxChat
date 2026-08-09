@@ -107,3 +107,8 @@ pub fn cli_login_options(state: tauri::State<'_, CliState>) -> Option<CliLoginOp
     }
     Some(std::mem::take(&mut *guard))
 }
+
+#[tauri::command]
+pub fn cli_log(message: String) {
+    eprintln!("{message}");
+}

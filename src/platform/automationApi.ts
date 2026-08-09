@@ -242,6 +242,7 @@ const messageEventJson = async (event: MatrixEvent, room: Room) => {
   const media = await mediaAttachmentJson(event, room)
   return {
     room_id: room.roomId,
+    room_name: room.name,
     event_id: event.getId(),
     sender: event.getSender(),
     sender_display_name: room.getMember(event.getSender() ?? '')?.name,
@@ -256,6 +257,31 @@ const TIMELINE_DEFAULT_LIMIT = 30
 const TIMELINE_MAX_LIMIT = 100
 const timelineLimit = (value: unknown) =>
   Math.min(TIMELINE_MAX_LIMIT, Math.max(1, Number(value) || TIMELINE_DEFAULT_LIMIT))
+
+const RECENT_DEFAULT_LIMIT = 50
+const RECENT_MAX_LIMIT = 200
+const recentLimit = (value: unknown) =>
+  Math.min(RECENT_MAX_LIMIT, Math.max(1, Number(value) || RECENT_DEFAULT_LIMIT))
+
+const recentMessages = async (
+  sinceTs: number | undefined,
+  roomFilter: Room | undefined,
+  limit: number,
+) => {
+  const rooms = roomFilter ? [roomFilter] : matrixService.rooms()
+  const candidates: { event: MatrixEvent; room: Room }[] = []
+  for (const room of rooms)
+    for (const event of room.getLiveTimeline().getEvents()) {
+      if (!isVisibleMessageEvent(event)) continue
+      if (sinceTs !== undefined && event.getTs() <= sinceTs) continue
+      candidates.push({ event, room })
+    }
+  candidates.sort((a, b) => a.event.getTs() - b.event.getTs())
+  const page = sinceTs === undefined ? candidates.slice(-limit) : candidates.slice(0, limit)
+  const messages = await Promise.all(page.map(({ event, room }) => messageEventJson(event, room)))
+  const newestTs = messages.at(-1)?.timestamp ?? sinceTs ?? 0
+  return { messages, since_ts: newestTs }
+}
 
 // Fetches (paginating backwards as needed) enough of the room's live timeline to cover the
 // requested window, anchored on `anchorEventId` when given. This is the same live timeline the
@@ -387,6 +413,11 @@ async function handleMethod(method: string, params: Record<string, unknown>) {
         ),
         start_reached: start === 0 && !timeline.getPaginationToken(Direction.Backward),
       }
+    }
+    case 'messages.recent': {
+      const sinceTs = typeof params.since_ts === 'number' ? params.since_ts : undefined
+      const roomFilter = typeof params.room_id === 'string' ? roomFor(params.room_id) : undefined
+      return recentMessages(sinceTs, roomFilter, recentLimit(params.limit))
     }
     case 'message.send': {
       const room = roomFor(params.room_id)

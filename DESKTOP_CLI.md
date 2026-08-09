@@ -21,7 +21,7 @@ foxchat --help
 | `--recovery-key <key>` | Security/recovery key, used to unlock encrypted history after sign-in |
 | `--persist` | Reuse a previously saved session instead of logging in again (see below) |
 | `--automation-port <port>` | Port for the local automation API |
-| `--automation-key <key>` | API key for the local automation API |
+| `--automation-key <key>` | API key for the local automation API — **must be at least 24 characters** or the API refuses to start (e.g. `openssl rand -hex 16`) |
 | `--headless` | Do not show the application window |
 | `--help` / `-h` | Print usage and exit |
 

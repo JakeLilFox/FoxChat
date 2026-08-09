@@ -101,6 +101,7 @@ Common error codes are `invalid_request`, `invalid_params`, `not_found`,
 | `room.get` | `room_id` | One room’s status |
 | `room.read` | `room_id` | Mark the latest known event as read |
 | `room.timeline` | `room_id`; optional `limit`, `before_event_id`, `after_event_id` | A page of a room’s message timeline, for scrolling through history |
+| `messages.recent` | optional `since_ts`, `room_id`, `limit` | New messages (including your own) across all rooms, or one room, since a cursor — a polling alternative to `message.received` |
 | `message.send` | `room_id`, `body` | Send a plain Matrix text message |
 | `user.get` | `user_id`, optional `room_id` | Display name, avatar, banner, presence, and room membership |
 | `user.avatar.get` | `user_id`, optional `room_id` | Matrix and downloadable HTTP avatar URLs |
@@ -182,6 +183,7 @@ messages (newest last, i.e. oldest-to-newest reading order):
     "messages": [
       {
         "room_id": "!room:example.org",
+        "room_name": "Alice",
         "event_id": "$event1",
         "sender": "@alice:example.org",
         "sender_display_name": "Alice",
@@ -230,6 +232,7 @@ downloaded and decrypted — no separate request, and no need to handle
 ```json
 {
   "room_id": "!room:example.org",
+  "room_name": "Alice",
   "event_id": "$event2",
   "sender": "@alice:example.org",
   "sender_display_name": "Alice",
@@ -248,6 +251,72 @@ downloaded and decrypted — no separate request, and no need to handle
 than 5 MB or could not be downloaded — check for its presence before trying
 to decode. Other attachment types (video, audio, files) are not inlined; they
 still appear with their `msgtype` and a `body` naming the file.
+
+### New messages across rooms
+
+`messages.recent` is a polling alternative to subscribing to
+`message.received`: it answers “what’s new since I last checked”, across
+every joined room at once (or one room, with `room_id`), and — unlike
+`room.timeline`’s exclusion of edits and redactions — **includes messages
+you sent yourself**, exactly like the push events do.
+
+First call, with no cursor, returns the most recent messages so you have
+somewhere to start:
+
+```json
+{"type":"request","id":"recent-1","method":"messages.recent","params":{"limit":50}}
+```
+
+```json
+{
+  "type": "response",
+  "id": "recent-1",
+  "ok": true,
+  "result": {
+    "messages": [
+      {
+        "room_id": "!room:example.org",
+        "room_name": "Alice",
+        "event_id": "$event1",
+        "sender": "@alice:example.org",
+        "sender_display_name": "Alice",
+        "timestamp": 1784894400000,
+        "body": "Hey, are we still on for tomorrow?",
+        "msgtype": "m.text"
+      },
+      {
+        "room_id": "!other:example.org",
+        "room_name": "Project chat",
+        "event_id": "$event2",
+        "sender": "@you:example.org",
+        "sender_display_name": "You",
+        "timestamp": 1784894460000,
+        "body": "Yep, pushed the fix",
+        "msgtype": "m.text"
+      }
+    ],
+    "since_ts": 1784894460000
+  }
+}
+```
+
+Every subsequent call passes back the `since_ts` the previous response gave
+you:
+
+```json
+{"type":"request","id":"recent-2","method":"messages.recent","params":{"since_ts":1784894460000,"limit":50}}
+```
+
+`messages` is empty and `since_ts` is unchanged when there’s nothing new
+yet — keep polling with the same value. `limit` defaults to 50 and is capped
+at 200; if more than `limit` messages arrived since your last `since_ts`,
+you get the **oldest** ones first (so a backlog drains in order across
+repeated polls, rather than skipping ahead and missing what’s in between).
+Stickers and images include the same inline `media` object described above.
+This only looks at what FoxChat already has loaded in memory — it never
+triggers backward pagination, so it’s cheap to poll frequently, but a room
+FoxChat hasn’t synced any history for yet won’t contribute older messages
+this way (use `room.timeline` for that).
 
 ### Current call
 

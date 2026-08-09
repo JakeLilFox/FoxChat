@@ -17,6 +17,13 @@ const nativeAvailable = () => !!window.__TAURI_INTERNALS__?.invoke
 
 const localpart = (userId: string) => userId.replace(/^@/, '').split(':')[0].toLowerCase()
 
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+const logToTerminal = (message: string) => {
+  console.error(message)
+  if (nativeAvailable()) void invoke('cli_log', { message }).catch(() => undefined)
+}
+
 export async function fetchCliLoginOptions(): Promise<CliLoginOptions | undefined> {
   if (!nativeAvailable()) return undefined
   try {
@@ -70,23 +77,38 @@ export async function applyCliLogin(options: CliLoginOptions): Promise<'ready' |
       await matrixService.login(options.homeserver, options.username, options.password)
     }
 
+    logToTerminal(
+      `[cli] Signed in as ${matrixService.matrixClient?.getSafeUserId() ?? '(unknown user)'}`,
+    )
+
     if (options.recoveryKey) {
       try {
         await matrixService.unlockSecretStorage(options.recoveryKey)
+        logToTerminal('[cli] Unlocked encrypted history with the provided recovery key')
       } catch (error) {
-        console.error(
-          '[cli] Could not unlock encrypted history with the provided recovery key:',
-          error,
+        logToTerminal(
+          `[cli] Could not unlock encrypted history with the provided recovery key: ${errorMessage(error)}`,
         )
       }
     }
 
-    if (options.automationPort && options.automationKey)
-      await configureAutomationApi(true, options.automationPort, options.automationKey)
+    if (options.automationPort && options.automationKey) {
+      try {
+        await configureAutomationApi(true, options.automationPort, options.automationKey)
+        logToTerminal(`[cli] Automation API listening on 127.0.0.1:${options.automationPort}`)
+      } catch (error) {
+        logToTerminal(`[cli] Automation API failed to start: ${errorMessage(error)}`)
+      }
+    } else if (options.automationPort || options.automationKey) {
+      logToTerminal(
+        '[cli] --automation-port and --automation-key must both be given to start the ' +
+          'automation API; got only one, so it was not started.',
+      )
+    }
 
     return 'ready'
   } catch (error) {
-    console.error('[cli] Sign-in failed:', error)
+    logToTerminal(`[cli] Sign-in failed: ${errorMessage(error)}`)
     return 'guest'
   }
 }
