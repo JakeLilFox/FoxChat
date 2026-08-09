@@ -346,10 +346,10 @@ you:
 
 `messages` and `rooms` are both empty and `since_ts` is unchanged when
 there’s nothing new yet — keep polling with the same value. `limit` defaults
-to 50 and is capped at 200; if more than `limit` messages arrived since your
-last `since_ts`, you get the **oldest** ones first (so a backlog drains in
-order across repeated polls, rather than skipping ahead and missing what’s in
-between). Stickers and images include the same inline `media` object
+to 50 and is capped at 200. The response always contains the **newest**
+matching messages across all rooms, in oldest-to-newest reading order. If
+more than `limit` messages arrived after `since_ts`, older overflow messages
+are skipped. Stickers and images include the same inline `media` object
 described above. This only looks at what FoxChat already has loaded in
 memory — it never triggers backward pagination, so it’s cheap to poll
 frequently, but a room

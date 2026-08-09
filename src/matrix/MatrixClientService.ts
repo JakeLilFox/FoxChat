@@ -2980,16 +2980,18 @@ export class MatrixClientService {
           await client.addPushRule('global', PushRuleKind.RoomSpecific, targetId, {
             actions: [PushRuleActionName.DontNotify],
           })
-        } else if (mode === 'all') {
-          await client.addPushRule('global', PushRuleKind.RoomSpecific, targetId, {
-            actions: [PushRuleActionName.Notify, { set_tweak: TweakName.Sound, value: 'default' }],
-          })
+        } else if (mode === 'mentions') {
           await client.addPushRule('global', PushRuleKind.RoomSpecific, targetId, {
             actions: [PushRuleActionName.DontNotify, { set_tweak: TweakName.Highlight, value: false }],
+          })
+        } else {
+          await client.addPushRule('global', PushRuleKind.RoomSpecific, targetId, {
+            actions: [PushRuleActionName.Notify, { set_tweak: TweakName.Sound, value: 'default' }],
           })
         }
       }),
     )
+    await client.getPushRules()
     for (const targetId of targets) {
       const room = client.getRoom(targetId)
       if (room) this.observers.forEach((observer) => observer.onRoom?.(room))

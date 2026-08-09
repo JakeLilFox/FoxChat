@@ -7,6 +7,7 @@ import { matrixRTCActiveSpeakers, matrixRTCVoiceMembers } from '../components/ca
 import { eventBody, isVisibleMessageEvent } from '../lib/eventHelpers'
 import { lastMessagePreview, roomLatestTs } from '../lib/timelineHelpers'
 import { downloadAndDecryptMedia } from '../lib/mediaDecrypt'
+import { selectRecentMessageCandidates } from '../lib/recentMessages'
 
 export const AUTOMATION_ENABLED_KEY = 'foxchat.automation.enabled'
 export const AUTOMATION_PORT_KEY = 'foxchat.automation.port'
@@ -291,15 +292,9 @@ const recentMessages = async (
   limit: number,
 ) => {
   const rooms = roomFilter ? [roomFilter] : matrixService.rooms()
-  const candidates: { event: MatrixEvent; room: Room }[] = []
-  for (const room of rooms)
-    for (const event of room.getLiveTimeline().getEvents()) {
-      if (!isVisibleMessageEvent(event)) continue
-      if (sinceTs !== undefined && event.getTs() <= sinceTs) continue
-      candidates.push({ event, room })
-    }
-  candidates.sort((a, b) => a.event.getTs() - b.event.getTs())
-  const page = sinceTs === undefined ? candidates.slice(-limit) : candidates.slice(0, limit)
+  const page = selectRecentMessageCandidates(rooms, sinceTs, limit, (room) =>
+    matrixService.combinedRoomEvents(room, room.getLiveTimeline().getEvents()),
+  )
   const messages = await Promise.all(page.map(({ event, room }) => messageEventJson(event, room)))
   const newestTs = messages.at(-1)?.timestamp ?? sinceTs ?? 0
   const contributingRooms = new Map(page.map(({ room }) => [room.roomId, room]))
