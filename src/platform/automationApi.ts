@@ -280,7 +280,12 @@ const recentMessages = async (
   const page = sinceTs === undefined ? candidates.slice(-limit) : candidates.slice(0, limit)
   const messages = await Promise.all(page.map(({ event, room }) => messageEventJson(event, room)))
   const newestTs = messages.at(-1)?.timestamp ?? sinceTs ?? 0
-  return { messages, since_ts: newestTs }
+  const contributingRooms = new Map(page.map(({ room }) => [room.roomId, room]))
+  return {
+    messages,
+    since_ts: newestTs,
+    rooms: [...contributingRooms.values()].map(roomJson),
+  }
 }
 
 // Fetches (paginating backwards as needed) enough of the room's live timeline to cover the

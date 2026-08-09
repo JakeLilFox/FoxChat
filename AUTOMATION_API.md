@@ -101,7 +101,7 @@ Common error codes are `invalid_request`, `invalid_params`, `not_found`,
 | `room.get` | `room_id` | One room’s status |
 | `room.read` | `room_id` | Mark the latest known event as read |
 | `room.timeline` | `room_id`; optional `limit`, `before_event_id`, `after_event_id` | A page of a room’s message timeline, for scrolling through history |
-| `messages.recent` | optional `since_ts`, `room_id`, `limit` | New messages (including your own) across all rooms, or one room, since a cursor — a polling alternative to `message.received` |
+| `messages.recent` | optional `since_ts`, `room_id`, `limit` | The last N messages across all rooms (or one room), including your own; with `since_ts`, only what's new since that cursor. Includes basic info for each contributing room |
 | `message.send` | `room_id`, `body` | Send a plain Matrix text message |
 | `user.get` | `user_id`, optional `room_id` | Display name, avatar, banner, presence, and room membership |
 | `user.avatar.get` | `user_id`, optional `room_id` | Matrix and downloadable HTTP avatar URLs |
@@ -254,14 +254,15 @@ still appear with their `msgtype` and a `body` naming the file.
 
 ### New messages across rooms
 
-`messages.recent` is a polling alternative to subscribing to
-`message.received`: it answers “what’s new since I last checked”, across
-every joined room at once (or one room, with `room_id`), and — unlike
+`messages.recent` answers two related questions: “give me the last N
+messages, no matter which room they’re in” (call it with no cursor), and
+“what’s new since I last checked” (call it with `since_ts`, as a polling
+alternative to subscribing to `message.received`). Either way it spans every
+joined room at once (or one room, with `room_id`), and — unlike
 `room.timeline`’s exclusion of edits and redactions — **includes messages
 you sent yourself**, exactly like the push events do.
 
-First call, with no cursor, returns the most recent messages so you have
-somewhere to start:
+With no cursor, it returns the most recent messages overall:
 
 ```json
 {"type":"request","id":"recent-1","method":"messages.recent","params":{"limit":50}}
@@ -295,10 +296,37 @@ somewhere to start:
         "msgtype": "m.text"
       }
     ],
-    "since_ts": 1784894460000
+    "since_ts": 1784894460000,
+    "rooms": [
+      {
+        "room_id": "!room:example.org",
+        "name": "Alice",
+        "membership": "join",
+        "unread_count": 0,
+        "avatar_url": "mxc://example.org/abc123",
+        "pinned": false,
+        "last_activity_ts": 1784894400000,
+        "last_message": "Hey, are we still on for tomorrow?"
+      },
+      {
+        "room_id": "!other:example.org",
+        "name": "Project chat",
+        "membership": "join",
+        "unread_count": 3,
+        "avatar_url": null,
+        "pinned": true,
+        "last_activity_ts": 1784894460000,
+        "last_message": "Yep, pushed the fix"
+      }
+    ]
   }
 }
 ```
+
+`rooms` is the same shape `rooms.list`/`room.get` return, so you get names,
+avatars, pin state, etc. for every room a returned message came from without
+a second request — but only for rooms actually represented in `messages`,
+not every joined room.
 
 Every subsequent call passes back the `since_ts` the previous response gave
 you:
@@ -307,14 +335,15 @@ you:
 {"type":"request","id":"recent-2","method":"messages.recent","params":{"since_ts":1784894460000,"limit":50}}
 ```
 
-`messages` is empty and `since_ts` is unchanged when there’s nothing new
-yet — keep polling with the same value. `limit` defaults to 50 and is capped
-at 200; if more than `limit` messages arrived since your last `since_ts`,
-you get the **oldest** ones first (so a backlog drains in order across
-repeated polls, rather than skipping ahead and missing what’s in between).
-Stickers and images include the same inline `media` object described above.
-This only looks at what FoxChat already has loaded in memory — it never
-triggers backward pagination, so it’s cheap to poll frequently, but a room
+`messages` and `rooms` are both empty and `since_ts` is unchanged when
+there’s nothing new yet — keep polling with the same value. `limit` defaults
+to 50 and is capped at 200; if more than `limit` messages arrived since your
+last `since_ts`, you get the **oldest** ones first (so a backlog drains in
+order across repeated polls, rather than skipping ahead and missing what’s in
+between). Stickers and images include the same inline `media` object
+described above. This only looks at what FoxChat already has loaded in
+memory — it never triggers backward pagination, so it’s cheap to poll
+frequently, but a room
 FoxChat hasn’t synced any history for yet won’t contribute older messages
 this way (use `room.timeline` for that).
 
