@@ -220,7 +220,11 @@ export const splitImagePackContent = (
   if (Object.keys(current).length || !chunks.length) chunks.push({ ...base, images: current })
   return chunks
 }
-export const roomImagePackTypes = ['m.image_pack', 'im.ponies.room_emotes'] as const
+export const roomImagePackTypes = [
+  'm.room.image_pack',
+  'm.image_pack',
+  'im.ponies.room_emotes',
+] as const
 export const preferNonEmptyPack = (
   candidates: (MatrixEmotePack | undefined)[],
 ): MatrixEmotePack | undefined =>
@@ -229,6 +233,7 @@ export const preferNonEmptyPack = (
 export type RoomImagePackLocation = {
   type: (typeof roomImagePackTypes)[number]
   stateKey: string
+  stateKeys: string[]
   pack: MatrixEmotePack
 }
 export type RoomImagePackStateEvent = {
@@ -238,25 +243,26 @@ export type RoomImagePackStateEvent = {
 }
 const choosePackLocation = (
   candidates: RoomImagePackLocation[],
-): RoomImagePackLocation | undefined =>
-  candidates.find(
+): RoomImagePackLocation | undefined => {
+  const populated = candidates.filter(
     (candidate) => candidate.pack.images && Object.keys(candidate.pack.images).length > 0,
-  ) ?? candidates.at(-1)
+  )
+  const eligible = populated.length ? populated : candidates
+  return roomImagePackTypes.flatMap((type) => eligible.filter((item) => item.type === type)).at(0)
+}
 export const findRoomImagePack = (room: Room): RoomImagePackLocation | undefined =>
   choosePackLocation(
     roomImagePackTypes.flatMap((type) =>
       room.currentState.getStateEvents(type).map((event) => ({
         type,
         stateKey: event.getStateKey() ?? '',
+        stateKeys: [event.getStateKey() ?? ''],
         pack: event.getContent<MatrixEmotePack>(),
       })),
     ),
   )
 const packHasContent = (pack: MatrixEmotePack) =>
   !!pack.pack?.display_name || !!(pack.images && Object.keys(pack.images).length)
-// A room can hold multiple m.room.image_pack/im.ponies.room_emotes state events, one per
-// state_key, each representing a distinct pack (MSC2545). Group by state_key so both the
-// stable and unstable type for the same pack collapse into a single entry.
 export const roomImagePacksFromStateEvents = (
   events: RoomImagePackStateEvent[],
 ): RoomImagePackLocation[] => {
@@ -267,6 +273,7 @@ export const roomImagePacksFromStateEvents = (
     const location: RoomImagePackLocation = {
       type: event.type as (typeof roomImagePackTypes)[number],
       stateKey,
+      stateKeys: [stateKey],
       pack: event.content ?? {},
     }
     byStateKey.set(stateKey, [...(byStateKey.get(stateKey) ?? []), location])
@@ -292,9 +299,9 @@ export const roomImagePacksFromStateEvents = (
     split.set(metadata.root_state_key, [...(split.get(metadata.root_state_key) ?? []), location])
   }
   for (const [rootStateKey, fragments] of split) {
-    const preferredType = fragments.some(({ type }) => type === 'm.image_pack')
-      ? 'm.image_pack'
-      : 'im.ponies.room_emotes'
+    const preferredType = roomImagePackTypes.find((type) =>
+      fragments.some((fragment) => fragment.type === type),
+    )!
     const matching = fragments
       .filter(({ type }) => type === preferredType)
       .sort(
@@ -308,6 +315,7 @@ export const roomImagePacksFromStateEvents = (
     complete.push({
       type: preferredType,
       stateKey: rootStateKey,
+      stateKeys: matching.map(({ stateKey }) => stateKey),
       pack: {
         ...primaryPack,
         images: Object.assign({}, ...matching.map(({ pack }) => pack.images ?? {})),

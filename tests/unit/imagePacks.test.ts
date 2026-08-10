@@ -120,11 +120,19 @@ describe('room image-pack discovery', () => {
   it('keeps every state-keyed pack while collapsing stable and legacy copies of one pack', () => {
     const packs = roomImagePacksFromStateEvents([
       {
-        type: 'm.image_pack',
+        type: 'm.room.image_pack',
         state_key: 'foxes',
         content: {
           pack: { display_name: 'Foxes' },
           images: { fox: { url: 'mxc://example.org/fox' } },
+        },
+      },
+      {
+        type: 'm.image_pack',
+        state_key: 'foxes',
+        content: {
+          pack: { display_name: 'Old Draft Foxes' },
+          images: { fox: { url: 'mxc://example.org/old-fox' } },
         },
       },
       {
@@ -166,11 +174,30 @@ describe('room image-pack discovery', () => {
 
     expect(packs).toHaveLength(1)
     expect(packs[0].stateKey).toBe('large')
+    expect(packs[0].stateKeys).toEqual(['large', 'large.foxchat-part.2'])
     expect(packs[0].pack.images).toEqual({
       first: { url: 'mxc://example.org/first' },
       second: { url: 'mxc://example.org/second' },
     })
     expect(packs[0].pack['chat.foxchat.split_pack']).toBeUndefined()
+  })
+
+  it('prefers the stable room event even when the server returns it after legacy aliases', () => {
+    const packs = roomImagePacksFromStateEvents([
+      {
+        type: 'im.ponies.room_emotes',
+        state_key: 'foxes',
+        content: { images: { fox: { url: 'mxc://example.org/legacy' } } },
+      },
+      {
+        type: 'm.room.image_pack',
+        state_key: 'foxes',
+        content: { images: { fox: { url: 'mxc://example.org/stable' } } },
+      },
+    ])
+
+    expect(packs[0].type).toBe('m.room.image_pack')
+    expect(packs[0].pack.images?.fox.url).toBe('mxc://example.org/stable')
   })
 
   it('refreshes room pack metadata only after its one-hour cache expires', async () => {
@@ -534,11 +561,25 @@ describe('saveRoomImagePack / savePersonalImagePack', () => {
       expect(jsonByteLength(content)).toBeLessThanOrEqual(IMAGE_PACK_STATE_TARGET_BYTES)
   })
 
-  it('favorites the whole room instead of pinning only currently known state keys', async () => {
+  it('stores every room pack state key in MSC2545 account data', async () => {
     const saved: Array<[string, unknown]> = []
     const service = new MatrixClientService()
     ;(service as unknown as { client: unknown }).client = {
       getAccountData: () => undefined,
+      getRoom: () => undefined,
+      roomState: () =>
+        Promise.resolve([
+          {
+            type: 'im.ponies.room_emotes',
+            state_key: 'foxes',
+            content: { images: { fox: { url: 'mxc://example.org/fox' } } },
+          },
+          {
+            type: 'im.ponies.room_emotes',
+            state_key: 'birds',
+            content: { images: { bird: { url: 'mxc://example.org/bird' } } },
+          },
+        ]),
       setAccountData: (type: string, content: unknown) => {
         saved.push([type, content])
         return Promise.resolve({})
@@ -548,8 +589,104 @@ describe('saveRoomImagePack / savePersonalImagePack', () => {
     await service.addFavoriteImagePack('!packs:example.org')
 
     expect(saved).toEqual([
-      ['m.image_pack.rooms', { rooms: { '!packs:example.org': {} } }],
-      ['im.ponies.emote_rooms', { rooms: { '!packs:example.org': {} } }],
+      ['m.image_pack.rooms', { rooms: { '!packs:example.org': { birds: {}, foxes: {} } } }],
+      ['im.ponies.emote_rooms', { rooms: { '!packs:example.org': { birds: {}, foxes: {} } } }],
+    ])
+  })
+
+  it('loads standard MSC2545 state-key maps and prefers im.ponies data', () => {
+    const contentByType: Record<string, unknown> = {
+      'm.image_pack.rooms': {
+        rooms: { '!packs:example.org': { stale: {} }, '!stable:example.org': { stable: {} } },
+      },
+      'im.ponies.emote_rooms': {
+        rooms: { '!packs:example.org': { foxes: {}, birds: {} } },
+      },
+    }
+    const client = {
+      getAccountData: (type: string) => ({ getContent: () => contentByType[type] }),
+    }
+    const service = new MatrixClientService()
+
+    expect(service.favoriteImagePackRooms(client as never)).toEqual({
+      '!packs:example.org': ['foxes', 'birds'],
+      '!stable:example.org': ['stable'],
+    })
+    expect(service.favoriteImagePackSelection('!packs:example.org', client as never)).toEqual([
+      'foxes',
+      'birds',
+    ])
+  })
+
+  it('keeps loading the previous empty-room and packs-array formats', () => {
+    const client = {
+      getAccountData: (type: string) =>
+        type === 'im.ponies.emote_rooms'
+          ? {
+              getContent: () => ({
+                rooms: {
+                  '!all:example.org': {},
+                  '!selected:example.org': { packs: ['foxes', 42, 'birds'] },
+                },
+              }),
+            }
+          : undefined,
+    }
+    const service = new MatrixClientService()
+
+    expect(service.favoriteImagePackRooms(client as never)).toEqual({
+      '!all:example.org': null,
+      '!selected:example.org': ['foxes', 'birds'],
+    })
+    expect(service.favoriteImagePackSelection('!all:example.org', client as never)).toBeUndefined()
+    expect(service.favoriteImagePackSelection('!selected:example.org', client as never)).toEqual([
+      'foxes',
+      'birds',
+    ])
+  })
+
+  it('writes selected packs as state-key maps and expands split pack keys', async () => {
+    const saved: Array<[string, unknown]> = []
+    const current = {
+      rooms: {
+        '!packs:example.org': { packs: ['old'] },
+        '!other:example.org': { other: {} },
+      },
+    }
+    const client = {
+      getAccountData: () => ({ getContent: () => current }),
+      setAccountData: (type: string, content: unknown) => {
+        saved.push([type, content])
+        return Promise.resolve({})
+      },
+    }
+    const service = new MatrixClientService()
+
+    await service.setFavoriteImagePackSelection(
+      '!packs:example.org',
+      ['large', 'large.foxchat-part.2'],
+      client as never,
+    )
+
+    expect(saved).toEqual([
+      [
+        'm.image_pack.rooms',
+        {
+          rooms: {
+            '!packs:example.org': { large: {}, 'large.foxchat-part.2': {} },
+            '!other:example.org': { other: {} },
+          },
+        },
+      ],
+      [
+        'im.ponies.emote_rooms',
+        {
+          rooms: {
+            '!packs:example.org': { large: {}, 'large.foxchat-part.2': {} },
+            '!other:example.org': { other: {} },
+          },
+        },
+      ],
     ])
   })
 

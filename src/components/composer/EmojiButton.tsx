@@ -11,7 +11,6 @@ import {
   deduplicateFavoritePacks,
   deduplicateRoomPacks,
   imagePackAccounts,
-  imagePackRoomsTypes,
   matchesPickerSearch,
   moveImagePackOrder,
   orderedImageEntries,
@@ -577,38 +576,33 @@ export function EmojiButton({
         ]
       : []
   const mergingAccounts = packAccounts.length > 1
-  const accountPacks: NamedEmotePack[] = packAccounts.flatMap((account) =>
-    accountImagePackTypes.flatMap((type) => {
+  const accountPacks: NamedEmotePack[] = packAccounts.flatMap((account) => {
+    const candidates = accountImagePackTypes.flatMap((type) => {
       const pack = account.client.getAccountData(type as never)?.getContent<MatrixEmotePack>()
-      return pack?.images
-        ? [
-            {
-              id: `account-${account.id}-${type}`,
-              orderKey: `account\u0000${account.id}\u0000${type}`,
-              label: [
-                pack.pack?.display_name || 'Homeserver default',
-                ...(mergingAccounts ? [account.userId] : []),
-              ].join(' · '),
-              pack,
-              client: account.client,
-              mine: true,
-            },
-          ]
-        : []
-    }),
-  )
+      return pack?.images ? [{ type, pack }] : []
+    })
+    const selected =
+      candidates.find(({ pack }) => Object.keys(pack.images ?? {}).length > 0) ?? candidates.at(-1)
+    if (!selected) return []
+    const { type, pack } = selected
+    return [
+      {
+        id: `account-${account.id}-${type}`,
+        orderKey: `account\u0000${account.id}\u0000${type}`,
+        label: [
+          pack.pack?.display_name || 'Homeserver default',
+          ...(mergingAccounts ? [account.userId] : []),
+        ].join(' · '),
+        pack,
+        client: account.client,
+        mine: true,
+      },
+    ]
+  })
   const favoriteRoomKey = JSON.stringify(
     packAccounts.map((account) => ({
       id: account.id,
-      rooms: Object.assign(
-        {},
-        ...imagePackRoomsTypes.map(
-          (type) =>
-            account.client.getAccountData(type as never)?.getContent<{
-              rooms?: Record<string, Record<string, unknown>>
-            }>().rooms ?? {},
-        ),
-      ),
+      rooms: matrixService.favoriteImagePackRooms(account.client),
     })),
   )
   useEffect(() => {
@@ -616,7 +610,7 @@ export function EmojiButton({
     let cancelled = false
     const configs = JSON.parse(favoriteRoomKey) as Array<{
       id: string
-      rooms: Record<string, Record<string, unknown>>
+      rooms: Record<string, string[] | null>
     }>
     const accounts = matrixService.availableAccounts()
     const favoriteSources = configs.flatMap((config) => {
@@ -643,12 +637,14 @@ export function EmojiButton({
             roomId,
             source.client,
           )
-          const selection = source.rooms[roomId]?.packs
-          const allowedStateKeys = Array.isArray(selection)
-            ? new Set(selection.filter((key): key is string => typeof key === 'string'))
-            : undefined
+          const selection = source.rooms[roomId]
+          const allowedStateKeys = Array.isArray(selection) ? new Set(selection) : undefined
           return packs
-            .filter((location) => !allowedStateKeys || allowedStateKeys.has(location.stateKey))
+            .filter(
+              (location) =>
+                !allowedStateKeys ||
+                location.stateKeys.some((stateKey) => allowedStateKeys.has(stateKey)),
+            )
             .map(({ pack, stateKey }, index) => {
               return {
                 id: `favorite-${roomId}-${stateKey || index}`,

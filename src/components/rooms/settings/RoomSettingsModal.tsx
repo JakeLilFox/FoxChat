@@ -48,7 +48,7 @@ export function RoomSettingsModal({ room, onClose }: { room: Room; onClose: () =
     room.currentState.maySendStateEvent('in.cinny.room.power_level_tags', userId) &&
     room.currentState.maySendStateEvent(EventType.RoomPowerLevels, userId)
   const canManagePacks =
-    !!userId && room.currentState.maySendStateEvent('im.ponies.room_emotes', userId)
+    !!userId && roomImagePackTypes.some((type) => room.currentState.maySendStateEvent(type, userId))
   const banPower =
     room.currentState.getStateEvents(EventType.RoomPowerLevels, '')?.getContent()?.ban ?? 50
   const canViewBanned =

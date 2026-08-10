@@ -5,8 +5,8 @@ import {
   type MatrixEmote,
   type MatrixEmotePack,
   type RoomImagePackLocation,
-  imagePackRoomsTypes,
   orderedImageEntries,
+  preferNonEmptyPack,
   roomImagePackTypes,
   setAllAccountImagePacksEnabled,
   useAllAccountImagePacks,
@@ -52,19 +52,11 @@ export function StickerSettings() {
   const combinedAccounts = matrixService.combinedAccountsEnabled()
   const [favorite, setFavorite] = useState<string>()
   const [adding, setAdding] = useState(false)
-  const personal =
-    client?.getAccountData('m.image_pack' as never)?.getContent<MatrixEmotePack>() ??
-    client?.getAccountData('im.ponies.user_emotes' as never)?.getContent<MatrixEmotePack>()
-  const favoriteRooms = [
-    ...new Set(
-      imagePackRoomsTypes.flatMap((type) =>
-        Object.keys(
-          client?.getAccountData(type as never)?.getContent<{ rooms?: Record<string, unknown> }>()
-            .rooms ?? {},
-        ),
-      ),
-    ),
-  ]
+  const personal = preferNonEmptyPack([
+    client?.getAccountData('m.image_pack' as never)?.getContent<MatrixEmotePack>(),
+    client?.getAccountData('im.ponies.user_emotes' as never)?.getContent<MatrixEmotePack>(),
+  ])
+  const favoriteRooms = Object.keys(matrixService.favoriteImagePackRooms(client))
   const availablePacks = (client?.getRooms() ?? [])
     .flatMap((room) => {
       const count = roomImagePackTypes
@@ -136,11 +128,13 @@ export function StickerSettings() {
     stateKey: string,
     checked: boolean,
   ) => {
-    const allStateKeys = packs.map((location) => location.stateKey)
+    const allStateKeys = packs.flatMap((location) => location.stateKeys)
     const current = matrixService.favoriteImagePackSelection(roomId, client) ?? allStateKeys
+    const target = packs.find((location) => location.stateKey === stateKey)
+    const targetStateKeys = target?.stateKeys ?? [stateKey]
     const next = checked
-      ? [...new Set([...current, stateKey])]
-      : current.filter((key) => key !== stateKey)
+      ? [...new Set([...current, ...targetStateKeys])]
+      : current.filter((key) => !targetStateKeys.includes(key))
     const isEverything = allStateKeys.every((key) => next.includes(key))
     await setPackSelection(roomId, isEverything ? undefined : next)
   }
@@ -205,7 +199,10 @@ export function StickerSettings() {
         renderItem={(roomId) => {
           const packs = roomPacks[roomId] ?? []
           const selection = matrixService.favoriteImagePackSelection(roomId, client)
-          const filtering = selection !== undefined
+          const isSelected = (location: RoomImagePackLocation) =>
+            !selection || location.stateKeys.some((stateKey) => selection.includes(stateKey))
+          const selectedPackCount = packs.filter(isSelected).length
+          const filtering = selection !== undefined && selectedPackCount < packs.length
           return (
             <AntList.Item
               actions={[
@@ -245,7 +242,7 @@ export function StickerSettings() {
                         label: (
                           <span style={{ fontSize: 12, opacity: 0.75 }}>
                             {packs.length} packs ·{' '}
-                            {filtering ? `${selection?.length ?? 0} shown` : 'all shown'}
+                            {filtering ? `${selectedPackCount} shown` : 'all shown'}
                           </span>
                         ),
                         extra: filtering && (
@@ -263,8 +260,7 @@ export function StickerSettings() {
                         children: (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                             {packs.map((location) => {
-                              const checked =
-                                !filtering || (selection?.includes(location.stateKey) ?? false)
+                              const checked = isSelected(location)
                               const preview = packPreviewEmote(location, client)
                               return (
                                 <label

@@ -63,6 +63,7 @@ import {
 import {
   IMAGE_PACK_STATE_TARGET_BYTES,
   findRoomImagePacks,
+  imagePackRoomsTypes,
   jsonByteLength,
   roomImagePackTypes,
   roomImagePacksFromStateEvents,
@@ -108,6 +109,8 @@ export type SavedGifItem =
 const SAVED_GIFS_EVENT_TYPE = 'chat.foxchat.saved_gifs'
 const SAVED_GIFS_MAX_ITEMS = 200
 const savedGifKey = (item: SavedGifItem) => (item.source === 'klipy' ? item.slug : item.url)
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value)
 
 export type MatrixRegistrationResult =
   | { status: 'challenge'; challenge: RegistrationChallenge }
@@ -3513,21 +3516,16 @@ export class MatrixClientService {
       ? (await this.client.getRoomIdForAlias(value)).room_id
       : value
     if (!roomId.startsWith('!')) throw new Error('Enter a Matrix room ID or room alias')
-    for (const type of ['m.image_pack.rooms', 'im.ponies.emote_rooms']) {
-      const current = this.client.getAccountData(type as never)?.getContent() as
-        | { rooms?: Record<string, unknown> }
-        | undefined
-      await this.client.setAccountData(
-        type as never,
-        { ...current, rooms: { ...(current?.rooms ?? {}), [roomId]: {} } } as never,
-      )
-    }
+    const packs = await this.roomImagePacks(roomId, this.client, true)
+    const stateKeys = [...new Set(packs.flatMap(({ stateKeys }) => stateKeys))]
+    if (!stateKeys.length) throw new Error('No sticker or emoji packs were found in that room')
+    await this.setFavoriteImagePackSelection(roomId, stateKeys, this.client)
     return roomId
   }
 
   async removeFavoriteImagePack(roomId: string) {
     if (!this.client) throw new Error('Matrix client is not ready')
-    for (const type of ['m.image_pack.rooms', 'im.ponies.emote_rooms']) {
+    for (const type of imagePackRoomsTypes) {
       const current = this.client.getAccountData(type as never)?.getContent() as
         | { rooms?: Record<string, unknown> }
         | undefined
@@ -3537,16 +3535,35 @@ export class MatrixClientService {
     }
   }
 
-  favoriteImagePackSelection(roomId: string, client = this.client): string[] | undefined {
-    for (const type of ['m.image_pack.rooms', 'im.ponies.emote_rooms']) {
-      const packs = (
-        client?.getAccountData(type as never)?.getContent<{
-          rooms?: Record<string, { packs?: unknown }>
-        }>().rooms?.[roomId] as { packs?: unknown } | undefined
-      )?.packs
-      if (Array.isArray(packs)) return packs.filter((key): key is string => typeof key === 'string')
+  favoriteImagePackRooms(client = this.client): Record<string, string[] | null> {
+    const selectedRooms: Record<string, string[] | null> = {}
+    for (const type of imagePackRoomsTypes) {
+      const rooms = client?.getAccountData(type as never)?.getContent<{ rooms?: unknown }>().rooms
+      if (!isRecord(rooms)) continue
+      for (const [roomId, roomEntry] of Object.entries(rooms)) {
+        if (!isRecord(roomEntry)) continue
+        const standardStateKeys = Object.entries(roomEntry).flatMap(([stateKey, metadata]) =>
+          isRecord(metadata) ? [stateKey] : [],
+        )
+        if (standardStateKeys.length) {
+          selectedRooms[roomId] = [...new Set(standardStateKeys)]
+          continue
+        }
+        const legacyPacks = roomEntry.packs
+        selectedRooms[roomId] = Array.isArray(legacyPacks)
+          ? [
+              ...new Set(
+                legacyPacks.filter((stateKey): stateKey is string => typeof stateKey === 'string'),
+              ),
+            ]
+          : null
+      }
     }
-    return undefined
+    return selectedRooms
+  }
+
+  favoriteImagePackSelection(roomId: string, client = this.client): string[] | undefined {
+    return this.favoriteImagePackRooms(client)[roomId] ?? undefined
   }
 
   async setFavoriteImagePackSelection(
@@ -3555,13 +3572,20 @@ export class MatrixClientService {
     client = this.client,
   ) {
     if (!client) throw new Error('Matrix client is not ready')
-    for (const type of ['m.image_pack.rooms', 'im.ponies.emote_rooms']) {
+    const selectedStateKeys = [
+      ...new Set(
+        stateKeys ??
+          (await this.roomImagePacks(roomId, client, true)).flatMap(({ stateKeys }) => stateKeys),
+      ),
+    ]
+    for (const type of imagePackRoomsTypes) {
       const current = client.getAccountData(type as never)?.getContent() as
-        | { rooms?: Record<string, Record<string, unknown>> }
+        | { rooms?: Record<string, unknown> }
         | undefined
       const rooms = { ...(current?.rooms ?? {}) }
-      const { packs: _existingPacks, ...roomEntry } = rooms[roomId] ?? {}
-      rooms[roomId] = stateKeys ? { ...roomEntry, packs: [...new Set(stateKeys)] } : roomEntry
+      if (selectedStateKeys.length)
+        rooms[roomId] = Object.fromEntries(selectedStateKeys.map((stateKey) => [stateKey, {}]))
+      else delete rooms[roomId]
       await client.setAccountData(type as never, { ...current, rooms } as never)
     }
   }

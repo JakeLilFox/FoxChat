@@ -702,6 +702,17 @@ test.describe('live sticker pack journey', () => {
         const session = (await storedSessions(page!)).at(-1)!
         favoriteAccountData = await snapshotFavoritePacks(session)
         await favoriteImagePack(page!, roomName)
+        for (const type of favoriteAccountDataTypes) {
+          const accountData = await getAccountData(session, type)
+          expect(accountData).toMatchObject({
+            rooms: {
+              [roomId!]: {
+                [packStateKey]: {},
+                [secondPackStateKey]: {},
+              },
+            },
+          })
+        }
 
         await openRoomActions(page!)
         await page!.getByRole('menu').getByText('Create a room', { exact: true }).click()
