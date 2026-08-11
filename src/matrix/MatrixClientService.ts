@@ -357,6 +357,7 @@ export class MatrixClientService {
 
   retrySyncAfterResume(retryWindowMs = 15_000) {
     this.resumeSyncRetryUntil = Date.now() + retryWindowMs
+    if (this.client) scheduleNativeCryptoSync(this.client)
     let retried = this.client && this.retryBackedOffSyncAfterResume(this.client) ? 1 : 0
     for (const service of this.secondaryClients.values())
       retried += service.retrySyncAfterResume(retryWindowMs)
@@ -1022,6 +1023,9 @@ export class MatrixClientService {
           ? Date.now() + tokens.expires_in_ms
           : undefined
         if (!this.ephemeral) this.persistSession(session)
+        // Keep background notification decryption authenticated without periodically
+        // re-exporting the entire native crypto store just to refresh this token.
+        scheduleNativeCryptoSync(client, 0, true)
         return {
           accessToken: session.accessToken,
           refreshToken: session.refreshToken,
@@ -1116,6 +1120,7 @@ export class MatrixClientService {
     client.on(RoomEvent.MyMembership, (room) => {
       this.trackRoomOwner(client, room)
       this.observers.forEach((x) => x.onRoom?.(room))
+      scheduleNativeCryptoSync(client)
     })
     client.on(RoomEvent.Tags, (_event, room) => {
       this.trackRoomOwner(client, room)

@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import app.tauri.remotepush.NativeCryptoBridge
 import app.tauri.remotepush.NotificationDecryptionBridge
 import app.tauri.remotepush.PushNotificationPlugin
 
@@ -99,7 +100,13 @@ class NotificationDecryptService : Service() {
     ) {
         Thread {
             val decrypted = try {
-                NativeNotificationCrypto.decrypt(applicationContext, requestedRoomId, requestedEventId)
+                NativeNotificationCrypto.decrypt(
+                    applicationContext,
+                    requestedRoomId,
+                    requestedEventId,
+                    fallback?.senderId,
+                    fallback?.senderName,
+                )
             } catch (error: Throwable) {
                 NativeNotificationCrypto.recordNotificationDiagnostic(
                     applicationContext,
@@ -141,7 +148,7 @@ class NotificationDecryptService : Service() {
     }
 
     private fun requestWebViewFallback(requestedRoomId: String, requestedEventId: String) {
-        if (PushNotificationPlugin.instance == null) {
+        if (PushNotificationPlugin.instance == null || !NativeCryptoBridge.webViewActive) {
             NativeNotificationCrypto.recordNotificationDiagnostic(
                 applicationContext, "webview-unavailable", requestedRoomId, requestedEventId,
             )

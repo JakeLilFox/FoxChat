@@ -17,7 +17,6 @@ const registrationInFlight = new WeakMap<MatrixClient, Promise<void>>()
 const registrationRetries = new WeakMap<MatrixClient, number>()
 const registrationTimers = new WeakMap<MatrixClient, number>()
 const cryptoSyncTimers = new WeakMap<MatrixClient, number>()
-const cryptoPeriodicTimers = new WeakMap<MatrixClient, number>()
 const lastCryptoSync = new WeakMap<MatrixClient, number>()
 const cryptoSyncRetries = new WeakMap<MatrixClient, number>()
 const syncedRoomSessions = new WeakMap<MatrixClient, Set<string>>()
@@ -46,12 +45,6 @@ const delay = (milliseconds: number) =>
 
 export function scheduleNativeCryptoSync(client: MatrixClient, delay = 2_000, force = false) {
   if (!isAndroidNative()) return
-  if (!cryptoPeriodicTimers.has(client)) {
-    cryptoPeriodicTimers.set(
-      client,
-      window.setInterval(() => scheduleNativeCryptoSync(client, 0), CRYPTO_SYNC_INTERVAL_MS),
-    )
-  }
   if (
     !force &&
     delay > 0 &&

@@ -653,7 +653,13 @@ object NativeNotificationCrypto {
         return enabled.isNotEmpty() && enabled.none { it }
     }
 
-    fun decrypt(context: Context, roomId: String, eventId: String): NativeDecryptedNotification {
+    fun decrypt(
+        context: Context,
+        roomId: String,
+        eventId: String,
+        knownSenderId: String? = null,
+        knownSenderName: String? = null,
+    ): NativeDecryptedNotification {
         val prefs = preferences(context)
         val preferredUserId = prefs.getString("room.$roomId", null)
         val userIds = buildList {
@@ -667,7 +673,15 @@ object NativeNotificationCrypto {
         val errors = mutableListOf<Exception>()
         for (userId in userIds) {
             try {
-                val result = decryptWithAccount(context, prefs, userId, roomId, eventId)
+                val result = decryptWithAccount(
+                    context,
+                    prefs,
+                    userId,
+                    roomId,
+                    eventId,
+                    knownSenderId,
+                    knownSenderName,
+                )
                 prefs.edit()
                     .putLong("$userId.lastDecryptAt", System.currentTimeMillis())
                     .remove("$userId.lastDecryptError")
@@ -696,6 +710,8 @@ object NativeNotificationCrypto {
         userId: String,
         roomId: String,
         eventId: String,
+        knownSenderId: String?,
+        knownSenderName: String?,
     ): NativeDecryptedNotification =
         synchronized(lockFor(userId)) {
             val deviceId = prefs.getString("$userId.device", null) ?: error("Native device ID is missing")
@@ -753,9 +769,12 @@ object NativeNotificationCrypto {
                         else -> "Sent an encrypted message"
                     }
                 val senderId = encrypted.optString("sender")
+                val senderName = knownSenderName?.takeIf {
+                    senderId == knownSenderId && it.isNotBlank() && it != senderId
+                } ?: fetchSenderDisplayName(homeserver, token, roomId, senderId)
                 NativeDecryptedNotification(
                     senderId = senderId,
-                    senderName = fetchSenderDisplayName(homeserver, token, roomId, senderId),
+                    senderName = senderName,
                     body = body,
                     timestamp = encrypted.optLong("origin_server_ts", System.currentTimeMillis()),
                 )
