@@ -7,6 +7,9 @@ type MixerChannel = {
   source: MediaStreamAudioSourceNode
   analyser: AnalyserNode
   gain: GainNode
+  element: HTMLMediaElement
+  stream: MediaStream
+  track: MediaStreamTrack
   userId: string
   sourceKind: AudioSourceKind
 }
@@ -52,15 +55,40 @@ const channels = new Map<string, MixerChannel>()
 const lastSpokeAt = new Map<string, number>()
 const levelSamples = new Float32Array(256)
 const wired = new WeakMap<HTMLMediaElement, string>()
+let inferredUsers = new WeakMap<HTMLMediaElement, string>()
 const managedElements = new Set<HTMLMediaElement>()
 const channelKey = (userId: string, source: AudioSourceKind) => `${userId}:${source}`
+
+const disconnectChannel = (key: string, channel: MixerChannel) => {
+  channel.source.disconnect()
+  channel.analyser.disconnect()
+  channel.gain.disconnect()
+  if (channels.get(key) === channel) channels.delete(key)
+  if (wired.get(channel.element) === key) wired.delete(channel.element)
+  delete channel.element.dataset.foxchatMixerActive
+  delete channel.element.dataset.foxchatMixerUserId
+  delete channel.element.dataset.foxchatMixerGain
+}
+
+const manage = (element: HTMLMediaElement) => {
+  managedElements.add(element)
+  element.muted = true
+}
+
+const stopManaging = (element: HTMLMediaElement) => {
+  managedElements.delete(element)
+  wired.delete(element)
+  element.muted = masterMuted
+}
 
 const applyGain = (userId: string, source: AudioSourceKind) => {
   const channel = channels.get(channelKey(userId, source))
   if (!channel) return
   const state = stateFor(userId)
   const muted = masterMuted || (source === 'screen_share_audio' && state.screenshareMuted)
-  channel.gain.gain.value = muted ? 0 : state[volumeField(source)] / 100
+  const effectiveGain = muted ? 0 : state[volumeField(source)] / 100
+  channel.gain.gain.value = effectiveGain
+  channel.element.dataset.foxchatMixerGain = String(effectiveGain)
 }
 
 export const isManaged = (element: HTMLMediaElement) => managedElements.has(element)
@@ -92,37 +120,33 @@ export const attach = (element: HTMLMediaElement, userId: string, source: AudioS
   const candidate = element.srcObject as
     | (MediaStream & { getAudioTracks?: () => MediaStreamTrack[] })
     | null
-  if (
-    !candidate ||
-    typeof candidate.getAudioTracks !== 'function' ||
-    !candidate.getAudioTracks().length
-  )
-    return
+  if (!candidate || typeof candidate.getAudioTracks !== 'function') return
+  const track = candidate
+    .getAudioTracks()
+    .find((candidateTrack) => candidateTrack.readyState !== 'ended')
+  if (!track) return
   const stream = candidate as MediaStream
-  managedElements.add(element)
-  element.muted = true
+  manage(element)
   const key = channelKey(userId, source)
   const previousKey = wired.get(element)
-  if (previousKey === key) {
+  const existing = channels.get(key)
+  if (
+    previousKey === key &&
+    existing?.element === element &&
+    existing.stream === stream &&
+    existing.track === track
+  ) {
     applyGain(userId, source)
     return
   }
   if (previousKey !== undefined) {
     const stale = channels.get(previousKey)
-    if (stale) {
-      stale.source.disconnect()
-      stale.analyser.disconnect()
-      stale.gain.disconnect()
-      channels.delete(previousKey)
-    }
+    if (stale?.element === element) disconnectChannel(previousKey, stale)
   }
   wired.set(element, key)
   const context = audioContextFor()
   void context.resume().catch(() => undefined)
-  const existing = channels.get(key)
-  existing?.source.disconnect()
-  existing?.analyser.disconnect()
-  existing?.gain.disconnect()
+  if (existing) disconnectChannel(key, existing)
   const sourceNode = context.createMediaStreamSource(stream)
   const analyserNode = context.createAnalyser()
   analyserNode.fftSize = 512
@@ -136,9 +160,14 @@ export const attach = (element: HTMLMediaElement, userId: string, source: AudioS
     source: sourceNode,
     analyser: analyserNode,
     gain: gainNode,
+    element,
+    stream,
+    track,
     userId,
     sourceKind: source,
   })
+  element.dataset.foxchatMixerActive = 'true'
+  element.dataset.foxchatMixerUserId = userId
   applyGain(userId, source)
 }
 
@@ -146,11 +175,68 @@ export const detach = (userId: string, source: AudioSourceKind) => {
   const key = channelKey(userId, source)
   const channel = channels.get(key)
   if (!channel) return
-  channel.source.disconnect()
-  channel.analyser.disconnect()
-  channel.gain.disconnect()
-  channels.delete(key)
+  disconnectChannel(key, channel)
   if (source === 'microphone') lastSpokeAt.delete(userId)
+}
+
+
+export const reconcile = (matches: MatchedAudioElement[]) => {
+  const matchedElements = new Set(matches.map((match) => match.element))
+  for (const element of managedElements) {
+    if (matchedElements.has(element)) continue
+    if (element.isConnected) manage(element)
+    else stopManaging(element)
+  }
+
+  const grouped = new Map<string, MatchedAudioElement[]>()
+  for (const match of matches) {
+    manage(match.element)
+    const key = channelKey(match.userId, match.source)
+    grouped.set(key, [...(grouped.get(key) ?? []), match])
+  }
+
+  for (const [key, channel] of channels) {
+    if (!grouped.has(key)) {
+      disconnectChannel(key, channel)
+      if (channel.sourceKind === 'microphone') lastSpokeAt.delete(channel.userId)
+    }
+  }
+
+  for (const [key, candidates] of grouped) {
+    const usable = candidates.filter((candidate) => {
+      const stream = candidate.element.srcObject as
+        | (MediaStream & { getAudioTracks?: () => MediaStreamTrack[] })
+        | null
+      return (
+        !!stream &&
+        typeof stream.getAudioTracks === 'function' &&
+        stream.getAudioTracks().some((track) => track.readyState !== 'ended')
+      )
+    })
+    const existing = channels.get(key)
+    const selected = usable.at(-1)
+    if (!selected) {
+      if (existing) disconnectChannel(key, existing)
+      continue
+    }
+    attach(selected.element, selected.userId, selected.source)
+    for (const candidate of candidates) {
+      if (candidate.element === selected.element) continue
+      delete candidate.element.dataset.foxchatMixerActive
+      delete candidate.element.dataset.foxchatMixerUserId
+      delete candidate.element.dataset.foxchatMixerGain
+      if (wired.get(candidate.element) === key) wired.delete(candidate.element)
+    }
+  }
+}
+
+export const reset = () => {
+  for (const [key, channel] of channels) disconnectChannel(key, channel)
+  masterMuted = false
+  for (const element of managedElements) stopManaging(element)
+  managedElements.clear()
+  lastSpokeAt.clear()
+  inferredUsers = new WeakMap()
 }
 
 export const getUserVolume = (userId: string, source: AudioSourceKind) =>
@@ -182,10 +268,27 @@ export type MatchedAudioElement = {
 
 const tileLabel = (element: HTMLMediaElement) => {
   const container = element.closest<HTMLElement>('[class*="tile"],li,article')
-  if (!container) return ''
-  const hints = [container.textContent, container.getAttribute('aria-label'), container.title]
-  for (const node of container.querySelectorAll<HTMLElement>('[aria-label],[title]'))
-    hints.push(node.getAttribute('aria-label'), node.title)
+  const hints: Array<string | null | undefined> = [
+    element.getAttribute('aria-label'),
+    element.title,
+    ...Object.values(element.dataset),
+    container?.textContent,
+    container?.getAttribute('aria-label'),
+    container?.title,
+    ...Object.values(container?.dataset ?? {}),
+  ]
+  for (const node of container?.querySelectorAll<HTMLElement>(
+    '[aria-label],[title],[data-participant-identity],[data-lk-participant-identity]',
+  ) ?? [])
+    hints.push(node.getAttribute('aria-label'), node.title, ...Object.values(node.dataset))
+  let ancestor = element.parentElement
+  for (let depth = 0; ancestor && depth < 7; depth++, ancestor = ancestor.parentElement) {
+    hints.push(
+      ancestor.getAttribute('aria-label'),
+      ancestor.title,
+      ...Object.values(ancestor.dataset),
+    )
+  }
   return hints.filter(Boolean).join(' ')
 }
 
@@ -215,13 +318,27 @@ export const scanAudioElements = (
       (candidate) =>
         label.includes(candidate.userId) || (candidate.name && label.includes(candidate.name)),
     )
-    if (member) matched.push({ element, userId: member.userId, source })
-    else unmatched.push({ element, source })
+    if (member) {
+      inferredUsers.set(element, member.userId)
+      matched.push({ element, userId: member.userId, source })
+    } else unmatched.push({ element, source })
   }
-  const matchedUserIds = new Set(matched.map((item) => item.userId))
-  const remaining = others.filter((member) => !matchedUserIds.has(member.userId))
-  if (unmatched.length && remaining.length === 1)
-    for (const { element, source } of unmatched)
-      matched.push({ element, userId: remaining[0].userId, source })
+
+  const unresolved: typeof unmatched = []
+  for (const candidate of unmatched) {
+    const inferredUserId = inferredUsers.get(candidate.element)
+    const member = others.find((other) => other.userId === inferredUserId)
+    if (member) matched.push({ ...candidate, userId: member.userId })
+    else unresolved.push(candidate)
+  }
+
+  // A single remote user is unambiguous even on older embedded Element Call builds. Never infer
+  // several users by DOM order: LiveKit track order can differ from Matrix membership order.
+  if (others.length === 1)
+    for (const candidate of unresolved) {
+      if (matched.some((match) => match.element === candidate.element)) continue
+      inferredUsers.set(candidate.element, others[0].userId)
+      matched.push({ ...candidate, userId: others[0].userId })
+    }
   return matched
 }

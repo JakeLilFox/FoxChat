@@ -293,7 +293,7 @@ export function MicrophoneSetting() {
             description="Adjust how loudly your microphone is sent to everyone in Matrix calls."
           />
           <Slider
-            aria-label="Microphone volume"
+            ariaLabelForHandle="Microphone volume"
             min={0}
             max={200}
             step={5}

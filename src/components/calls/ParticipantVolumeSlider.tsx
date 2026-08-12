@@ -19,6 +19,7 @@ export function ParticipantVolumeSlider({
         {label} · {value}%
       </div>
       <Slider
+        ariaLabelForHandle={`${label} for ${userId}`}
         min={0}
         max={200}
         step={5}

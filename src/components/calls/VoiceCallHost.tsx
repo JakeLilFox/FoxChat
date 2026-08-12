@@ -1,6 +1,11 @@
 import { ElementCallVideo } from './ElementCallVideo'
 import { MemberAvatar } from '../profile'
-import { type ElementCallMedia, participantAudioMenu } from './voiceCallHelpers'
+import { participantAudioMenu } from './voiceCallHelpers'
+import {
+  reconcileElementCallMedia,
+  sameElementCallMediaList,
+  type ElementCallMedia,
+} from './elementCallMedia'
 import {
   matrixMemberDisplayName,
   matrixRTCActiveSpeakers,
@@ -666,6 +671,7 @@ export function VoiceCallHost() {
       }
       headphonesMutedRef.current = false
       setHeadphonesMuted(false)
+      VoiceAudioMixer.setMasterMuted(false)
       manuallyMutedRef.current = false
       setManuallyMuted(false)
       setFocusedTile(undefined)
@@ -910,8 +916,7 @@ export function VoiceCallHost() {
         voiceMembers,
         client?.getUserId() ?? undefined,
       )
-      for (const match of audioMatches)
-        VoiceAudioMixer.attach(match.element, match.userId, match.source)
+      VoiceAudioMixer.reconcile(audioMatches)
       const taggedCount = document.querySelectorAll('[data-lk-source]').length
       const audioTagCount = document.querySelectorAll('audio').length
       const signature = `${taggedCount}|${audioTagCount}|${audioMatches
@@ -959,8 +964,8 @@ export function VoiceCallHost() {
         camera: cameraControl?.getAttribute('aria-checked') === 'true',
         screen: screenControl?.getAttribute('aria-checked') === 'true',
       })
-      const nextMedia = [...document.querySelectorAll<HTMLVideoElement>('video')].flatMap(
-        (video, index) => {
+      const nextMedia = reconcileElementCallMedia(
+        [...document.querySelectorAll<HTMLVideoElement>('video')].flatMap((video, index) => {
           const candidate = video.srcObject as
             | (MediaStream & { getVideoTracks?: () => MediaStreamTrack[] })
             | null
@@ -1008,6 +1013,9 @@ export function VoiceCallHost() {
           const audioUserId = audioMatches.find(
             (match) => match.element.closest('[class*="tile"],li,article') === container,
           )?.userId
+          const directVideoUserId = remoteMembers.find((member) =>
+            Object.values(video.dataset).some((hint) => hint?.includes(member.userId)),
+          )?.userId
           const uniqueScreenAudioUserId = isScreen
             ? [
                 ...new Set(
@@ -1019,7 +1027,8 @@ export function VoiceCallHost() {
             : []
           const userId = isOwn
             ? (client?.getUserId() ?? undefined)
-            : (audioUserId ??
+            : (directVideoUserId ??
+              audioUserId ??
               remoteMembers.find(
                 (member) =>
                   identityHints.includes(member.userId) ||
@@ -1038,17 +1047,9 @@ export function VoiceCallHost() {
               userId,
             },
           ]
-        },
+        }),
       )
-      setMedia((current) =>
-        current.length === nextMedia.length &&
-        current.every(
-          (item, index) =>
-            item.id === nextMedia[index]?.id && item.label === nextMedia[index]?.label,
-        )
-          ? current
-          : nextMedia,
-      )
+      setMedia((current) => (sameElementCallMediaList(current, nextMedia) ? current : nextMedia))
       setRevision((value) => value + 1)
     }
     const attach = () => {
@@ -1078,6 +1079,7 @@ export function VoiceCallHost() {
       observer?.disconnect()
       if (mediaTimer !== undefined) window.clearInterval(mediaTimer)
       if (speakerTimer !== undefined) window.clearInterval(speakerTimer)
+      VoiceAudioMixer.reset()
       setMedia([])
       closeAllPopouts()
       window.dispatchEvent(
@@ -1446,14 +1448,27 @@ export function VoiceCallHost() {
     const screenMuted = userId ? VoiceAudioMixer.getScreenshareAudioMuted(userId) : false
     const popoutActive = !!tile.media && isPopoutOpen(tile.media.id)
     const screenShareWaiting = !!tile.media?.screen && !isViewedScreenShare(tile)
+    const activateTile = () => {
+      if (screenShareWaiting) return
+      setFocusedTile((current) => (current === tile.key ? undefined : tile.key))
+    }
     const body = (
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         key={tile.key}
+        data-testid="call-tile"
+        data-user-id={userId}
+        data-media-kind={tile.media?.screen ? 'screen' : 'participant'}
+        data-speaking={speaking ? 'true' : 'false'}
         className={`callTile ${speaking ? 'speaking' : ''}`}
-        onClick={() => {
-          if (screenShareWaiting) return
-          setFocusedTile((current) => (current === tile.key ? undefined : tile.key))
+        onClick={activateTile}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            activateTile()
+          }
         }}
         style={{
           position: 'relative',
@@ -1559,6 +1574,7 @@ export function VoiceCallHost() {
           </span>
         )}
         <span
+          data-testid="call-tile-label"
           style={{
             position: 'absolute',
             left: 10,
@@ -1572,13 +1588,14 @@ export function VoiceCallHost() {
             background: 'rgba(0,0,0,.66)',
             color: 'white',
             fontSize: 11,
+            pointerEvents: 'none',
           }}
         >
           {isOwn ? 'You · ' : ''}
           {name}
           {tile.media?.screen ? ' · Screen' : ''}
         </span>
-      </button>
+      </div>
     )
     const audioMenu = userId
       ? participantAudioMenu(

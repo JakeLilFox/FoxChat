@@ -4,16 +4,6 @@ import * as VoiceAudioMixer from './ElementCallAudioMixer'
 import type { AudioSourceKind } from './ElementCallAudioMixer'
 import { ParticipantVolumeSlider } from './ParticipantVolumeSlider'
 
-export type ElementCallMedia = {
-  id: string
-  stream: MediaStream
-  label: string
-  screen: boolean
-  muted: boolean
-  own: boolean
-  userId?: string
-}
-
 const volumeSlider = (userId: string, source: AudioSourceKind, label: string) => ({
   key: `volume-${source}`,
   label: <ParticipantVolumeSlider userId={userId} source={source} label={label} />,

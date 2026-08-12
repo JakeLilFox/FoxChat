@@ -1,4 +1,4 @@
-import { type ElementCallMedia } from './voiceCallHelpers'
+import { type ElementCallMedia } from './elementCallMedia'
 import { useEffect, useRef } from 'react'
 
 export function ElementCallVideo({

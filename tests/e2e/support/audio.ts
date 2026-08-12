@@ -52,6 +52,68 @@ export type DominantFrequencyResult = {
   elementIndex: number
   peakHz: number
   peakDb: number
+  userId?: string
+}
+
+export async function dominantFrequenciesOf(
+  target: Frame | Page,
+  {
+    sampleMs = 2_500,
+    fftSize = 8_192,
+    mixerActiveOnly = false,
+  }: { sampleMs?: number; fftSize?: number; mixerActiveOnly?: boolean } = {},
+): Promise<DominantFrequencyResult[]> {
+  return target.evaluate(
+    async ({ sampleMs, fftSize, mixerActiveOnly }) => {
+      const audios = [...document.querySelectorAll('audio')]
+      const entries = audios.flatMap((audio, elementIndex) => {
+        if (mixerActiveOnly && audio.dataset.foxchatMixerActive !== 'true') return []
+        const stream = audio.srcObject
+        if (!(stream instanceof MediaStream) || !stream.getAudioTracks().length) return []
+        const context = new AudioContext()
+        const source = context.createMediaStreamSource(stream)
+        const analyser = context.createAnalyser()
+        analyser.fftSize = fftSize
+        analyser.smoothingTimeConstant = 0
+        source.connect(analyser)
+        return [{ context, analyser, elementIndex, userId: audio.dataset.foxchatMixerUserId }]
+      })
+      const peaks = entries.map(({ elementIndex, userId }) => ({
+        elementIndex,
+        userId,
+        peakHz: 0,
+        peakDb: -Infinity,
+      }))
+      const bins = new Float32Array(fftSize / 2)
+      const start = performance.now()
+      while (performance.now() - start < sampleMs) {
+        for (let index = 0; index < entries.length; index++) {
+          const entry = entries[index]
+          entry.analyser.getFloatFrequencyData(bins)
+          let maxIndex = 0
+          let maxValue = -Infinity
+          for (let bin = 1; bin < bins.length; bin++) {
+            if (bins[bin] > maxValue) {
+              maxValue = bins[bin]
+              maxIndex = bin
+            }
+          }
+          if (maxValue > peaks[index].peakDb) {
+            peaks[index] = {
+              elementIndex: entry.elementIndex,
+              userId: entry.userId,
+              peakDb: maxValue,
+              peakHz: (maxIndex * entry.context.sampleRate) / fftSize,
+            }
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      for (const entry of entries) void entry.context.close().catch(() => undefined)
+      return peaks.filter((peak) => peak.peakDb !== -Infinity)
+    },
+    { sampleMs, fftSize, mixerActiveOnly },
+  )
 }
 
 export async function dominantFrequencyOf(
