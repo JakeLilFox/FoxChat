@@ -657,7 +657,7 @@ const pollCalls = () => {
   }
 }
 
-export async function startAutomationApiIntegration() {
+export async function startAutomationApiIntegration(startConfiguredServer = true) {
   if (!automationApiSupported() || integrationStarted || integrationStarting) return
   integrationStarting = true
   try {
@@ -695,7 +695,7 @@ export async function startAutomationApiIntegration() {
     window.addEventListener('foxchat-call-state', onCallState)
     window.setInterval(pollCalls, 1_000)
     const settings = automationSettings()
-    if (settings.enabled)
+    if (startConfiguredServer && settings.enabled)
       await configureAutomationApi(true, settings.port, settings.apiKey).catch((error) =>
         console.error('[automation-api] Could not start', error),
       )

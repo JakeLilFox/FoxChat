@@ -33,7 +33,6 @@ export function Root() {
   useEffect(() => listenForAndroidResume(() => matrixService.retrySyncAfterResume()), [])
   useEffect(() => {
     void matrixService.listenForNotificationDecryptRequests()
-    void startAutomationApiIntegration()
   }, [])
   useEffect(() => {
     const preventFileNavigation = (event: DragEvent) => {
@@ -50,6 +49,12 @@ export function Root() {
   useEffect(() => {
     void (async () => {
       const cliOptions = await fetchCliLoginOptions()
+      const cliControlsAutomation = !!(
+        cliOptions?.automationPort ||
+        cliOptions?.automationListen ||
+        cliOptions?.automationKey
+      )
+      await startAutomationApiIntegration(!cliControlsAutomation)
       if (cliOptions) {
         setAuth('syncing')
         const result = await applyCliLogin(cliOptions)

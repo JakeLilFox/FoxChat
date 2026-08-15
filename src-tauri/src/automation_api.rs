@@ -33,11 +33,27 @@ struct RunningServer {
     port: u16,
     shutdown: oneshot::Sender<()>,
     peers: Peers,
+    task: tauri::async_runtime::JoinHandle<()>,
 }
 
 #[derive(Default)]
 pub struct AutomationApiState {
     server: Mutex<Option<RunningServer>>,
+    lifecycle: tokio::sync::Mutex<()>,
+}
+
+async fn stop_running_server(state: &AutomationApiState) -> Result<(), String> {
+    let server = state
+        .server
+        .lock()
+        .map_err(|_| "API state lock failed")?
+        .take();
+    if let Some(server) = server {
+        let _ = server.shutdown.send(());
+        let _ = server.task.await;
+        server.peers.lock().await.clear();
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -229,7 +245,8 @@ pub async fn start_automation_api(
     let listen_address = listen_address
         .parse::<std::net::IpAddr>()
         .map_err(|_| format!("Invalid automation API listen address: {listen_address}"))?;
-    stop_automation_api(state.clone()).await?;
+    let _lifecycle = state.lifecycle.lock().await;
+    stop_running_server(&state).await?;
     let listener = TcpListener::bind((listen_address, port))
         .await
         .map_err(|error| error.to_string())?;
@@ -241,7 +258,7 @@ pub async fn start_automation_api(
     let task_peers = peers.clone();
     let key = Arc::new(api_key);
     let (shutdown, mut shutdown_receiver) = oneshot::channel();
-    tauri::async_runtime::spawn(async move {
+    let task = tauri::async_runtime::spawn(async move {
         loop {
             tokio::select! {
                 _ = &mut shutdown_receiver => break,
@@ -261,6 +278,7 @@ pub async fn start_automation_api(
         port: actual_port,
         shutdown,
         peers,
+        task,
     });
     Ok(actual_port)
 }
@@ -269,16 +287,8 @@ pub async fn start_automation_api(
 pub async fn stop_automation_api(
     state: tauri::State<'_, AutomationApiState>,
 ) -> Result<(), String> {
-    let server = state
-        .server
-        .lock()
-        .map_err(|_| "API state lock failed")?
-        .take();
-    if let Some(server) = server {
-        let _ = server.shutdown.send(());
-        server.peers.lock().await.clear();
-    }
-    Ok(())
+    let _lifecycle = state.lifecycle.lock().await;
+    stop_running_server(&state).await
 }
 
 #[tauri::command]
