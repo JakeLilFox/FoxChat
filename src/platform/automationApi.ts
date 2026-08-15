@@ -13,6 +13,7 @@ export const AUTOMATION_ENABLED_KEY = 'foxchat.automation.enabled'
 export const AUTOMATION_PORT_KEY = 'foxchat.automation.port'
 export const AUTOMATION_API_KEY = 'foxchat.automation.apiKey'
 export const DEFAULT_AUTOMATION_PORT = 29331
+export const DEFAULT_AUTOMATION_LISTEN_ADDRESS = '127.0.0.1'
 
 export type AutomationStatus = {
   running: boolean
@@ -128,7 +129,12 @@ export async function automationApiStatus(): Promise<AutomationStatus> {
   return invoke<AutomationStatus>('automation_api_status')
 }
 
-export async function configureAutomationApi(enabled: boolean, port: number, apiKey: string) {
+export async function configureAutomationApi(
+  enabled: boolean,
+  port: number,
+  apiKey: string,
+  listenAddress = DEFAULT_AUTOMATION_LISTEN_ADDRESS,
+) {
   if (!automationApiSupported() && enabled)
     throw new Error('The automation API is available in desktop browsers and the desktop app')
   const effectivePort = nativeAvailable() ? port : DEFAULT_AUTOMATION_PORT
@@ -140,7 +146,12 @@ export async function configureAutomationApi(enabled: boolean, port: number, api
     else stopBridge()
     return
   }
-  if (enabled) await invoke<number>('start_automation_api', { port: effectivePort, apiKey })
+  if (enabled)
+    await invoke<number>('start_automation_api', {
+      port: effectivePort,
+      apiKey,
+      listenAddress,
+    })
   else await invoke('stop_automation_api')
 }
 

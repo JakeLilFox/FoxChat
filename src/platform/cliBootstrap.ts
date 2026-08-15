@@ -9,6 +9,7 @@ export type CliLoginOptions = {
   recoveryKey?: string
   persist: boolean
   automationPort?: number
+  automationListen?: string
   automationKey?: string
   headless: boolean
 }
@@ -94,12 +95,20 @@ export async function applyCliLogin(options: CliLoginOptions): Promise<'ready' |
 
     if (options.automationPort && options.automationKey) {
       try {
-        await configureAutomationApi(true, options.automationPort, options.automationKey)
-        logToTerminal(`[cli] Automation API listening on 127.0.0.1:${options.automationPort}`)
+        const listenAddress = options.automationListen || '127.0.0.1'
+        await configureAutomationApi(
+          true,
+          options.automationPort,
+          options.automationKey,
+          listenAddress,
+        )
+        logToTerminal(
+          `[cli] Automation API listening on ${listenAddress}:${options.automationPort}`,
+        )
       } catch (error) {
         logToTerminal(`[cli] Automation API failed to start: ${errorMessage(error)}`)
       }
-    } else if (options.automationPort || options.automationKey) {
+    } else if (options.automationPort || options.automationListen || options.automationKey) {
       logToTerminal(
         '[cli] --automation-port and --automation-key must both be given to start the ' +
           'automation API; got only one, so it was not started.',

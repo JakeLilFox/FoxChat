@@ -4,9 +4,10 @@ FoxChat can expose a local WebSocket API for stream decks, overlays, bots, and
 other trusted desktop automation. Enable it under **Settings → Automation API**.
 
 The desktop app hosts the API directly. The web app uses the separately
-installed FoxChat Bridge. In both cases the server is disabled by default,
-binds only to `127.0.0.1`, and never listens on a LAN interface. Every
-connection must authenticate before it can subscribe or make requests.
+installed FoxChat Bridge. In both cases the server is disabled by default and
+binds to `127.0.0.1`. The desktop app can opt into another listen address with
+the `--automation-listen` CLI option; the browser bridge remains loopback-only.
+Every connection must authenticate before it can subscribe or make requests.
 
 ## Browser bridge installation
 
@@ -58,8 +59,9 @@ Success:
 
 Failed authentication closes the socket. Rotate the key in settings if it is
 ever exposed; existing connections are disconnected when the server restarts.
-Because this is an unencrypted loopback connection, do not proxy it or bind it
-to another interface.
+The connection is unencrypted. If the desktop app is launched with a non-loopback
+`--automation-listen` address, restrict access with a firewall and use an SSH/VPN
+tunnel or TLS-terminating reverse proxy across untrusted networks.
 
 ## Requests
 

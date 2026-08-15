@@ -21,6 +21,7 @@ foxchat --help
 | `--recovery-key <key>` | Security/recovery key, used to unlock encrypted history after sign-in |
 | `--persist` | Reuse a previously saved session instead of logging in again (see below) |
 | `--automation-port <port>` | Port for the local automation API |
+| `--automation-listen <ip>` | Listen address for the automation API (default `127.0.0.1`; use `0.0.0.0` for all IPv4 interfaces) |
 | `--automation-key <key>` | API key for the local automation API — **must be at least 24 characters** or the API refuses to start (e.g. `openssl rand -hex 16`) |
 | `--headless` | Do not show the application window |
 | `--help` / `-h` | Print usage and exit |
@@ -60,6 +61,24 @@ after signing in on a fresh machine.
 A CLI-driven launch has nobody available to click through a login screen, so
 if sign-in fails FoxChat exits with a non-zero status instead of sitting on a
 guest screen — check your process manager's logs.
+
+### Listening beyond localhost
+
+The desktop app binds the automation API to `127.0.0.1` by default. An
+unattended instance can explicitly listen on every IPv4 interface with
+`--automation-listen 0.0.0.0`:
+
+```sh
+foxchat --headless --persist \
+  --automation-port 29331 \
+  --automation-listen 0.0.0.0 \
+  --automation-key "$FOXCHAT_AUTOMATION_KEY"
+```
+
+The automation WebSocket is unencrypted. Use a strong, unique API key and a
+host firewall that permits only trusted source addresses. For traffic crossing
+an untrusted network, prefer an SSH/VPN tunnel or put a TLS-terminating reverse
+proxy in front of FoxChat.
 
 ## `--headless`: no visible window
 

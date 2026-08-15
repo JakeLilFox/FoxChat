@@ -221,12 +221,16 @@ pub async fn start_automation_api(
     state: tauri::State<'_, AutomationApiState>,
     port: u16,
     api_key: String,
+    listen_address: String,
 ) -> Result<u16, String> {
     if api_key.len() < 24 {
         return Err("API key must contain at least 24 characters".into());
     }
+    let listen_address = listen_address
+        .parse::<std::net::IpAddr>()
+        .map_err(|_| format!("Invalid automation API listen address: {listen_address}"))?;
     stop_automation_api(state.clone()).await?;
-    let listener = TcpListener::bind(("127.0.0.1", port))
+    let listener = TcpListener::bind((listen_address, port))
         .await
         .map_err(|error| error.to_string())?;
     let actual_port = listener

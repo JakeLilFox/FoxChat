@@ -13,6 +13,8 @@ const HELP: &str = r#"FoxChat desktop CLI options
                                With --persist and no --homeserver/--username,
                                resumes whichever account was last active.
   --automation-port <port>    Port for the local automation API
+  --automation-listen <ip>    Address for the automation API to listen on
+                               (default: 127.0.0.1; use 0.0.0.0 for all IPv4 interfaces)
   --automation-key <key>      API key for the local automation API
                                (see AUTOMATION_API.md)
   --headless                  Do not show the application window
@@ -34,6 +36,7 @@ pub struct CliLoginOptions {
     #[serde(default)]
     pub persist: bool,
     pub automation_port: Option<u16>,
+    pub automation_listen: Option<String>,
     pub automation_key: Option<String>,
     #[serde(default)]
     pub headless: bool,
@@ -46,6 +49,7 @@ impl CliLoginOptions {
             && self.password.is_none()
             && self.recovery_key.is_none()
             && self.automation_port.is_none()
+            && self.automation_listen.is_none()
             && self.automation_key.is_none()
             && !self.persist
             && !self.headless
@@ -72,6 +76,7 @@ pub fn parse() -> CliLoginOptions {
             "--automation-port" => {
                 options.automation_port = args.next().and_then(|value| value.parse().ok())
             }
+            "--automation-listen" => options.automation_listen = args.next(),
             "--automation-key" => options.automation_key = args.next(),
             "--persist" => options.persist = true,
             "--headless" => options.headless = true,
