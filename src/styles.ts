@@ -57,6 +57,17 @@ export const Shell = styled.div<{ $detailsOpen?: boolean; $mobileLayout?: boolea
   }
   html.foxchat-android & {
     padding-top: var(--foxchat-top-inset, 0px);
+    &::before {
+      content: '';
+      position: absolute;
+      z-index: 30;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: var(--foxchat-top-inset, 0px);
+      pointer-events: none;
+      background: ${(p) => p.theme.bg};
+    }
   }
 `
 export const Sidebar = styled.aside<{ $mobile?: boolean }>`
