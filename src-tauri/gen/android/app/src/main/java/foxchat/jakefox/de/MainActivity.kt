@@ -123,9 +123,11 @@ class MainActivity : TauriActivity() {
   // and reserve edge gestures while the keyboard is closed.
   private fun handleWindowInsets(webView: WebView) {
     val contentRoot = window.decorView.findViewById<View>(android.R.id.content)
-    val edgeWidth = (40 * resources.displayMetrics.density).toInt()
+    val density = resources.displayMetrics.density
+    val edgeWidth = (40 * density).toInt()
     var imeVisible = false
-    var appliedButtonNav: Boolean? = null
+    var appliedTopInset = -1
+    var appliedBottomInset = -1
     val applyGestureExclusion = {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         val width = webView.width
@@ -147,14 +149,17 @@ class MainActivity : TauriActivity() {
     webView.post { applyGestureExclusion() }
 
     val applyInsets = { insets: WindowInsetsCompat ->
-      val navigationBar = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
-      val tappable = insets.getInsets(WindowInsetsCompat.Type.tappableElement()).bottom
-      val buttonNav = navigationBar > 0 && tappable > 0
+      val statusBarTop = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+      val navigationBarBottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+      val topInset = Math.round(statusBarTop / density)
+      val bottomInset = Math.round(navigationBarBottom / density)
       // Avoid bridge work on every keyboard animation frame.
-      if (buttonNav != appliedButtonNav) {
-        appliedButtonNav = buttonNav
+      if (topInset != appliedTopInset || bottomInset != appliedBottomInset) {
+        appliedTopInset = topInset
+        appliedBottomInset = bottomInset
         webView.evaluateJavascript(
-          "document.documentElement.classList.toggle('android-button-nav',$buttonNav)",
+          "document.documentElement.style.setProperty('--foxchat-top-inset','${topInset}px');" +
+            "document.documentElement.style.setProperty('--foxchat-bottom-inset','${bottomInset}px')",
           null,
         )
       }

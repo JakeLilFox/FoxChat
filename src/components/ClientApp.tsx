@@ -8,7 +8,7 @@ import { UserProfileHost } from './profile'
 import { VerificationDialog } from './VerificationDialog'
 import { type ThemeMode } from '../lib/constants'
 import { useMediaQuery } from '../lib/hooks'
-import { shouldUseMobileLayout } from '../lib/responsiveLayout'
+import { MOBILE_LAYOUT_BREAKPOINT, shouldUseMobileLayout } from '../lib/responsiveLayout'
 import { containingSpacePath, lastSpaceRooms, rememberSpaceRoom } from '../lib/spaceHelpers'
 import { desktopDetailsOpen, setDesktopDetailsOpen } from '../lib/uiPreferences'
 import {
@@ -86,13 +86,9 @@ const visibleEscapeLayer = () =>
 export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => void }) {
   const { message } = AntApp.useApp()
   const wideDetailsViewport = useMediaQuery('(min-width: 1101px)')
-  const narrowViewport = useMediaQuery('(max-width: 760px)')
-  const mobileLayout = shouldUseMobileLayout(
-    narrowViewport,
-    isAndroidApp(),
-    window.screen.width,
-    window.screen.height,
-  )
+  const narrowViewport = useMediaQuery(`(max-width: ${MOBILE_LAYOUT_BREAKPOINT}px)`)
+  const narrowHeightViewport = useMediaQuery(`(max-height: ${MOBILE_LAYOUT_BREAKPOINT}px)`)
+  const mobileLayout = shouldUseMobileLayout(narrowViewport, isAndroidApp(), narrowHeightViewport)
   const desktopDetails = wideDetailsViewport && !mobileLayout
   const [desktopInfo, setDesktopInfo] = useState(desktopDetailsOpen)
   useEffect(() => {

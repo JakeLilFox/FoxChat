@@ -29,7 +29,9 @@ body {
   min-width: 320px;
 }
 html.foxchat-android {
-  --foxchat-top-inset: 30px;
+  /* Native (MainActivity) overrides these with the real WindowInsetsCompat values via inline style. */
+  --foxchat-top-inset: env(safe-area-inset-top, 0px);
+  --foxchat-bottom-inset: env(safe-area-inset-bottom, 0px);
 }
 
 @media (max-width: 760px) {

@@ -56,19 +56,7 @@ export const Shell = styled.div<{ $detailsOpen?: boolean; $mobileLayout?: boolea
     grid-template-columns: minmax(0, 1fr);
   }
   html.foxchat-android & {
-    padding-top: var(--foxchat-top-inset);
-    &::before {
-      content: '';
-      position: absolute;
-      z-index: 30;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: var(--foxchat-top-inset);
-      pointer-events: none;
-      background: ${(p) => p.theme.panel};
-      border-bottom: 1px solid ${(p) => p.theme.border};
-    }
+    padding-top: var(--foxchat-top-inset, 0px);
   }
 `
 export const Sidebar = styled.aside<{ $mobile?: boolean }>`
@@ -186,12 +174,10 @@ export const List = styled.div`
   flex: 1 1 0;
   touch-action: pan-y;
   @media (max-width: 760px) {
-    padding-bottom: max(12px, calc(env(safe-area-inset-bottom, 0px) + 12px));
-  }
-  html.android-button-nav & {
-    @media (max-width: 760px) {
-      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 56px);
-    }
+    padding-bottom: max(
+      12px,
+      calc(var(--foxchat-bottom-inset, env(safe-area-inset-bottom, 0px)) + 12px)
+    );
   }
 `
 export const VoiceDockSlot = styled.div`
@@ -427,12 +413,10 @@ export const Profile = styled.div`
   @media (max-width: 760px) {
     height: auto;
     min-height: 70px;
-    padding-bottom: max(11px, calc(env(safe-area-inset-bottom, 0px) + 11px));
-  }
-  html.android-button-nav & {
-    @media (max-width: 760px) {
-      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 46px);
-    }
+    padding-bottom: max(
+      11px,
+      calc(var(--foxchat-bottom-inset, env(safe-area-inset-bottom, 0px)) + 11px)
+    );
   }
 `
 export const Main = styled.main.attrs(
@@ -2529,7 +2513,7 @@ export const ComposerArea = styled.div`
   padding: 11px clamp(14px, 4vw, 50px) 6px;
   background: ${(p) => p.theme.chat};
   @media (max-width: 760px) {
-    padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
+    padding-bottom: max(6px, var(--foxchat-bottom-inset, env(safe-area-inset-bottom, 0px)));
   }
 `
 export const NoSendNotice = styled.div`
@@ -3413,9 +3397,7 @@ export const MobileMenu = styled(IconBtn)`
     }
   }
   [data-mobile-layout='true'] & {
-    && {
-      display: inline-flex;
-    }
+    display: inline-flex;
   }
 `
 export const PresenceWrap = styled.span`
