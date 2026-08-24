@@ -238,6 +238,23 @@ object NativeNotificationCrypto {
         }
     }
 
+    fun markSetupTimedOut(context: Context, userId: String) {
+        synchronized(lockFor(userId)) {
+            val prefs = preferences(context)
+            val setup = "setup.$userId"
+            if (prefs.getString("$setup.state", null) != "pending") return
+            prefs.edit()
+                .putString("$setup.state", "error")
+                .putString("$setup.phase", "error")
+                .putLong("$setup.heartbeatAt", System.currentTimeMillis())
+                .putString(
+                    "$setup.error",
+                    "Android stopped the background setup service before it finished importing keys",
+                )
+                .commit()
+        }
+    }
+
     fun sync(
         context: Context,
         userId: String,
@@ -265,6 +282,10 @@ object NativeNotificationCrypto {
                 credentialEditor
                     .putString("$userId.backupVersion", backupVersion)
                     .putString("$userId.backupRecoveryKey", backupRecoveryKey)
+            } else {
+                credentialEditor
+                    .remove("$userId.backupVersion")
+                    .remove("$userId.backupRecoveryKey")
             }
             if (!pushClearToken.isNullOrBlank() && !pushGatewayUrl.isNullOrBlank()) {
                 credentialEditor

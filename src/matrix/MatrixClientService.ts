@@ -1192,13 +1192,16 @@ export class MatrixClientService {
     const invoke = window.__TAURI_INTERNALS__?.invoke
     if (!invoke || !/Android/i.test(navigator.userAgent)) return
     try {
-      const native = await invoke<{
-        accessToken?: string
-        refreshToken?: string
-        accessTokenExpiresAt?: number
-        refreshedAt?: number
-      }>('plugin:remote-push|native_session_tokens', { userId: session.userId })
-      if (!native.refreshedAt || !native.accessToken) return
+      const native = await invoke<
+        | {
+            accessToken?: string
+            refreshToken?: string
+            accessTokenExpiresAt?: number
+            refreshedAt?: number
+          }
+        | undefined
+      >('plugin:remote-push|native_session_tokens', { userId: session.userId })
+      if (!native?.refreshedAt || !native.accessToken) return
       session.accessToken = native.accessToken
       session.refreshToken = native.refreshToken ?? session.refreshToken
       session.accessTokenExpiresAt = native.accessTokenExpiresAt || undefined

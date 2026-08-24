@@ -21,6 +21,7 @@ class NativeCryptoSetupService : Service() {
         private const val NOTIFICATION_ID = 918_274
     }
     private val activeJobs = AtomicInteger()
+    private val activeUserIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -33,6 +34,7 @@ class NativeCryptoSetupService : Service() {
             return START_NOT_STICKY
         }
         activeJobs.incrementAndGet()
+        activeUserIds.add(userId)
         Thread {
             try {
                 NativeNotificationCrypto.completeStagedSync(applicationContext, userId)
@@ -40,11 +42,19 @@ class NativeCryptoSetupService : Service() {
                 // Normal failures are persisted by completeStagedSync. Native aborts kill
                 // only this helper process; a stale pending state is reported by the UI.
             } finally {
+                activeUserIds.remove(userId)
                 if (activeJobs.decrementAndGet() == 0) stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf(startId)
             }
         }.start()
         return START_NOT_STICKY
+    }
+
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        for (userId in activeUserIds) NativeNotificationCrypto.markSetupTimedOut(applicationContext, userId)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf(startId)
     }
 
     private fun setupNotification(): android.app.Notification {
