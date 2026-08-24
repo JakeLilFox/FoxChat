@@ -6,6 +6,7 @@ import { SpaceOverview } from './spaces'
 import { Timeline } from './chat'
 import { UserProfileHost } from './profile'
 import { VerificationDialog } from './VerificationDialog'
+import { WelcomeDialog } from './WelcomeDialog'
 import { type ThemeMode } from '../lib/constants'
 import { useMediaQuery } from '../lib/hooks'
 import { MOBILE_LAYOUT_BREAKPOINT, shouldUseMobileLayout } from '../lib/responsiveLayout'
@@ -83,7 +84,15 @@ const visibleEscapeLayer = () =>
     )
   })
 
-export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => void }) {
+export function ClientApp({
+  mode,
+  onMode,
+  justRegistered,
+}: {
+  mode: ThemeMode
+  onMode: () => void
+  justRegistered?: boolean
+}) {
   const { message } = AntApp.useApp()
   const wideDetailsViewport = useMediaQuery('(min-width: 1101px)')
   const narrowViewport = useMediaQuery(`(max-width: ${MOBILE_LAYOUT_BREAKPOINT}px)`)
@@ -91,6 +100,7 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
   const mobileLayout = shouldUseMobileLayout(narrowViewport, isAndroidApp(), narrowHeightViewport)
   const desktopDetails = wideDetailsViewport && !mobileLayout
   const [desktopInfo, setDesktopInfo] = useState(desktopDetailsOpen)
+  const [welcomeOpen, setWelcomeOpen] = useState(() => !!justRegistered)
   useEffect(() => {
     if (desktopDetails) setDesktopDetailsOpen(desktopInfo)
   }, [desktopDetails, desktopInfo])
@@ -822,6 +832,7 @@ export function ClientApp({ mode, onMode }: { mode: ThemeMode; onMode: () => voi
         </Modal>
       )}
       {verification && <VerificationDialog request={verification} onClose={hideVerification} />}
+      <WelcomeDialog open={welcomeOpen} onClose={() => setWelcomeOpen(false)} />
     </>
   )
 }

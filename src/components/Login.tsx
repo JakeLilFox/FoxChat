@@ -13,7 +13,7 @@ import { openExternalUrl } from '../platform/externalLinks'
 type LoginValues = { homeserver: string; username: string; password: string }
 type RegistrationValues = MatrixRegistrationDetails & { confirmPassword: string }
 
-export function Login({ onReady }: { onReady: () => void }) {
+export function Login({ onReady }: { onReady: (justRegistered?: boolean) => void }) {
   const { message } = AntApp.useApp()
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [busy, setBusy] = useState(false)
@@ -49,7 +49,7 @@ export function Login({ onReady }: { onReady: () => void }) {
           `Your account was created, but the display name was not saved: ${result.profileWarning}`,
         )
       else message.success('Your account is ready.')
-      onReady()
+      onReady(true)
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'Registration failed')
     } finally {

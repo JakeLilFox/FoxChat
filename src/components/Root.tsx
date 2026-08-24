@@ -18,6 +18,7 @@ export function Root() {
     () => (localStorage.getItem('foxchat-theme') as ThemeMode) || 'light',
   )
   const [auth, setAuth] = useState<AuthState>('loading')
+  const [justRegistered, setJustRegistered] = useState(false)
   const toggle = () =>
     setMode((m) => {
       const n = m === 'light' ? 'dark' : 'light'
@@ -98,10 +99,15 @@ export function Root() {
               <p>{auth === 'syncing' ? 'Decrypting and synchronizing your rooms…' : 'Loading…'}</p>
             </EmptyState>
           ) : auth === 'guest' ? (
-            <Login onReady={() => setAuth('ready')} />
+            <Login
+              onReady={(registered) => {
+                setJustRegistered(!!registered)
+                setAuth('ready')
+              }}
+            />
           ) : (
             <>
-              <ClientApp mode={mode} onMode={toggle} />
+              <ClientApp mode={mode} onMode={toggle} justRegistered={justRegistered} />
               <SharedAttachmentHost />
             </>
           )}

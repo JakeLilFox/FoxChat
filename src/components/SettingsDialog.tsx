@@ -105,6 +105,8 @@ export function SettingsDialog({
   const [backupPassphraseConfirm, setBackupPassphraseConfirm] = useState('')
   const [backupRecoveryKey, setBackupRecoveryKey] = useState('')
   const [settingUpBackup, setSettingUpBackup] = useState(false)
+  const [backupSetupPassword, setBackupSetupPassword] = useState('')
+  const [backupSetupSession, setBackupSetupSession] = useState<string>()
   const android = isAndroidApp()
   const narrow = useMediaQuery('(max-width: 699px)')
   const short = useMediaQuery('(max-height: 699px)')
@@ -118,12 +120,16 @@ export function SettingsDialog({
     setBackupSetupOpen(false)
     setBackupPassphrase('')
     setBackupPassphraseConfirm('')
+    setBackupSetupPassword('')
+    setBackupSetupSession(undefined)
   }
   const finishBackupSetup = () => {
     setBackupSetupOpen(false)
     setBackupPassphrase('')
     setBackupPassphraseConfirm('')
     setBackupRecoveryKey('')
+    setBackupSetupPassword('')
+    setBackupSetupSession(undefined)
   }
   const setupBackup = async () => {
     if (backupPassphrase !== backupPassphraseConfirm) {
@@ -132,12 +138,25 @@ export function SettingsDialog({
     }
     setSettingUpBackup(true)
     try {
-      const result = await matrixService.setupKeyBackup(backupPassphrase || undefined)
+      const result = await matrixService.setupKeyBackup(
+        backupPassphrase || undefined,
+        backupSetupPassword || undefined,
+        backupSetupSession,
+      )
       setBackupRecoveryKey(result.recoveryKey)
+      setBackupSetupPassword('')
+      setBackupSetupSession(undefined)
       message.success('Encrypted key backup is ready')
       await load()
     } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Could not set up encrypted key backup')
+      // Setting up cross-signing for the first time needs UIA. Surface a password
+      // prompt in the same dialog instead of failing outright.
+      if (e instanceof MatrixError && typeof e.data?.session === 'string') {
+        setBackupSetupSession(e.data.session)
+        message.info('Confirm your account password to finish setting up encryption')
+      } else {
+        message.error(e instanceof Error ? e.message : 'Could not set up encrypted key backup')
+      }
     } finally {
       setSettingUpBackup(false)
     }
@@ -945,9 +964,17 @@ export function SettingsDialog({
         maskClosable={false}
         closable={!settingUpBackup && !backupRecoveryKey}
         confirmLoading={settingUpBackup}
-        okText={backupRecoveryKey ? "I've saved it" : 'Set up backup'}
+        okText={
+          backupRecoveryKey
+            ? "I've saved it"
+            : backupSetupSession
+              ? 'Confirm password'
+              : 'Set up backup'
+        }
         okButtonProps={{
-          disabled: !backupRecoveryKey && backupSetupNeedsUnlock,
+          disabled:
+            !backupRecoveryKey &&
+            (backupSetupNeedsUnlock || (!!backupSetupSession && !backupSetupPassword)),
         }}
         cancelButtonProps={{
           style: backupRecoveryKey ? { display: 'none' } : undefined,
@@ -1018,6 +1045,23 @@ export function SettingsDialog({
                 onChange={(event) => setBackupPassphraseConfirm(event.target.value)}
                 onPressEnter={() => void setupBackup()}
                 placeholder="Enter the passphrase again"
+              />
+            </Form.Item>
+          </Form>
+        )}
+        {!backupRecoveryKey && backupSetupSession && (
+          <Form layout="vertical">
+            <p>
+              This account has no cross-signing keys yet. Confirm your account password to create
+              them and finish setting up encrypted backup.
+            </p>
+            <Form.Item label="Account password">
+              <Input.Password
+                value={backupSetupPassword}
+                onChange={(event) => setBackupSetupPassword(event.target.value)}
+                onPressEnter={() => void setupBackup()}
+                placeholder="Your account password"
+                autoFocus
               />
             </Form.Item>
           </Form>

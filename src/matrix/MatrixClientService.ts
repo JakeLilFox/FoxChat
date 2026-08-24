@@ -2084,37 +2084,7 @@ export class MatrixClientService {
     return { total: 0, imported: 0, background: true }
   }
 
-  async setupEncryption(accountPassword?: string) {
-    const crypto = this.client?.getCrypto()
-    if (!crypto || !this.client) throw new Error('Encryption is not initialized')
-    let recoveryKey: string | undefined
-    await crypto.bootstrapSecretStorage({
-      createSecretStorageKey: async () => {
-        const generated = await crypto.createRecoveryKeyFromPassphrase()
-        recoveryKey = generated.encodedPrivateKey
-        return generated
-      },
-      setupNewKeyBackup: !(await crypto.getKeyBackupInfo()),
-    })
-    await crypto.bootstrapCrossSigning({
-      authUploadDeviceSigningKeys: (makeRequest) =>
-        makeRequest(
-          accountPassword
-            ? {
-                type: 'm.login.password',
-                identifier: { type: 'm.id.user', user: this.client!.getSafeUserId() },
-                password: accountPassword,
-              }
-            : null,
-        ),
-    })
-    await crypto.bootstrapSecretStorage({})
-    await crypto.checkKeyBackupAndEnable()
-    await this.enableAutomaticKeySync()
-    return recoveryKey
-  }
-
-  async setupKeyBackup(passphrase?: string) {
+  async setupKeyBackup(passphrase?: string, accountPassword?: string, uiaSession?: string) {
     const crypto = this.client?.getCrypto()
     if (!crypto || !this.client) throw new Error('Encryption is not initialized')
 
@@ -2131,6 +2101,22 @@ export class MatrixClientService {
       throw new Error(
         'Restore with your recovery key first to unlock secure storage on this device',
       )
+    }
+
+    if (!(await crypto.isCrossSigningReady())) {
+      await crypto.bootstrapCrossSigning({
+        authUploadDeviceSigningKeys: (makeRequest) =>
+          makeRequest(
+            accountPassword
+              ? {
+                  type: 'm.login.password',
+                  identifier: { type: 'm.id.user', user: this.client!.getSafeUserId() },
+                  password: accountPassword,
+                  session: uiaSession,
+                }
+              : null,
+          ),
+      })
     }
 
     let recoveryKey = cachedSecretStorageKey ? encodeRecoveryKey(cachedSecretStorageKey) : undefined
