@@ -45,6 +45,7 @@ import { showUserProfile } from '../../lib/userProfile'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, Dropdown, Modal, Radio, Slider, Switch, Tooltip, App as AntApp } from 'antd'
+import { useBackLayer } from '../../lib/backNavigation'
 import {
   AudioMutedOutlined,
   AudioOutlined,
@@ -604,6 +605,7 @@ export function VoiceCallHost() {
   const [screenBitrate, setScreenBitrate] = useState(preferredScreenShareBitrate)
   const screenBitrateRef = useRef(screenBitrate)
   const [shareSettingsOpen, setShareSettingsOpen] = useState(false)
+  useBackLayer(open, () => setOpen(false), room?.roomId)
   const shareSettingsOpenRef = useRef(false)
   const [inputMode, setInputMode] = useState<VoiceInputMode>(() => {
     const stored = voiceInputMode()

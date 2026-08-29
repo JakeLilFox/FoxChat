@@ -129,6 +129,11 @@ export function RoomList({
   const activeSpace = matrixService.room(spacePath.at(-1) ?? '')
   const activeAccountClient = matrixService.activeAccountClient()
   useEffect(() => {
+    const showMainDrawer = () => setSpacePath([])
+    window.addEventListener('foxchat-main-drawer', showMainDrawer)
+    return () => window.removeEventListener('foxchat-main-drawer', showMainDrawer)
+  }, [])
+  useEffect(() => {
     const refresh = () => refreshPresence((value) => value + 1)
     window.addEventListener('foxchat-presence-mode-changed', refresh)
     window.addEventListener('foxchat-presence-state-changed', refresh)
@@ -755,6 +760,7 @@ export function RoomList({
       <Sidebar
         $mobile={mobile}
         data-testid="room-sidebar"
+        data-foxchat-space-drawer="true"
         onTouchStart={(e) => {
           if (!mobile) return
           const touch = e.changedTouches[0]

@@ -14,6 +14,7 @@ import android.util.Base64
 import android.view.View
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.OnBackPressedCallback
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import org.json.JSONArray
@@ -23,6 +24,7 @@ import app.tauri.remotepush.NativeCryptoBridge
 import app.tauri.remotepush.NotificationDebugBridge
 
 class MainActivity : TauriActivity() {
+  override val handleBackNavigation: Boolean = false
   private var webView: WebView? = null
   private var pendingShareIntent: Intent? = null
   private var pendingNotificationRoomId: String? = null
@@ -105,6 +107,15 @@ class MainActivity : TauriActivity() {
       WebView.setWebContentsDebuggingEnabled(true)
     }
     this.webView = webView
+    onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+      override fun handleOnBackPressed() {
+        webView.evaluateJavascript(
+          "Boolean(window.__foxchatHandleAndroidBack && window.__foxchatHandleAndroidBack())",
+        ) { consumed ->
+          if (consumed != "true") finishAndRemoveTask()
+        }
+      }
+    })
     dispatchPendingNotificationReplies()
     pendingNotificationRoomId?.let {
       pendingNotificationRoomId = null

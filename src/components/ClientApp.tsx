@@ -8,6 +8,12 @@ import { UserProfileHost } from './profile'
 import { VerificationDialog } from './VerificationDialog'
 import { WelcomeDialog } from './WelcomeDialog'
 import { type ThemeMode } from '../lib/constants'
+import {
+  closeTopBackLayer,
+  closeTopVisualLayer,
+  installHistoryBackHandler,
+  leaveOpenSpaceDrawer,
+} from '../lib/backNavigation'
 import { useMediaQuery } from '../lib/hooks'
 import { MOBILE_LAYOUT_BREAKPOINT, shouldUseMobileLayout } from '../lib/responsiveLayout'
 import { containingSpacePath, lastSpaceRooms, rememberSpaceRoom } from '../lib/spaceHelpers'
@@ -39,7 +45,16 @@ import {
   writeRoomUrl,
 } from '../lib/urlState'
 import { Shell, themes } from '../styles'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { Drawer, Input, Modal, Segmented, Spin, App as AntApp } from 'antd'
 import { Room, RoomType } from 'matrix-js-sdk'
 import { VerificationPhase, type VerificationRequest } from 'matrix-js-sdk/lib/crypto-api'
@@ -130,6 +145,8 @@ export function ClientApp({
   const [mobile, setMobile] = useState(() => isDrawerOpenFromUrl())
   const mobileRef = useRef(mobile)
   mobileRef.current = mobile
+  const mobileLayoutRef = useRef(mobileLayout)
+  mobileLayoutRef.current = mobileLayout
   const [info, setInfo] = useState(false)
   const [callViewOpen, setCallViewOpen] = useState(false)
   const [unreadInbox, setUnreadInbox] = useState(unreadFromUrl)
@@ -160,6 +177,30 @@ export function ClientApp({
     return () => {
       stopNavigation()
       stopReplies()
+    }
+  }, [])
+  useLayoutEffect(() => {
+    const androidWindow = window as typeof window & {
+      __foxchatHandleAndroidBack?: () => boolean
+    }
+    const handleAndroidBack = () => {
+      if (closeTopVisualLayer() || closeTopBackLayer()) return true
+      if (leaveOpenSpaceDrawer()) return true
+      if (!mobileLayoutRef.current) return false
+      if (!mobileRef.current) {
+        mobileRef.current = true
+        setMobile(true)
+        setDrawerOpenUrl(true, true)
+        return true
+      }
+      return false
+    }
+    androidWindow.__foxchatHandleAndroidBack = handleAndroidBack
+    const stopHistoryBack = installHistoryBackHandler(handleAndroidBack)
+    return () => {
+      stopHistoryBack()
+      if (androidWindow.__foxchatHandleAndroidBack === handleAndroidBack)
+        delete androidWindow.__foxchatHandleAndroidBack
     }
   }, [])
   useEffect(() => {

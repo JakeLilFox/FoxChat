@@ -1,5 +1,6 @@
 import { UserProfileCard } from './UserProfileCard'
 import { type UserProfileRequest } from '../../lib/userProfile'
+import { useBackLayer } from '../../lib/backNavigation'
 import { clearUserProfileUrl, openUserProfileUrl, userProfileIdFromUrl } from '../../lib/urlState'
 import { UserProfilePanel } from '../../styles'
 import { useEffect, useRef, useState } from 'react'
@@ -26,6 +27,15 @@ export function UserProfileHost() {
   const [request, setRequest] = useState<UserProfileRequest | undefined>(requestFromUrl)
   const requestRef = useRef<UserProfileRequest | undefined>(request)
   const panelRef = useRef<HTMLDivElement>(null)
+  useBackLayer(
+    !!request,
+    () => {
+      setRequest(undefined)
+      requestRef.current = undefined
+      clearUserProfileUrl()
+    },
+    request?.userId,
+  )
   useEffect(() => {
     const apply = (next: UserProfileRequest | undefined) => {
       requestRef.current = next

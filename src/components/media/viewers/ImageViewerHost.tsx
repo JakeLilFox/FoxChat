@@ -1,5 +1,6 @@
 import { ImageViewer } from './ImageViewer'
 import { type ViewerGallery } from '../../../lib/media'
+import { useBackLayer } from '../../../lib/backNavigation'
 import { useEffect, useRef, useState } from 'react'
 
 export function ImageViewerHost() {
@@ -35,6 +36,7 @@ export function ImageViewerHost() {
     if (history.state?.foxchatImageViewer) history.back()
     else setGallery(undefined)
   }
+  useBackLayer(!!gallery, close, gallery?.images[gallery.index]?.url)
   const image = gallery?.images[gallery.index]
   return gallery && image ? (
     <ImageViewer

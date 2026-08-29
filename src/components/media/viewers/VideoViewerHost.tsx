@@ -1,5 +1,6 @@
 import { VideoViewer } from './VideoViewer'
 import { type ViewerVideo } from '../../../lib/media'
+import { useBackLayer } from '../../../lib/backNavigation'
 import { useEffect, useRef, useState } from 'react'
 
 export function VideoViewerHost() {
@@ -28,5 +29,6 @@ export function VideoViewerHost() {
     if (history.state?.foxchatVideoViewer) history.back()
     else setVideo(undefined)
   }
+  useBackLayer(!!video, close, video?.url)
   return video ? <VideoViewer video={video} onClose={close} /> : null
 }
