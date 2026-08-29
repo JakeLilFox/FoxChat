@@ -1139,6 +1139,11 @@ function TimelineView({
             if (cached.room.roomId === changedRoom.roomId) cacheRoomTimeline(cached.room)
           }
         },
+        onLocalEchoUpdated: (_event, changedRoom) => {
+          for (const cached of [...roomTimelineCache.values()]) {
+            if (cached.room.roomId === changedRoom.roomId) cacheRoomTimeline(cached.room)
+          }
+        },
         onRoom: (changedRoom) => {
           for (const cached of [...roomTimelineCache.values()]) {
             if (cached.room.roomId === changedRoom.roomId) cacheRoomTimeline(cached.room)

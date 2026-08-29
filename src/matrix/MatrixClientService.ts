@@ -193,6 +193,12 @@ export type PresenceState = 'online' | 'unavailable' | 'offline'
 export type SyncObserver = {
   onRoom?: (room: Room) => void
   onEvent?: (event: MatrixEvent, room?: Room) => void
+  onLocalEchoUpdated?: (
+    event: MatrixEvent,
+    room: Room,
+    oldEventId?: string,
+    oldStatus?: EventStatus | null,
+  ) => void
   onSync?: (state: string) => void
   onVerificationRequest?: (request: VerificationRequest) => void
   onImagePacksChanged?: (roomId: string, client: MatrixClient) => void
@@ -1103,6 +1109,9 @@ export class MatrixClientService {
       if (room && event.isDecryptionFailure()) this.scheduleDecryptionRetry(event, room)
       this.observers.forEach((x) => x.onEvent?.(event, room))
     })
+    client.on(RoomEvent.LocalEchoUpdated, (event, room, oldEventId, oldStatus) => {
+      this.publishLocalEchoUpdated(client, event, room, oldEventId, oldStatus)
+    })
     const publishRedaction = (event: MatrixEvent, room: Room) => {
       this.trackEventOwner(client, event, room)
       this.observers.forEach((observer) => observer.onEvent?.(event, room))
@@ -1240,6 +1249,14 @@ export class MatrixClientService {
               if (owner) this.trackEventOwner(owner, event, room)
               this.observers.forEach((observer) => observer.onEvent?.(event, room))
             },
+            onLocalEchoUpdated: (event, room, oldEventId, oldStatus) => {
+              const owner = service.matrixClient
+              if (owner) this.publishLocalEchoUpdated(owner, event, room, oldEventId, oldStatus)
+              else
+                this.observers.forEach((observer) =>
+                  observer.onLocalEchoUpdated?.(event, room, oldEventId, oldStatus),
+                )
+            },
             onVerificationRequest: (request) => this.publishVerificationRequest(request),
             onSync: (state) => {
               if (state.startsWith('CRYPTO_')) this.invalidateMessageEncryptionTrust()
@@ -1274,6 +1291,19 @@ export class MatrixClientService {
     return () => {
       this.observers.delete(observer)
     }
+  }
+
+  private publishLocalEchoUpdated(
+    client: MatrixClient,
+    event: MatrixEvent,
+    room: Room,
+    oldEventId?: string,
+    oldStatus?: EventStatus | null,
+  ) {
+    this.trackEventOwner(client, event, room)
+    this.observers.forEach((observer) =>
+      observer.onLocalEchoUpdated?.(event, room, oldEventId, oldStatus),
+    )
   }
 
   private publishVerificationRequest(request: VerificationRequest) {

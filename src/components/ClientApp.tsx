@@ -246,6 +246,7 @@ export function ClientApp({
         refresh(eventRoom?.roomId ?? event.getRoomId())
         void notifyMatrixEvent(event, eventRoom)
       },
+      onLocalEchoUpdated: (event, eventRoom) => refresh(eventRoom.roomId ?? event.getRoomId()),
       onVerificationRequest: showVerification,
       onSync: (state) => {
         const normalized = state.toUpperCase()
