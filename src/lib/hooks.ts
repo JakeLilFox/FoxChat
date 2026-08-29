@@ -1,10 +1,22 @@
-import { useEffect, useState } from 'react'
-import { MatrixClient } from 'matrix-js-sdk'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { MatrixClient, MatrixEventEvent, type MatrixEvent } from 'matrix-js-sdk'
 import { matrixService } from '../matrix/MatrixClientService'
 import { getCachedMedia, putCachedMedia, type MediaCacheCategory } from './mediaCache'
 import { downloadAndDecryptMedia } from './mediaDecrypt'
 
 const mediaDownloads = new Map<string, Promise<{ blob: Blob; mimetype: string }>>()
+
+export function useMatrixEventStatus(event: MatrixEvent) {
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      event.on(MatrixEventEvent.Status, onStoreChange)
+      return () => event.off(MatrixEventEvent.Status, onStoreChange)
+    },
+    [event],
+  )
+  const getSnapshot = useCallback(() => event.status, [event])
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+}
 
 export type MediaCacheHint = {
   category: MediaCacheCategory

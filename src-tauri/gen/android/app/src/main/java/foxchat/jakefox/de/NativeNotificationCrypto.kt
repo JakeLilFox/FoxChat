@@ -98,7 +98,7 @@ object NativeNotificationCrypto {
                         error.requestStage == "key-backup-session" && error.httpStatus == 404 ->
                             "The event exists, but this Megolm session has not reached key backup yet."
                         error.requestStage == "key-backup-version" && error.httpStatus == 404 ->
-                            "The cached key-backup version no longer exists, possibly because backup was replaced."
+                            "This account currently has no active server-side key backup."
                         error.httpStatus == 401 || error.httpStatus == 403 ->
                             "The stored Matrix credentials were rejected for this request."
                         else -> "The homeserver rejected a Matrix request needed for notification decryption."
@@ -737,71 +737,69 @@ object NativeNotificationCrypto {
         synchronized(lockFor(userId)) {
             val deviceId = prefs.getString("$userId.device", null) ?: error("Native device ID is missing")
             val homeserver = prefs.getString("$userId.homeserver", null) ?: error("Native homeserver is missing")
-            val token = prefs.getString("$userId.token", null) ?: error("Native access token is missing")
-            val connection = URL("$homeserver/_matrix/client/v3/rooms/${encode(roomId)}/event/${encode(eventId)}")
-                .openConnection() as HttpURLConnection
-            try {
-                connection.connectTimeout = 7_000
-                connection.readTimeout = 7_000
-                connection.setRequestProperty("Authorization", "Bearer $token")
-                if (connection.responseCode !in 200..299) throw IllegalStateException("Homeserver event fetch failed with HTTP ${connection.responseCode}")
-                val raw = connection.inputStream.bufferedReader().use { it.readText() }
-                val encrypted = JSONObject(raw)
-                val clear = if (encrypted.optString("type") == "m.room.encrypted") {
-                    val olmMachine = machine(context, userId, deviceId)
-                    val decrypted = try {
-                        olmMachine.decryptRoomEvent(
-                            raw, roomId, false, false,
-                            DecryptionSettings(TrustRequirement.UNTRUSTED),
-                        )
-                    } catch (missing: DecryptionException.MissingRoomKey) {
-                        restoreSessionFromBackup(
-                            context,
-                            userId,
-                            roomId,
-                            encrypted.optJSONObject("content")?.optString("session_id")
-                                ?.takeIf { it.isNotBlank() }
-                                ?: throw missing,
-                            olmMachine,
-                        )
-                        olmMachine.decryptRoomEvent(
-                            raw, roomId, false, false,
-                            DecryptionSettings(TrustRequirement.UNTRUSTED),
-                        )
-                    }
-                    JSONObject(decrypted.clearEvent)
-                } else {
-                    encrypted
-                }
-                if (suppressTimelineActivity(context, clear)) {
-                    val senderId = encrypted.optString("sender")
-                    return@synchronized NativeDecryptedNotification(
-                        senderId = senderId,
-                        senderName = senderId,
-                        body = "",
-                        timestamp = encrypted.optLong("origin_server_ts", System.currentTimeMillis()),
-                        suppressed = true,
+            prefs.getString("$userId.token", null) ?: error("Native access token is missing")
+            val encrypted = fetchJsonForAccount(
+                prefs,
+                userId,
+                homeserver,
+                "$homeserver/_matrix/client/v3/rooms/${encode(roomId)}/event/${encode(eventId)}",
+                "room-event",
+            )
+            val raw = encrypted.toString()
+            val clear = if (encrypted.optString("type") == "m.room.encrypted") {
+                val olmMachine = machine(context, userId, deviceId)
+                val decrypted = try {
+                    olmMachine.decryptRoomEvent(
+                        raw, roomId, false, false,
+                        DecryptionSettings(TrustRequirement.UNTRUSTED),
+                    )
+                } catch (missing: DecryptionException.MissingRoomKey) {
+                    restoreSessionFromBackup(
+                        context,
+                        userId,
+                        roomId,
+                        encrypted.optJSONObject("content")?.optString("session_id")
+                            ?.takeIf { it.isNotBlank() }
+                            ?: throw missing,
+                        olmMachine,
+                    )
+                    olmMachine.decryptRoomEvent(
+                        raw, roomId, false, false,
+                        DecryptionSettings(TrustRequirement.UNTRUSTED),
                     )
                 }
-                val content = clear.optJSONObject("content") ?: error("Decrypted event has no content")
-                val body = content.optString("body").takeIf { it.isNotBlank() }
-                    ?: when (clear.optString("type")) {
-                        "m.sticker" -> "Sent a sticker"
-                        else -> "Sent an encrypted message"
-                    }
-                val senderId = encrypted.optString("sender")
-                val senderName = knownSenderName?.takeIf {
-                    senderId == knownSenderId && it.isNotBlank() && it != senderId
-                } ?: fetchSenderDisplayName(homeserver, token, roomId, senderId)
-                NativeDecryptedNotification(
-                    senderId = senderId,
-                    senderName = senderName,
-                    body = body,
-                    timestamp = encrypted.optLong("origin_server_ts", System.currentTimeMillis()),
-                )
-            } finally {
-                connection.disconnect()
+                JSONObject(decrypted.clearEvent)
+            } else {
+                encrypted
             }
+            if (suppressTimelineActivity(context, clear)) {
+                val senderId = encrypted.optString("sender")
+                return@synchronized NativeDecryptedNotification(
+                    senderId = senderId,
+                    senderName = senderId,
+                    body = "",
+                    timestamp = encrypted.optLong("origin_server_ts", System.currentTimeMillis()),
+                    suppressed = true,
+                )
+            }
+            val content = clear.optJSONObject("content") ?: error("Decrypted event has no content")
+            val body = content.optString("body").takeIf { it.isNotBlank() }
+                ?: when (clear.optString("type")) {
+                    "m.sticker" -> "Sent a sticker"
+                    else -> "Sent an encrypted message"
+                }
+            val senderId = encrypted.optString("sender")
+            val token = prefs.getString("$userId.token", null)
+                ?: error("Native access token is missing")
+            val senderName = knownSenderName?.takeIf {
+                senderId == knownSenderId && it.isNotBlank() && it != senderId
+            } ?: fetchSenderDisplayName(homeserver, token, roomId, senderId)
+            NativeDecryptedNotification(
+                senderId = senderId,
+                senderName = senderName,
+                body = body,
+                timestamp = encrypted.optLong("origin_server_ts", System.currentTimeMillis()),
+            )
         }
 
     private fun fetchSenderDisplayName(
@@ -834,29 +832,36 @@ object NativeNotificationCrypto {
         val prefs = preferences(context)
         val homeserver = prefs.getString("$userId.homeserver", null)
             ?: error("Native homeserver is missing")
-        val token = prefs.getString("$userId.token", null)
+        prefs.getString("$userId.token", null)
             ?: error("Native access token is missing")
-        val version = prefs.getString("$userId.backupVersion", null)
+        prefs.getString("$userId.backupVersion", null)
             ?: error("No trusted key-backup version is available natively")
         val encodedRecoveryKey = prefs.getString("$userId.backupRecoveryKey", null)
             ?: error("No trusted key-backup recovery key is available natively")
         val recoveryKey = BackupRecoveryKey.fromBase64(encodedRecoveryKey)
         try {
-            val backupInfo = fetchJson(
-                "$homeserver/_matrix/client/v3/room_keys/version/${encode(version)}",
-                token,
+            val backupInfo = fetchJsonForAccount(
+                prefs,
+                userId,
+                homeserver,
+                "$homeserver/_matrix/client/v3/room_keys/version",
                 "key-backup-version",
             )
+            val version = backupInfo.optString("version").takeIf { it.isNotBlank() }
+                ?: error("Active key backup has no version")
             val expectedPublicKey = backupInfo.optJSONObject("auth_data")
                 ?.optString("public_key")
                 ?.takeIf { it.isNotBlank() }
                 ?: error("Key backup has no public key")
             if (recoveryKey.megolmV1PublicKey().publicKey != expectedPublicKey)
                 error("Stored recovery key does not match key backup $version")
+            prefs.edit().putString("$userId.backupVersion", version).commit()
 
-            val session = fetchJson(
+            val session = fetchJsonForAccount(
+                prefs,
+                userId,
+                homeserver,
                 "$homeserver/_matrix/client/v3/room_keys/keys/${encode(roomId)}/${encode(sessionId)}?version=${encode(version)}",
-                token,
                 "key-backup-session",
             )
             val data = session.optJSONObject("session_data")
@@ -881,6 +886,24 @@ object NativeNotificationCrypto {
         } finally {
             recoveryKey.close()
         }
+    }
+
+    private fun fetchJsonForAccount(
+        prefs: android.content.SharedPreferences,
+        userId: String,
+        homeserver: String,
+        url: String,
+        requestStage: String,
+    ): JSONObject {
+        var token = prefs.getString("$userId.token", null)
+            ?: error("Native access token is missing")
+        try {
+            return fetchJson(url, token, requestStage)
+        } catch (error: MatrixRequestException) {
+            if (error.httpStatus != 401 || NativeCryptoBridge.webViewActive) throw error
+        }
+        token = refreshNativeSession(prefs, userId, homeserver)
+        return fetchJson(url, token, requestStage)
     }
 
     private fun fetchJson(url: String, accessToken: String, requestStage: String): JSONObject {

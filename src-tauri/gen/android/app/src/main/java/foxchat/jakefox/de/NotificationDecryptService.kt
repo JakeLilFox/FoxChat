@@ -20,7 +20,7 @@ private const val FOREGROUND_CHANNEL_ID = "background_decrypt"
 private const val FOREGROUND_NOTIFICATION_ID = 918_273
 private const val DECRYPT_TIMEOUT_MS = 25_000L
 private const val WAKE_LOCK_TIMEOUT_MS = 30_000L
-private val NATIVE_RETRY_DELAYS_MS = longArrayOf(2_000L, 6_000L)
+private val NATIVE_RETRY_DELAYS_MS = longArrayOf(2_000L, 4_000L, 7_000L)
 const val NOTIFICATION_DECRYPT_ROOM_ID_EXTRA = "room_id"
 const val NOTIFICATION_DECRYPT_EVENT_ID_EXTRA = "event_id"
 const val NOTIFICATION_FALLBACK_SENDER_ID_EXTRA = "fallback_sender_id"
@@ -152,8 +152,6 @@ class NotificationDecryptService : Service() {
             NativeNotificationCrypto.recordNotificationDiagnostic(
                 applicationContext, "webview-unavailable", requestedRoomId, requestedEventId,
             )
-            showFallback(requestedRoomId, requestedEventId)
-            finishAndStop()
             return
         }
         NativeNotificationCrypto.recordNotificationDiagnostic(

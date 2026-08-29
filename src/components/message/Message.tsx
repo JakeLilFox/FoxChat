@@ -19,7 +19,7 @@ import {
 import { recentStorage, rememberRecent, useRecents } from '../../lib/emojiData'
 import { eventBody } from '../../lib/eventHelpers'
 import { formatFileSize } from '../../lib/format'
-import { useMediaUrl } from '../../lib/hooks'
+import { useMatrixEventStatus, useMediaUrl } from '../../lib/hooks'
 import { showImageGallery, showImageViewer, type ViewerImage } from '../../lib/media'
 import { firstPreviewUrl } from '../../lib/messageText'
 import {
@@ -212,8 +212,9 @@ export const Message = memo(function Message({
     return () => window.removeEventListener(OWN_MESSAGES_ON_RIGHT_CHANGED_EVENT, onChange)
   }, [])
   const alignRight = mine && rightIsMine
-  const sendFailed = event.status === EventStatus.NOT_SENT || event.status === EventStatus.CANCELLED
-  const pending = event.status != null && !sendFailed
+  const eventStatus = useMatrixEventStatus(event)
+  const sendFailed = eventStatus === EventStatus.NOT_SENT || eventStatus === EventStatus.CANCELLED
+  const pending = eventStatus != null && !sendFailed
   const c = event.getContent()
   const galleryEvents = gallery?.length && gallery.length > 1 ? gallery : undefined
   const galleryKey = galleryEvents?.map((item) => item.getId() ?? item.getTxnId()).join('|') ?? ''
