@@ -50,6 +50,10 @@
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
         <service
+            android:name=".NotificationDecryptRetryJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+        <service
             android:name="app.tauri.remotepush.FCMService"
             tools:node="remove" />
         <activity

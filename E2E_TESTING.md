@@ -241,8 +241,8 @@ The live suite:
 - wipes every existing device for all three dedicated accounts before the
   journey via the raw API (`wipeAllDevices` in `tests/e2e/support/matrix-api.ts`
   - a temporary login, removing every other device, then logging that
-  session out too), so never point these accounts at ones used by people or
-  other test jobs;
+    session out too), so never point these accounts at ones used by people or
+    other test jobs;
 - generates a unique room name for each run;
 - only cleans up the room created by that run;
 - leaves and forgets the room for every test session;
@@ -300,10 +300,12 @@ display; see "Voice and screenshare requirements" above.
 `scripts/android-e2e/run.mts` drives a real Android emulator through Appium
 to exercise the actual push path end to end: Matrix pusher registration,
 FCM delivery, native background decrypt, and the notification that results
-- plus swipe-to-reply, room-drawer open/close, and image-viewer pinch, pan,
-reset, and close gestures that only mean something on a real device. It's a
-separate, much heavier suite from the Playwright tests above: real Google
-account, real emulator, real FCM.
+
+- plus foreground encrypted-message delivery, session restoration without a
+  login prompt after Android kills the process, swipe-to-reply, room-drawer open/close, and image-viewer pinch, pan,
+  reset, and close gestures that only mean something on a real device. It's a
+  separate, much heavier suite from the Playwright tests above: real Google
+  account, real emulator, real FCM.
 
 It uses `MATRIX_E2E_ACCOUNT_1/2/3/4_*` from the live Matrix test
 configuration (account 1 = primary Android login, account 2 = the second

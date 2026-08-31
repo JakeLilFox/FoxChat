@@ -54,9 +54,17 @@ class NotificationDecryptService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val requestedRoomId = intent?.getStringExtra(NOTIFICATION_DECRYPT_ROOM_ID_EXTRA)
         val requestedEventId = intent?.getStringExtra(NOTIFICATION_DECRYPT_EVENT_ID_EXTRA)
-        // Ignore concurrent work and stale service restarts.
-        if (requestedRoomId.isNullOrEmpty() || requestedEventId.isNullOrEmpty() || roomId != null) {
-            stopSelf()
+        if (requestedRoomId.isNullOrEmpty() || requestedEventId.isNullOrEmpty()) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        // A Service has only one instance. Do not let a second FCM delivery cancel the
+        // notification already being decrypted; every event is also persisted for the
+        // independent JobScheduler path, which will pick this one up shortly.
+        if (roomId != null) {
+            NativeNotificationCrypto.recordNotificationDiagnostic(
+                applicationContext, "queued-for-background-retry", requestedRoomId, requestedEventId,
+            )
             return START_NOT_STICKY
         }
         roomId = requestedRoomId
@@ -161,6 +169,7 @@ class NotificationDecryptService : Service() {
             NativeNotificationCrypto.recordNotificationDiagnostic(
                 applicationContext, "webview-decrypted", requestedRoomId, requestedEventId,
             )
+            NativeNotificationRetryManager.complete(applicationContext, requestedRoomId, requestedEventId)
             handler.post { finishAndStop() }
         }
         PushNotificationPlugin.instance?.requestDecryption(requestedRoomId, requestedEventId)
@@ -195,6 +204,7 @@ class NotificationDecryptService : Service() {
             requestedRoomId,
             requestedEventId,
         )
+        NativeNotificationRetryManager.complete(applicationContext, requestedRoomId, requestedEventId)
     }
 
     private fun isCurrent(requestedRoomId: String, requestedEventId: String): Boolean =

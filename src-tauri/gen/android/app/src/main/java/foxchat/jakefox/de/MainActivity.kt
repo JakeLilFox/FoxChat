@@ -21,6 +21,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executors
 import app.tauri.remotepush.NativeCryptoBridge
+import app.tauri.remotepush.NotificationDecryptionBridge
 import app.tauri.remotepush.NotificationDebugBridge
 
 class MainActivity : TauriActivity() {
@@ -47,6 +48,9 @@ class MainActivity : TauriActivity() {
     NativeCryptoBridge.status = { NativeNotificationCrypto.status(applicationContext).toString() }
     NativeCryptoBridge.sessionTokens = { userId ->
       NativeNotificationCrypto.nativeSessionTokens(applicationContext, userId).toString()
+    }
+    NotificationDecryptionBridge.onCompleted = { roomId, eventId ->
+      NativeNotificationRetryManager.complete(applicationContext, roomId, eventId)
     }
     NativeCryptoBridge.test = { roomId, eventId ->
       val result = NativeNotificationCrypto.decrypt(applicationContext, roomId, eventId)

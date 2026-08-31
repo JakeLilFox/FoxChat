@@ -62,6 +62,12 @@ class FoxChatMessagingService : FirebaseMessagingService() {
         val timestamp = data["timestamp"]?.toLongOrNull() ?: System.currentTimeMillis()
 
         if (matrixEventId != null) {
+            NativeNotificationRetryManager.enqueue(
+                applicationContext,
+                PendingNotificationDecrypt(
+                    roomId, matrixEventId, senderId, senderName, body, roomName, silent, timestamp,
+                ),
+            )
             val decryptIntent = Intent(applicationContext, NotificationDecryptService::class.java).apply {
                 putExtra(NOTIFICATION_DECRYPT_ROOM_ID_EXTRA, roomId)
                 putExtra(NOTIFICATION_DECRYPT_EVENT_ID_EXTRA, matrixEventId)

@@ -1191,7 +1191,14 @@ export class MatrixClientService {
     await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true })
     await initialSync
     for (const room of client.getRooms()) this.trackRoomOwner(client, room)
-    if (!this.ephemeral) void registerMatrixPush(client).catch(() => undefined)
+    if (!this.ephemeral) {
+      // Android upgrades keep the existing WebView Matrix session and crypto store. Always
+      // repopulate the process-dead notification companion after the first sync, even when
+      // FCM registration is delayed or the pusher was already current. This is intentionally
+      // a no-op in normal browsers and desktop builds.
+      scheduleNativeCryptoSync(client, 0, true)
+      void registerMatrixPush(client).catch(() => undefined)
+    }
     if (!this.secondary && this.combinedAccountsEnabled()) await this.startSecondaryAccounts()
     if (!this.secondary && !this.ephemeral) this.startPresenceTracking()
     return client
@@ -3009,7 +3016,10 @@ export class MatrixClientService {
           })
         } else if (mode === 'mentions') {
           await client.addPushRule('global', PushRuleKind.RoomSpecific, targetId, {
-            actions: [PushRuleActionName.DontNotify, { set_tweak: TweakName.Highlight, value: false }],
+            actions: [
+              PushRuleActionName.DontNotify,
+              { set_tweak: TweakName.Highlight, value: false },
+            ],
           })
         } else {
           await client.addPushRule('global', PushRuleKind.RoomSpecific, targetId, {

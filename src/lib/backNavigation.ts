@@ -96,13 +96,17 @@ export function closeTopVisualLayer() {
   const rightDrawer = topmost(
     [...document.querySelectorAll<HTMLElement>('.ant-drawer-right')].filter((drawer) => {
       if (!visible(drawer)) return false
-      const closeButton = drawer.querySelector<HTMLElement>('.ant-drawer-close')
+      const closeButton = drawer.querySelector<HTMLElement>(
+        '.ant-drawer-close, [data-foxchat-back-close="true"]',
+      )
       const mask = drawer.querySelector<HTMLElement>('.ant-drawer-mask')
       return (!!closeButton && visible(closeButton)) || (!!mask && visible(mask))
     }),
   )
   if (rightDrawer) {
-    const closeButton = rightDrawer.querySelector<HTMLElement>('.ant-drawer-close')
+    const closeButton = rightDrawer.querySelector<HTMLElement>(
+      '.ant-drawer-close, [data-foxchat-back-close="true"]',
+    )
     const mask = rightDrawer.querySelector<HTMLElement>('.ant-drawer-mask')
     if (!click(closeButton)) {
       if (mask && visible(mask)) mask.click()
@@ -136,6 +140,27 @@ export function leaveOpenSpaceDrawer() {
 
 const stateRecord = (state: unknown) =>
   typeof state === 'object' && state !== null ? (state as Record<string, unknown>) : {}
+
+const appNavigationTarget = (value: string) => {
+  const url = new URL(value, window.location.href)
+  return {
+    pathname: url.pathname,
+    hash: url.hash,
+    room: url.searchParams.get('room'),
+    space: url.searchParams.get('space'),
+  }
+}
+
+const sameAppNavigationTarget = (first: string, second: string) => {
+  const left = appNavigationTarget(first)
+  const right = appNavigationTarget(second)
+  return (
+    left.pathname === right.pathname &&
+    left.hash === right.hash &&
+    left.room === right.room &&
+    left.space === right.space
+  )
+}
 
 /** Use the app navigator for browser/desktop Back while retaining nested dialog history entries. */
 export function installHistoryBackHandler(handleBack: () => boolean) {
@@ -188,6 +213,15 @@ export function installHistoryBackHandler(handleBack: () => boolean) {
     if (!backwards || allowProgrammaticBack) {
       allowProgrammaticBack = false
       window.clearTimeout(programmaticBackTimer)
+      current = arrived
+      return
+    }
+
+    // URL-backed overlays and drawers are real app-stack entries. Let the
+    // browser land on their parent entry so every popstate consumer sees the
+    // same state. Only room/Space changes are converted into the app's
+    // room -> Space drawer -> main room list navigation hierarchy.
+    if (sameAppNavigationTarget(current.url, arrived.url)) {
       current = arrived
       return
     }

@@ -114,7 +114,7 @@ test.describe('foldable phone layout', () => {
         await page!
           .locator('.ant-drawer-mask')
           .last()
-          .click({ position: { x: 20, y: 20 } })
+          .click({ position: { x: FOLDED.width - 20, y: 20 } })
         await expect(page!.getByTestId('room-sidebar')).toHaveCount(0)
       })
 

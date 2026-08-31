@@ -17,6 +17,8 @@ const registrationInFlight = new WeakMap<MatrixClient, Promise<void>>()
 const registrationRetries = new WeakMap<MatrixClient, number>()
 const registrationTimers = new WeakMap<MatrixClient, number>()
 const cryptoSyncTimers = new WeakMap<MatrixClient, number>()
+const cryptoSyncInFlight = new WeakMap<MatrixClient, Promise<void>>()
+const cryptoSyncQueued = new WeakSet<MatrixClient>()
 const lastCryptoSync = new WeakMap<MatrixClient, number>()
 const cryptoSyncRetries = new WeakMap<MatrixClient, number>()
 const syncedRoomSessions = new WeakMap<MatrixClient, Set<string>>()
@@ -57,35 +59,51 @@ export function scheduleNativeCryptoSync(client: MatrixClient, delay = 2_000, fo
     client,
     window.setTimeout(() => {
       cryptoSyncTimers.delete(client)
-      void (async () => {
-        try {
-          await syncNativeCryptoNow(client)
-        } catch (error) {
-          console.warn('[push] Could not sync native notification crypto', error)
-          const attempt = (cryptoSyncRetries.get(client) ?? 0) + 1
-          cryptoSyncRetries.set(client, attempt)
-          if (attempt <= 3)
-            scheduleNativeCryptoSync(client, Math.min(30_000, 5_000 * 2 ** (attempt - 1)))
-          return
-        }
-        if (nativeCryptoValidated.has(client)) return
-        try {
-          const result = await testNativeCryptoWithLoadedEvent(client)
-          if (result?.ok) {
-            nativeCryptoValidated.add(client)
-            console.info('[push] Native notification decryption validated automatically', {
-              userId: client.getUserId(),
-              roomId: result.roomId,
-              eventId: result.eventId,
-            })
-          }
-        } catch (error) {
-          // Retry validation during a later crypto sync.
-          console.warn('[push] Automatic native notification decryption validation failed', error)
-        }
-      })()
+      void runNativeCryptoSync(client)
     }, delay),
   )
+}
+
+async function runNativeCryptoSync(client: MatrixClient) {
+  const active = cryptoSyncInFlight.get(client)
+  if (active) {
+    cryptoSyncQueued.add(client)
+    return active
+  }
+  const sync = (async () => {
+    try {
+      await syncNativeCryptoNow(client)
+    } catch (error) {
+      console.warn('[push] Could not sync native notification crypto', error)
+      const attempt = (cryptoSyncRetries.get(client) ?? 0) + 1
+      cryptoSyncRetries.set(client, attempt)
+      if (attempt <= 3)
+        scheduleNativeCryptoSync(client, Math.min(30_000, 5_000 * 2 ** (attempt - 1)))
+      return
+    }
+    if (nativeCryptoValidated.has(client)) return
+    try {
+      const result = await testNativeCryptoWithLoadedEvent(client)
+      if (result?.ok) {
+        nativeCryptoValidated.add(client)
+        console.info('[push] Native notification decryption validated automatically', {
+          userId: client.getUserId(),
+          roomId: result.roomId,
+          eventId: result.eventId,
+        })
+      }
+    } catch (error) {
+      // Retry validation during a later crypto sync.
+      console.warn('[push] Automatic native notification decryption validation failed', error)
+    }
+  })()
+  cryptoSyncInFlight.set(client, sync)
+  try {
+    await sync
+  } finally {
+    if (cryptoSyncInFlight.get(client) === sync) cryptoSyncInFlight.delete(client)
+    if (cryptoSyncQueued.delete(client)) scheduleNativeCryptoSync(client, 0, true)
+  }
 }
 
 export function scheduleNativeCryptoSyncForEvent(client: MatrixClient, event: MatrixEvent) {

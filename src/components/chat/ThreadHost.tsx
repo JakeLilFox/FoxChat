@@ -136,7 +136,12 @@ export function ThreadHost({
         <>
           <ThreadDrawerHead>
             <b>Threads</b>
-            <button type="button" onClick={onClose} aria-label="Close threads">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close threads"
+              data-foxchat-back-close="true"
+            >
               <CloseOutlined />
             </button>
           </ThreadDrawerHead>

@@ -526,6 +526,20 @@ async function waitForStoredAndroidAccounts(
   })
 }
 
+async function waitForRestoredAndroidSession(
+  browser: WdioBrowser,
+  minimumAccounts: number,
+  timeout = 90_000,
+) {
+  await switchToWebview(browser)
+  await waitForStoredAndroidAccounts(browser, minimumAccounts, timeout)
+  await testId(browser, 'account-menu').waitForDisplayed({ timeout })
+  const loginVisible = await testId(browser, 'login-page')
+    .isDisplayed()
+    .catch(() => false)
+  if (loginVisible) throw new Error('Android asked the user to log in again after process restart')
+}
+
 async function allowAndroidNotificationPermission(browser: WdioBrowser, packageName: string) {
   await switchToNative(browser)
   const allow = browser.$('id=com.android.permissioncontroller:id/permission_allow_button')
@@ -1528,6 +1542,7 @@ async function main() {
     const secondRoomName = `${cfg.roomPrefix} android multi ${runId}`
     const firstPrime = `android encrypted-session prime ${runId}`
     const secondPrime = `android multi-account encrypted-session prime ${runId}`
+    const foregroundMessage = `android foreground live message ${runId}`
     const firstMessage = `android push test message ${runId}`
     const secondMessage = `android multi-account push test message ${runId}`
 
@@ -1604,6 +1619,10 @@ async function main() {
       primaryAndroidSession.deviceId,
     )
 
+    log('receive an encrypted message live while the Android room is open')
+    await sendMessage(account3Page, foregroundMessage)
+    await byText(browser, foregroundMessage).waitForDisplayed({ timeout: 60_000 })
+
     log('close the Android app process and send from the normal browser')
     await switchToNative(browser)
     await closeBackgroundApp(cfg.packageName)
@@ -1619,10 +1638,14 @@ async function main() {
     )
     console.log('Notification decrypted correctly while the app was backgrounded.')
 
-    log('bring the app back and add a second account')
+    log('bring the app back without logging in again')
     relaunchWithE2eDebugFlag(cfg.packageName, cfg.mainActivity)
-    await switchToWebview(browser)
-    await waitForStoredAndroidAccounts(browser, 1, 30_000)
+    await waitForRestoredAndroidSession(browser, 1, 30_000)
+
+    log('confirm native backup setup survived the process restart')
+    await verifyPushAutoSetup(browser, [cfg.account1.userId], [cfg.account1.userId])
+
+    log('add a second account')
     await addAccountAndroid(browser, cfg.account2)
     const multiAccountSessions = await sessionsFromAndroidStorage(browser)
     sessions.push(...multiAccountSessions)
@@ -1675,8 +1698,7 @@ async function main() {
 
     log('bring the app back and open the second room')
     relaunchWithE2eDebugFlag(cfg.packageName, cfg.mainActivity)
-    await switchToWebview(browser)
-    await waitForStoredAndroidAccounts(browser, 2, 30_000)
+    await waitForRestoredAndroidSession(browser, 2, 30_000)
     await openAndroidRoom(browser, secondRoomId, secondRoomName)
 
     log('swipe a message to activate reply')

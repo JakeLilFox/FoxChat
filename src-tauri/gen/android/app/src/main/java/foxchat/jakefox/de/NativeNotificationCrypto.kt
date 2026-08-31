@@ -63,6 +63,7 @@ object NativeNotificationCrypto {
     private const val STORE_VERSION = 2
     private val machines = ConcurrentHashMap<String, OlmMachine>()
     private val locks = ConcurrentHashMap<String, Any>()
+    private val setupLocks = ConcurrentHashMap<String, Any>()
     private val roomMappingsLock = Any()
 
     @Synchronized
@@ -156,7 +157,7 @@ object NativeNotificationCrypto {
         pushClearToken: String?,
         pushGatewayUrl: String?,
     ) {
-        synchronized(lockFor(userId)) {
+        synchronized(setupLockFor(userId)) {
             val prefs = preferences(context)
             val setup = "setup.$userId"
             val editor = prefs.edit()
@@ -192,7 +193,7 @@ object NativeNotificationCrypto {
     }
 
     fun completeStagedSync(context: Context, userId: String) {
-        synchronized(lockFor(userId)) {
+        synchronized(setupLockFor(userId)) {
             val prefs = preferences(context)
             val setup = "setup.$userId"
             // Android can deliver multiple start commands for one staged
@@ -239,7 +240,7 @@ object NativeNotificationCrypto {
     }
 
     fun markSetupTimedOut(context: Context, userId: String) {
-        synchronized(lockFor(userId)) {
+        synchronized(setupLockFor(userId)) {
             val prefs = preferences(context)
             val setup = "setup.$userId"
             if (prefs.getString("$setup.state", null) != "pending") return
@@ -269,10 +270,9 @@ object NativeNotificationCrypto {
         pushClearToken: String?,
         pushGatewayUrl: String?,
     ) {
-        synchronized(lockFor(userId)) {
-            val prefs = preferences(context)
-            val exported = JSONArray(roomKeys)
-            val credentialEditor = prefs.edit()
+        val prefs = preferences(context)
+        val exported = JSONArray(roomKeys)
+        val credentialEditor = prefs.edit()
                 .putString("$userId.device", deviceId)
                 .putString("$userId.homeserver", homeserver.trimEnd('/'))
                 .putString("$userId.token", accessToken)
@@ -282,44 +282,67 @@ object NativeNotificationCrypto {
                 credentialEditor
                     .putString("$userId.backupVersion", backupVersion)
                     .putString("$userId.backupRecoveryKey", backupRecoveryKey)
-            } else {
-                credentialEditor
-                    .remove("$userId.backupVersion")
-                    .remove("$userId.backupRecoveryKey")
             }
+            // The WebView crypto SDK only exposes the backup private key while
+            // secure storage is unlocked in the current process. After Android
+            // kills and recreates that process, an otherwise valid sync can
+            // therefore omit these fields. Preserve the encrypted native copy
+            // in that case; a later unlocked sync still replaces it above.
             if (!pushClearToken.isNullOrBlank() && !pushGatewayUrl.isNullOrBlank()) {
                 credentialEditor
                     .putString("$userId.pushClearToken", pushClearToken)
                     .putString("$userId.pushGatewayUrl", pushGatewayUrl.trimEnd('/'))
             }
-            credentialEditor.apply()
-            val machine = machine(context, userId, deviceId)
-            prefs.edit()
-                .putLong("setup.$userId.heartbeatAt", System.currentTimeMillis())
-                .putString("setup.$userId.phase", "importing ${exported.length()} room keys")
-                .commit()
-            val imported = try {
-                machine.importDecryptedRoomKeys(roomKeys, object : ProgressListener {
-                    override fun onProgress(progress: Int, total: Int) {
-                        prefs.edit()
-                            .putLong("setup.$userId.heartbeatAt", System.currentTimeMillis())
-                            .putString("setup.$userId.phase", "importing room keys ($progress/$total)")
-                            .commit()
-                    }
-                })
-            } catch (error: Exception) {
+        credentialEditor.apply()
+        val machine = machine(context, userId, deviceId)
+        val delta = roomKeyDelta(prefs, userId, exported)
+        prefs.edit()
+            .putLong("setup.$userId.heartbeatAt", System.currentTimeMillis())
+            .putString(
+                "setup.$userId.phase",
+                "importing ${delta.keys.length()} changed room keys (${exported.length()} checked)",
+            )
+            .commit()
+        var importedSessions = 0L
+        try {
+            // Import small batches and release the machine lock between them. Notification
+            // decrypts can then take priority instead of waiting behind a complete key export.
+            val batchSize = 32
+            var offset = 0
+            while (offset < delta.keys.length()) {
+                val end = minOf(offset + batchSize, delta.keys.length())
+                val batch = JSONArray()
+                for (index in offset until end) batch.put(delta.keys.get(index))
+                val imported = synchronized(lockFor(userId)) {
+                    machine.importDecryptedRoomKeys(batch.toString(), object : ProgressListener {
+                        override fun onProgress(progress: Int, total: Int) = Unit
+                    })
+                }
+                importedSessions += imported.imported
+                offset = end
                 prefs.edit()
-                    .putLong("$userId.lastSyncAt", System.currentTimeMillis())
-                    .putInt("$userId.exported", exported.length())
-                    .putString("$userId.lastSyncError", "Key import failed: ${error.message ?: error.javaClass.simpleName}")
+                    .putLong("setup.$userId.heartbeatAt", System.currentTimeMillis())
+                    .putString(
+                        "setup.$userId.phase",
+                        "importing changed room keys ($offset/${delta.keys.length()}; ${exported.length()} checked)",
+                    )
                     .commit()
-                throw error
+                Thread.yield()
             }
-            val editor = prefs.edit()
+            prefs.edit().putString("$userId.roomKeyFingerprints", delta.fingerprints.toString()).commit()
+        } catch (error: Exception) {
+            prefs.edit()
                 .putLong("$userId.lastSyncAt", System.currentTimeMillis())
                 .putInt("$userId.exported", exported.length())
-                .putLong("$userId.imported", imported.imported)
-                .putLong("$userId.importTotal", imported.total)
+                .putString("$userId.lastSyncError", "Key import failed: ${error.message ?: error.javaClass.simpleName}")
+                .commit()
+            throw error
+        }
+        val editor = prefs.edit()
+                .putLong("$userId.lastSyncAt", System.currentTimeMillis())
+                .putInt("$userId.exported", exported.length())
+                .putLong("$userId.imported", importedSessions)
+                .putLong("$userId.importTotal", exported.length().toLong())
                 .remove("$userId.lastSyncError")
                 // Migrate the old shared error field. Sync and decrypt errors are
                 // tracked separately now so a successful key copy cannot hide a
@@ -364,8 +387,33 @@ object NativeNotificationCrypto {
                 }
                 editor.commit()
             }
-            syncRoomAvatars(context, accessToken, roomMetadata)
+        syncRoomAvatars(context, accessToken, roomMetadata)
+    }
+
+    private data class RoomKeyDelta(val keys: JSONArray, val fingerprints: JSONObject)
+
+    private fun roomKeyDelta(
+        prefs: android.content.SharedPreferences,
+        userId: String,
+        exported: JSONArray,
+    ): RoomKeyDelta {
+        val previous = try {
+            JSONObject(prefs.getString("$userId.roomKeyFingerprints", "{}") ?: "{}")
+        } catch (_: Exception) {
+            JSONObject()
         }
+        val keys = JSONArray()
+        val fingerprints = JSONObject()
+        for (index in 0 until exported.length()) {
+            val key = exported.optJSONObject(index) ?: continue
+            val identity = "${key.optString("room_id")}\u0000${key.optString("session_id")}"
+            if (identity == "\u0000") continue
+            val identityHash = digest(identity)
+            val fingerprint = digest(key.toString())
+            fingerprints.put(identityHash, fingerprint)
+            if (previous.optString(identityHash) != fingerprint) keys.put(key)
+        }
+        return RoomKeyDelta(keys, fingerprints)
     }
 
     private fun syncRoomAvatars(context: Context, accessToken: String, rooms: JSONArray) {
@@ -451,7 +499,7 @@ object NativeNotificationCrypto {
         prefs: android.content.SharedPreferences,
         userId: String,
         firebaseToken: String,
-    ) = synchronized(lockFor(userId)) {
+    ) = synchronized(setupLockFor(userId)) {
         val deviceId = prefs.getString("$userId.device", null)
             ?: error("Native device ID is missing")
         val homeserver = prefs.getString("$userId.homeserver", null)
@@ -733,74 +781,79 @@ object NativeNotificationCrypto {
         eventId: String,
         knownSenderId: String?,
         knownSenderName: String?,
-    ): NativeDecryptedNotification =
-        synchronized(lockFor(userId)) {
-            val deviceId = prefs.getString("$userId.device", null) ?: error("Native device ID is missing")
-            val homeserver = prefs.getString("$userId.homeserver", null) ?: error("Native homeserver is missing")
-            prefs.getString("$userId.token", null) ?: error("Native access token is missing")
-            val encrypted = fetchJsonForAccount(
-                prefs,
-                userId,
-                homeserver,
-                "$homeserver/_matrix/client/v3/rooms/${encode(roomId)}/event/${encode(eventId)}",
-                "room-event",
-            )
-            val raw = encrypted.toString()
-            val clear = if (encrypted.optString("type") == "m.room.encrypted") {
-                val olmMachine = machine(context, userId, deviceId)
-                val decrypted = try {
-                    olmMachine.decryptRoomEvent(
-                        raw, roomId, false, false,
-                        DecryptionSettings(TrustRequirement.UNTRUSTED),
-                    )
-                } catch (missing: DecryptionException.MissingRoomKey) {
-                    restoreSessionFromBackup(
-                        context,
-                        userId,
-                        roomId,
-                        encrypted.optJSONObject("content")?.optString("session_id")
-                            ?.takeIf { it.isNotBlank() }
-                            ?: throw missing,
-                        olmMachine,
-                    )
+    ): NativeDecryptedNotification {
+        val deviceId = prefs.getString("$userId.device", null) ?: error("Native device ID is missing")
+        val homeserver = prefs.getString("$userId.homeserver", null) ?: error("Native homeserver is missing")
+        prefs.getString("$userId.token", null) ?: error("Native access token is missing")
+        // Matrix HTTP requests must not hold the OlmMachine lock. A slow homeserver or
+        // temporarily missing backup session should never stop a local key import/decrypt.
+        val encrypted = fetchJsonForAccount(
+            prefs,
+            userId,
+            homeserver,
+            "$homeserver/_matrix/client/v3/rooms/${encode(roomId)}/event/${encode(eventId)}",
+            "room-event",
+        )
+        val raw = encrypted.toString()
+        val clear = if (encrypted.optString("type") == "m.room.encrypted") {
+            val olmMachine = machine(context, userId, deviceId)
+            var missingRoomKey: DecryptionException.MissingRoomKey? = null
+            var decrypted = try {
+                synchronized(lockFor(userId)) {
                     olmMachine.decryptRoomEvent(
                         raw, roomId, false, false,
                         DecryptionSettings(TrustRequirement.UNTRUSTED),
                     )
                 }
-                JSONObject(decrypted.clearEvent)
-            } else {
-                encrypted
+            } catch (missing: DecryptionException.MissingRoomKey) {
+                missingRoomKey = missing
+                null
             }
-            if (suppressTimelineActivity(context, clear)) {
-                val senderId = encrypted.optString("sender")
-                return@synchronized NativeDecryptedNotification(
-                    senderId = senderId,
-                    senderName = senderId,
-                    body = "",
-                    timestamp = encrypted.optLong("origin_server_ts", System.currentTimeMillis()),
-                    suppressed = true,
-                )
-            }
-            val content = clear.optJSONObject("content") ?: error("Decrypted event has no content")
-            val body = content.optString("body").takeIf { it.isNotBlank() }
-                ?: when (clear.optString("type")) {
-                    "m.sticker" -> "Sent a sticker"
-                    else -> "Sent an encrypted message"
+            if (decrypted == null) {
+                val sessionId = encrypted.optJSONObject("content")?.optString("session_id")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: throw checkNotNull(missingRoomKey)
+                restoreSessionFromBackup(context, userId, roomId, sessionId, olmMachine)
+                decrypted = synchronized(lockFor(userId)) {
+                    olmMachine.decryptRoomEvent(
+                        raw, roomId, false, false,
+                        DecryptionSettings(TrustRequirement.UNTRUSTED),
+                    )
                 }
+            }
+            JSONObject(checkNotNull(decrypted).clearEvent)
+        } else {
+            encrypted
+        }
+        if (suppressTimelineActivity(context, clear)) {
             val senderId = encrypted.optString("sender")
-            val token = prefs.getString("$userId.token", null)
-                ?: error("Native access token is missing")
-            val senderName = knownSenderName?.takeIf {
-                senderId == knownSenderId && it.isNotBlank() && it != senderId
-            } ?: fetchSenderDisplayName(homeserver, token, roomId, senderId)
-            NativeDecryptedNotification(
+            return NativeDecryptedNotification(
                 senderId = senderId,
-                senderName = senderName,
-                body = body,
+                senderName = senderId,
+                body = "",
                 timestamp = encrypted.optLong("origin_server_ts", System.currentTimeMillis()),
+                suppressed = true,
             )
         }
+        val content = clear.optJSONObject("content") ?: error("Decrypted event has no content")
+        val body = content.optString("body").takeIf { it.isNotBlank() }
+            ?: when (clear.optString("type")) {
+                "m.sticker" -> "Sent a sticker"
+                else -> "Sent an encrypted message"
+            }
+        val senderId = encrypted.optString("sender")
+        val token = prefs.getString("$userId.token", null)
+            ?: error("Native access token is missing")
+        val senderName = knownSenderName?.takeIf {
+            senderId == knownSenderId && it.isNotBlank() && it != senderId
+        } ?: fetchSenderDisplayName(homeserver, token, roomId, senderId)
+        return NativeDecryptedNotification(
+            senderId = senderId,
+            senderName = senderName,
+            body = body,
+            timestamp = encrypted.optLong("origin_server_ts", System.currentTimeMillis()),
+        )
+    }
 
     private fun fetchSenderDisplayName(
         homeserver: String,
@@ -875,13 +928,15 @@ object NativeNotificationCrypto {
             )
                 .put("room_id", roomId)
                 .put("session_id", sessionId)
-            olmMachine.importRoomKeysFromBackup(
-                JSONArray().put(clear).toString(),
-                version,
-                object : ProgressListener {
-                    override fun onProgress(progress: Int, total: Int) = Unit
-                },
-            )
+            synchronized(lockFor(userId)) {
+                olmMachine.importRoomKeysFromBackup(
+                    JSONArray().put(clear).toString(),
+                    version,
+                    object : ProgressListener {
+                        override fun onProgress(progress: Int, total: Int) = Unit
+                    },
+                )
+            }
             recordNotificationDiagnostic(context, "backup-key-imported", roomId, sessionId)
         } finally {
             recoveryKey.close()
@@ -992,6 +1047,7 @@ object NativeNotificationCrypto {
             .put("enabled", isEnabled(context))
             .put("bootStage", boot.getString("stage", "unknown"))
             .put("bootStageAt", boot.getLong("at", 0))
+            .put("pendingNotificationDecrypts", NativeNotificationRetryManager.pending(context).size)
             .put("notificationDiagnostics", sanitizedDiagnostics(prefs))
             .put("accounts", accounts)
     }
@@ -1015,32 +1071,39 @@ object NativeNotificationCrypto {
     }
 
     private fun privateRef(kind: String, value: String): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
-        return "$kind:${digest.take(8).joinToString("") { "%02x".format(it) }}"
+        return "$kind:${digest(value).take(16)}"
     }
 
+    private fun digest(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
     private fun machine(context: Context, userId: String, deviceId: String): OlmMachine =
-        machines.getOrPut(userId) {
-            val prefs = preferences(context)
-            val store = File(context.noBackupFilesDir, "matrix-notification-crypto/${safeName(userId)}")
-            if (prefs.getInt("$userId.storeVersion", 0) < STORE_VERSION) {
-                // The WebView store remains authoritative.
-                if (store.exists() && !store.deleteRecursively()) {
-                    error("Could not reset the previous native crypto store")
+        machines[userId] ?: synchronized(lockFor(userId)) {
+            machines[userId] ?: run {
+                val prefs = preferences(context)
+                val store = File(context.noBackupFilesDir, "matrix-notification-crypto/${safeName(userId)}")
+                if (prefs.getInt("$userId.storeVersion", 0) < STORE_VERSION) {
+                    // The WebView store remains authoritative.
+                    if (store.exists() && !store.deleteRecursively()) {
+                        error("Could not reset the previous native crypto store")
+                    }
+                    prefs.edit()
+                        .remove("$userId.passphrase")
+                        .remove("$userId.roomKeyFingerprints")
+                        .putInt("$userId.storeVersion", STORE_VERSION)
+                        .commit()
                 }
-                prefs.edit()
-                    .remove("$userId.passphrase")
-                    .putInt("$userId.storeVersion", STORE_VERSION)
-                    .commit()
+                var passphrase = prefs.getString("$userId.passphrase", null)
+                if (passphrase == null) {
+                    val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
+                    passphrase = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    prefs.edit().putString("$userId.passphrase", passphrase).commit()
+                }
+                store.mkdirs()
+                OlmMachine(userId, deviceId, store.absolutePath, passphrase).also { machines[userId] = it }
             }
-            var passphrase = prefs.getString("$userId.passphrase", null)
-            if (passphrase == null) {
-                val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
-                passphrase = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                prefs.edit().putString("$userId.passphrase", passphrase).commit()
-            }
-            store.mkdirs()
-            OlmMachine(userId, deviceId, store.absolutePath, passphrase)
         }
 
     private fun preferences(context: Context) = EncryptedSharedPreferences.create(
@@ -1060,6 +1123,7 @@ object NativeNotificationCrypto {
     }
 
     private fun lockFor(userId: String) = locks.getOrPut(userId) { Any() }
+    private fun setupLockFor(userId: String) = setupLocks.getOrPut(userId) { Any() }
     private fun safeName(value: String) = value.toByteArray().joinToString("") { "%02x".format(it) }
     private fun encode(value: String) = java.net.URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
 }

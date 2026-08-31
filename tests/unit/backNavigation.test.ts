@@ -53,6 +53,26 @@ describe('back navigation', () => {
     expect(parentClose).not.toHaveBeenCalled()
   })
 
+  it('uses an app drawer close control before falling through to navigation beneath it', () => {
+    const drawer = document.createElement('div')
+    drawer.className = 'ant-drawer ant-drawer-right'
+    Object.defineProperty(drawer, 'getClientRects', {
+      value: () => [{ width: 1, height: 1 }],
+    })
+    const close = document.createElement('button')
+    close.dataset.foxchatBackClose = 'true'
+    Object.defineProperty(close, 'getClientRects', {
+      value: () => [{ width: 1, height: 1 }],
+    })
+    const clicked = vi.fn()
+    close.addEventListener('click', clicked)
+    drawer.append(close)
+    document.body.append(drawer)
+
+    expect(closeTopVisualLayer()).toBe(true)
+    expect(clicked).toHaveBeenCalledOnce()
+  })
+
   it('leaves a visible Space sidebar for the main drawer', () => {
     const drawer = document.createElement('aside')
     drawer.dataset.foxchatSpaceDrawer = 'true'
@@ -87,6 +107,21 @@ describe('back navigation', () => {
     history.back()
     await vi.waitFor(() =>
       expect(new URL(window.location.href).searchParams.has('settings')).toBe(false),
+    )
+
+    expect(back).not.toHaveBeenCalled()
+  })
+
+  it('allows physical browser Back to close threads without invoking room navigation', async () => {
+    history.replaceState({}, '', '/?room=!two:example.org')
+    const browserBack = history.back.bind(history)
+    const back = vi.fn(() => true)
+    cleanups.push(installHistoryBackHandler(back))
+    history.pushState({ foxchatThread: 'list' }, '', '/?room=!two:example.org&thread=list')
+
+    browserBack()
+    await vi.waitFor(() =>
+      expect(new URL(window.location.href).searchParams.has('thread')).toBe(false),
     )
 
     expect(back).not.toHaveBeenCalled()
