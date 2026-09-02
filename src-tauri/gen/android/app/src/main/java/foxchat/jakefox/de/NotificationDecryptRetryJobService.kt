@@ -138,7 +138,18 @@ class NotificationDecryptRetryJobService : JobService() {
             for (pending in NativeNotificationRetryManager.pending(applicationContext)) {
                 if (stopped) return@Thread
                 try {
-                    val decrypted = NativeNotificationCrypto.decrypt(
+                    val fullClientResult = runCatching {
+                        val event = NativeMatrixClientManager.decryptEvent(
+                            applicationContext,
+                            pending.roomId,
+                            pending.eventId,
+                        )
+                        val timestamp = runCatching {
+                            JSONObject(event.rawEvent).optLong("origin_server_ts", System.currentTimeMillis())
+                        }.getOrDefault(System.currentTimeMillis())
+                        NativeDecryptedNotification(event.senderId, event.senderName, event.body(), timestamp)
+                    }
+                    val decrypted = fullClientResult.getOrNull() ?: NativeNotificationCrypto.decrypt(
                         applicationContext,
                         pending.roomId,
                         pending.eventId,

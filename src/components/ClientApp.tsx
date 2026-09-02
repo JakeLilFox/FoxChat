@@ -563,11 +563,11 @@ export function ClientApp({
         recoveryMethod === 'key'
           ? await matrixService.unlockSecretStorage(recoverySecret)
           : await matrixService.unlockSecretStorageWithPassphrase(recoverySecret)
-      message.success(
-        'background' in result && result.background
-          ? 'Encrypted history recovery enabled'
-          : `Restored ${result.imported} of ${result.total} encryption keys`,
-      )
+      if ('background' in result) {
+        message.success('Encrypted history recovery enabled')
+      } else {
+        message.success(`Restored ${result.imported} of ${result.total} encryption keys`)
+      }
       setRecovery(false)
       setRecoverySecret('')
       setRooms([...matrixService.rooms()])

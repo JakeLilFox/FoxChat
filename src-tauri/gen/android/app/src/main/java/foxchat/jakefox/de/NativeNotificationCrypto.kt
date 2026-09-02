@@ -475,7 +475,7 @@ object NativeNotificationCrypto {
         var allSucceeded = true
         for (userId in userIds) {
             try {
-                refreshPusherForAccount(prefs, userId, firebaseToken)
+                refreshPusherForAccount(context, prefs, userId, firebaseToken)
                 prefs.edit()
                     .putLong("$userId.lastPushTokenRefreshAt", System.currentTimeMillis())
                     .remove("$userId.lastPushTokenRefreshError")
@@ -496,6 +496,7 @@ object NativeNotificationCrypto {
     }
 
     private fun refreshPusherForAccount(
+        context: Context,
         prefs: android.content.SharedPreferences,
         userId: String,
         firebaseToken: String,
@@ -504,7 +505,9 @@ object NativeNotificationCrypto {
             ?: error("Native device ID is missing")
         val homeserver = prefs.getString("$userId.homeserver", null)
             ?: error("Native homeserver is missing")
-        var accessToken = prefs.getString("$userId.token", null)
+        var accessToken = NativeMatrixClientManager.sessionTokens(context, userId)
+            ?.optString("accessToken")?.takeIf { it.isNotBlank() }
+            ?: prefs.getString("$userId.token", null)
             ?: error("Native access token is missing")
         val clearToken = prefs.getString("$userId.pushClearToken", null)
             ?: error("Native push clear token is not cached yet")
@@ -520,7 +523,8 @@ object NativeNotificationCrypto {
             // The Matrix SDK owns token refresh while its WebView is alive. Let
             // the persisted job retry instead of racing and rotating the same
             // refresh token in two independent clients.
-            if (NativeCryptoBridge.webViewActive) throw error
+            if (NativeMatrixMigrationStore.isReady(context, userId) || NativeCryptoBridge.webViewActive)
+                throw error
             accessToken = refreshNativeSession(prefs, userId, homeserver)
             updatePusherForAccount(
                 homeserver, accessToken, deviceId, clearToken, gatewayUrl, firebaseToken,
@@ -788,6 +792,7 @@ object NativeNotificationCrypto {
         // Matrix HTTP requests must not hold the OlmMachine lock. A slow homeserver or
         // temporarily missing backup session should never stop a local key import/decrypt.
         val encrypted = fetchJsonForAccount(
+            context,
             prefs,
             userId,
             homeserver,
@@ -894,6 +899,7 @@ object NativeNotificationCrypto {
         val recoveryKey = BackupRecoveryKey.fromBase64(encodedRecoveryKey)
         try {
             val backupInfo = fetchJsonForAccount(
+                context,
                 prefs,
                 userId,
                 homeserver,
@@ -911,6 +917,7 @@ object NativeNotificationCrypto {
             prefs.edit().putString("$userId.backupVersion", version).commit()
 
             val session = fetchJsonForAccount(
+                context,
                 prefs,
                 userId,
                 homeserver,
@@ -944,18 +951,25 @@ object NativeNotificationCrypto {
     }
 
     private fun fetchJsonForAccount(
+        context: Context,
         prefs: android.content.SharedPreferences,
         userId: String,
         homeserver: String,
         url: String,
         requestStage: String,
     ): JSONObject {
-        var token = prefs.getString("$userId.token", null)
+        var token = NativeMatrixClientManager.sessionTokens(context, userId)
+            ?.optString("accessToken")?.takeIf { it.isNotBlank() }
+            ?: prefs.getString("$userId.token", null)
             ?: error("Native access token is missing")
         try {
             return fetchJson(url, token, requestStage)
         } catch (error: MatrixRequestException) {
-            if (error.httpStatus != 401 || NativeCryptoBridge.webViewActive) throw error
+            if (
+                error.httpStatus != 401 ||
+                NativeMatrixMigrationStore.isReady(context, userId) ||
+                NativeCryptoBridge.webViewActive
+            ) throw error
         }
         token = refreshNativeSession(prefs, userId, homeserver)
         return fetchJson(url, token, requestStage)

@@ -9,7 +9,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { remote } from 'webdriverio'
 import type { Browser as WdioBrowser, ChainablePromiseElement } from 'webdriverio'
-import { adbBin, stopEmulator } from './lib/avd.mjs'
+import { adbBin, adbEnvironment, stopEmulator } from './lib/avd.mjs'
 import { androidHome as resolveAndroidHome } from './lib/sdk.mjs'
 import {
   adb,
@@ -58,7 +58,11 @@ function log(step: string) {
 }
 
 function firstDeviceSerial(androidHome: string): string {
-  const result = spawnSync(adbBin(androidHome), ['devices'], { encoding: 'utf-8' })
+  const result = spawnSync(adbBin(androidHome), ['devices'], {
+    encoding: 'utf-8',
+    env: adbEnvironment(androidHome),
+    timeout: 10_000,
+  })
   if (result.error) {
     throw new Error(
       `Could not run adb while looking for a booted Android device: ${result.error.message}`,

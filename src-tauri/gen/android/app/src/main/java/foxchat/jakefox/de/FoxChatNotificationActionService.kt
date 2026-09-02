@@ -34,8 +34,18 @@ class FoxChatNotificationActionService : IntentService("FoxChatNotificationActio
                 roomId,
                 "reply:${System.currentTimeMillis()}",
             )
-            queueReply(roomId, text)
-            sendBroadcast(Intent(NATIVE_REPLY_BROADCAST).setPackage(packageName))
+            val sentNatively = runCatching {
+                NativeMatrixClientManager.sendRawForRoom(
+                    applicationContext,
+                    roomId,
+                    "m.room.message",
+                    JSONObject().put("msgtype", "m.text").put("body", text).toString(),
+                )
+            }.isSuccess
+            if (!sentNatively) {
+                queueReply(roomId, text)
+                sendBroadcast(Intent(NATIVE_REPLY_BROADCAST).setPackage(packageName))
+            }
         } else if (intent.action == MARK_READ_ACTION) {
             NativeNotificationCrypto.recordNotificationDiagnostic(
                 applicationContext,
@@ -43,6 +53,7 @@ class FoxChatNotificationActionService : IntentService("FoxChatNotificationActio
                 roomId,
                 "mark-read:${System.currentTimeMillis()}",
             )
+            runCatching { NativeMatrixClientManager.markReadForRoom(applicationContext, roomId) }
         } else if (intent.action != DISMISS_ACTION) return
         RoomNotificationStore.clear(applicationContext, roomId)
     }

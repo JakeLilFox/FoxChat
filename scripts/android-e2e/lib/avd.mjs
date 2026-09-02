@@ -57,13 +57,36 @@ function ensureAdbVendorKey(home) {
 
 function sdkEnv(home) {
   const adbVendorKey = ensureAdbVendorKey(home)
+  const androidUserHome = join(home, 'user-home')
+  mkdirSync(androidUserHome, { recursive: true })
   return {
     ...process.env,
     ANDROID_HOME: home,
     ANDROID_SDK_ROOT: home,
+    ANDROID_SDK_HOME: home,
+    ANDROID_USER_HOME: androidUserHome,
+    ANDROID_EMULATOR_HOME: androidUserHome,
+    ANDROID_PREFS_ROOT: androidUserHome,
     ANDROID_AVD_HOME: ensureAvdHome(home),
     ...(adbVendorKey ? { ADB_VENDOR_KEYS: adbVendorKey } : {}),
   }
+}
+
+function emulatorEnvironment(home) {
+  const env = sdkEnv(home)
+  // Current Windows emulator builds still resolve the feature-flag lock through
+  // USERPROFILE even when the documented Android home overrides are present.
+  // Scope this override to the emulator child process only.
+  if (platform() === 'win32') env.USERPROFILE = env.ANDROID_USER_HOME
+  return env
+}
+
+// Keep every adb process in the E2E harness on the same authenticated server.
+// Remote/hosted Android devices use the private vendor key supplied in test.env;
+// only the emulator setup path used to receive it, which left the test runner
+// waiting on an unauthorized adb connection.
+export function adbEnvironment(home) {
+  return sdkEnv(home)
 }
 
 export function avdExists(home, name = AVD_NAME) {
@@ -148,10 +171,14 @@ export function startEmulator(
   let stdio = 'inherit'
   if (detached) {
     if (!logFile) throw new Error('startEmulator({ detached: true }) requires a logFile path')
-    const fd = openSync(logFile, 'a')
+    const fd = openSync(logFile, 'w')
     stdio = ['ignore', fd, fd]
   }
-  const child = spawn(emulatorBin(home), args, { env: sdkEnv(home), stdio, detached })
+  const child = spawn(emulatorBin(home), args, {
+    env: emulatorEnvironment(home),
+    stdio,
+    detached,
+  })
   child.on('error', (error) => {
     throw new Error(`Failed to start the Android emulator: ${error.message}`)
   })

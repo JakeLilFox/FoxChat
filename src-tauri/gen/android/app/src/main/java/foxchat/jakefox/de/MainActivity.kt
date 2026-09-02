@@ -36,6 +36,7 @@ class MainActivity : TauriActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     NativeCryptoBridge.webViewActive = true
+    NativeMatrixClientManager.bootstrap(applicationContext)
     getSharedPreferences("foxchat_boot_diagnostics", Context.MODE_PRIVATE).edit()
       .putString("stage", "MainActivity.onCreate entered")
       .putLong("at", System.currentTimeMillis()).commit()
@@ -45,9 +46,130 @@ class MainActivity : TauriActivity() {
         backupVersion, backupRecoveryKey, pushClearToken, pushGatewayUrl,
       )
     }
-    NativeCryptoBridge.status = { NativeNotificationCrypto.status(applicationContext).toString() }
+    NativeCryptoBridge.status = {
+      NativeNotificationCrypto.status(applicationContext)
+        .put("matrixClient", NativeMatrixClientManager.status(applicationContext))
+        .toString()
+    }
     NativeCryptoBridge.sessionTokens = { userId ->
-      NativeNotificationCrypto.nativeSessionTokens(applicationContext, userId).toString()
+      (NativeMatrixClientManager.sessionTokens(applicationContext, userId)
+        ?: NativeNotificationCrypto.nativeSessionTokens(applicationContext, userId)).toString()
+    }
+    NativeCryptoBridge.matrix = { action, rawPayload ->
+      val payload = JSONObject(rawPayload)
+      when (action) {
+        "status" -> NativeMatrixClientManager.status(applicationContext).toString()
+        "login" -> NativeMatrixClientManager.loginNewAccount(
+          applicationContext,
+          payload.getString("homeserver"),
+          payload.getString("username"),
+          payload.getString("password"),
+        ).toString()
+        "adoptExistingDevice" -> NativeMatrixClientManager.adoptExistingDevice(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getString("deviceId"),
+          payload.getString("homeserver"),
+          payload.getString("accessToken"),
+          payload.optString("refreshToken").takeIf { it.isNotBlank() },
+          payload.optString("secretsBundle").takeIf { it.isNotBlank() },
+          payload.optString("backupInfo").takeIf { it.isNotBlank() },
+          payload.optString("validationRoomId").takeIf { it.isNotBlank() },
+          payload.optString("validationEventId").takeIf { it.isNotBlank() },
+        ).toString()
+        "adoptFreshSession" -> NativeMatrixClientManager.adoptFreshSession(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getString("deviceId"),
+          payload.getString("homeserver"),
+          payload.getString("accessToken"),
+          payload.optString("refreshToken").takeIf { it.isNotBlank() },
+        ).toString()
+        "decryptEvent" -> {
+          val event = NativeMatrixClientManager.decryptEvent(
+            applicationContext,
+            payload.getString("roomId"),
+            payload.getString("eventId"),
+          )
+          JSONObject()
+            .put("ok", true)
+            .put("userId", event.userId)
+            .put("roomId", event.roomId)
+            .put("eventId", event.eventId)
+            .put("senderId", event.senderId)
+            .put("senderName", event.senderName)
+            .put("roomName", event.roomName)
+            .put("body", event.body())
+            .put("rawEvent", event.rawEvent)
+            .toString()
+        }
+        "sendRaw" -> {
+          NativeMatrixClientManager.sendRaw(
+            applicationContext,
+            payload.getString("userId"),
+            payload.getString("roomId"),
+            payload.getString("eventType"),
+            payload.getJSONObject("content").toString(),
+          )
+          JSONObject().put("ok", true).toString()
+        }
+        "sendStateRaw" -> JSONObject()
+          .put("ok", true)
+          .put(
+            "eventId",
+            NativeMatrixClientManager.sendStateRaw(
+              applicationContext,
+              payload.getString("userId"),
+              payload.getString("roomId"),
+              payload.getString("eventType"),
+              payload.optString("stateKey"),
+              payload.getJSONObject("content").toString(),
+            ),
+          )
+          .toString()
+        "redact" -> {
+          NativeMatrixClientManager.redact(
+            applicationContext,
+            payload.getString("userId"),
+            payload.getString("roomId"),
+            payload.getString("eventId"),
+            payload.optString("reason").takeIf { it.isNotBlank() },
+          )
+          JSONObject().put("ok", true).toString()
+        }
+        "setTyping" -> {
+          NativeMatrixClientManager.setTyping(
+            applicationContext,
+            payload.getString("userId"),
+            payload.getString("roomId"),
+            payload.optBoolean("typing"),
+          )
+          JSONObject().put("ok", true).toString()
+        }
+        "markRead" -> {
+          NativeMatrixClientManager.markReadForRoom(
+            applicationContext,
+            payload.getString("roomId"),
+          )
+          JSONObject().put("ok", true).toString()
+        }
+        "logout" -> {
+          NativeMatrixClientManager.logout(
+            applicationContext,
+            payload.getString("userId"),
+          )
+          JSONObject().put("ok", true).toString()
+        }
+        "recover" -> {
+          NativeMatrixClientManager.recover(
+            applicationContext,
+            payload.getString("userId"),
+            payload.getString("recoveryKey"),
+          )
+          JSONObject().put("ok", true).put("background", true).toString()
+        }
+        else -> error("Unknown native Matrix action: $action")
+      }
     }
     NotificationDecryptionBridge.onCompleted = { roomId, eventId ->
       NativeNotificationRetryManager.complete(applicationContext, roomId, eventId)

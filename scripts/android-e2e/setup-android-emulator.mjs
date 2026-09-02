@@ -70,11 +70,15 @@ async function main() {
     )
 
   console.log(`Android SDK: ${home}`)
-  console.log(`Installing platform-tools, build-tools, emulator, and ${SYSTEM_IMAGE}...`)
-  await installSdkPackages(home, ['platform-tools', 'build-tools;36.0.0', 'emulator', SYSTEM_IMAGE])
+  if ((process.env.ANDROID_E2E_SKIP_SDK_INSTALL ?? '').toLowerCase() === 'true') {
+    console.log('Reusing the already provisioned Android SDK.')
+  } else {
+    console.log(`Installing platform-tools, build-tools, emulator, and ${SYSTEM_IMAGE}...`)
+    await installSdkPackages(home, ['platform-tools', 'build-tools;36.0.0', 'emulator', SYSTEM_IMAGE])
+  }
 
-  if (!avdExists(home)) await materializeSnapshot(home, { path: snapshotPath, url: snapshotUrl })
-  else console.log(`AVD "${AVD_NAME}" already present, skipping.`)
+  if (existsSync(avdDir(home))) console.log(`AVD "${AVD_NAME}" already present, skipping.`)
+  else if (!avdExists(home)) await materializeSnapshot(home, { path: snapshotPath, url: snapshotUrl })
   repairAvdPaths(home)
 
   const headless =

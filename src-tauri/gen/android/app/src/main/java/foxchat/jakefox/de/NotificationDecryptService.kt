@@ -88,7 +88,9 @@ class NotificationDecryptService : Service() {
 
         handler.postDelayed(timeout, DECRYPT_TIMEOUT_MS)
 
-        if (!NativeNotificationCrypto.isEnabled(applicationContext)) {
+        val fullNativeReady = NativeMatrixMigrationStore.accounts(applicationContext)
+            .any { it.state == NativeMatrixMigrationStore.State.READY }
+        if (!fullNativeReady && !NativeNotificationCrypto.isEnabled(applicationContext)) {
             NativeNotificationCrypto.recordNotificationDiagnostic(
                 applicationContext, "native-disabled", requestedRoomId, requestedEventId,
             )
@@ -107,7 +109,18 @@ class NotificationDecryptService : Service() {
         retryIndex: Int? = null,
     ) {
         Thread {
-            val decrypted = try {
+            val fullClientResult = runCatching {
+                val event = NativeMatrixClientManager.decryptEvent(
+                    applicationContext,
+                    requestedRoomId,
+                    requestedEventId,
+                )
+                val timestamp = runCatching {
+                    org.json.JSONObject(event.rawEvent).optLong("origin_server_ts", System.currentTimeMillis())
+                }.getOrDefault(System.currentTimeMillis())
+                NativeDecryptedNotification(event.senderId, event.senderName, event.body(), timestamp)
+            }
+            val decrypted = fullClientResult.getOrNull() ?: try {
                 NativeNotificationCrypto.decrypt(
                     applicationContext,
                     requestedRoomId,
@@ -115,7 +128,8 @@ class NotificationDecryptService : Service() {
                     fallback?.senderId,
                     fallback?.senderName,
                 )
-            } catch (error: Throwable) {
+            } catch (legacyError: Throwable) {
+                val error = fullClientResult.exceptionOrNull() ?: legacyError
                 NativeNotificationCrypto.recordNotificationDiagnostic(
                     applicationContext,
                     if (retryIndex == null) "native-decrypt-failed" else "native-decrypt-retry-failed",

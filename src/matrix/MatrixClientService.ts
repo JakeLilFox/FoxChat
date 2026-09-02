@@ -73,6 +73,16 @@ import {
 } from '../lib/emojiData'
 import { downloadAndDecryptMedia } from '../lib/mediaDecrypt'
 import { gifItemsBySlug, pickGifFile, triggerGifShare, type KlipyGif } from '../lib/gifs'
+import {
+  adoptFreshAndroidMatrixSession,
+  decryptEventWithNativeMatrix,
+  isAndroidNativeMatrix,
+  installNativeMatrixTransport,
+  nativeLogout,
+  nativeMatrixLogin,
+  nativeMatrixReady,
+  nativeRecover,
+} from '../platform/nativeMatrix'
 
 declare global {
   interface Window {
@@ -601,6 +611,10 @@ export class MatrixClientService {
   }
 
   private async authenticate(baseUrl: string, username: string, password: string) {
+    if (isAndroidNativeMatrix()) {
+      const session = await nativeMatrixLogin(baseUrl, username, password)
+      return session satisfies MatrixSession
+    }
     baseUrl = await discoverHomeserverBaseUrl(baseUrl)
     const authClient = createClient({ baseUrl })
     const login = (requestRefreshToken: boolean) =>
@@ -696,7 +710,9 @@ export class MatrixClientService {
       }
     } catch (error) {
       await this.stop().catch(() => undefined)
-      await this.revokeSession(session).catch(() => undefined)
+      if (await nativeMatrixReady(session.userId))
+        await nativeLogout(session.userId).catch(() => undefined)
+      else await this.revokeSession(session).catch(() => undefined)
       throw error
     }
     return session
@@ -763,6 +779,7 @@ export class MatrixClientService {
           userId,
           deviceId,
         }
+        if (isAndroidNativeMatrix()) await adoptFreshAndroidMatrixSession(session)
       } else {
         session = await this.authenticate(baseUrl, username, details.password)
       }
@@ -788,7 +805,9 @@ export class MatrixClientService {
         return { status: 'complete', session, profileWarning }
       } catch (error) {
         await this.stop().catch(() => undefined)
-        await this.revokeSession(session).catch(() => undefined)
+        if (await nativeMatrixReady(session.userId))
+          await nativeLogout(session.userId).catch(() => undefined)
+        else await this.revokeSession(session).catch(() => undefined)
         throw error
       }
     }
@@ -801,7 +820,7 @@ export class MatrixClientService {
     const replacedSessions = this.savedAccounts().filter((saved) =>
       this.sameMatrixAccount(saved, session),
     )
-    const candidate = new MatrixClientService(true, true)
+    const candidate = new MatrixClientService(true, !(await nativeMatrixReady(session.userId)))
     try {
       await candidate.start(session)
       const syncState = String(candidate.matrixClient?.getSyncState()).toUpperCase()
@@ -817,7 +836,9 @@ export class MatrixClientService {
       }
     } catch (error) {
       await candidate.stop().catch(() => undefined)
-      await this.revokeSession(session).catch(() => undefined)
+      if (await nativeMatrixReady(session.userId))
+        await nativeLogout(session.userId).catch(() => undefined)
+      else await this.revokeSession(session).catch(() => undefined)
       throw error
     }
     await Promise.allSettled(
@@ -992,6 +1013,7 @@ export class MatrixClientService {
   private async startClient(session?: MatrixSession) {
     if (!session) throw new Error('No Matrix session is available')
     await this.applyNativeSessionTokens(session)
+    const nativeObserverMode = !this.ephemeral && (await nativeMatrixReady(session.userId))
 
     const storeIdentity = `${session.userId}-${session.deviceId}`
     const store = new IndexedDBStore({
@@ -1006,7 +1028,7 @@ export class MatrixClientService {
     const client = createClient({
       baseUrl: session.baseUrl,
       accessToken: session.accessToken,
-      refreshToken: session.refreshToken,
+      refreshToken: nativeObserverMode ? undefined : session.refreshToken,
       tokenRefreshFunction: async (refreshToken) => {
         const response = await fetchTokenRefresh(
           `${session.baseUrl}/_matrix/client/v3/refresh`,
@@ -1041,7 +1063,7 @@ export class MatrixClientService {
       userId: session.userId,
       deviceId: session.deviceId,
       store,
-      cryptoStore,
+      cryptoStore: nativeObserverMode ? undefined : cryptoStore,
       timelineSupport: true,
       verificationMethods: ['m.sas.v1'],
       cryptoCallbacks: {
@@ -1059,38 +1081,64 @@ export class MatrixClientService {
 
     await store.startup()
 
-    await client.initRustCrypto({ cryptoDatabasePrefix: `foxchat-crypto-${storeIdentity}` })
-    const crypto = client.getCrypto()!
-    client.on(CryptoEvent.VerificationRequestReceived, (request) =>
-      this.publishVerificationRequest(request),
-    )
-    client.on(CryptoEvent.KeyBackupDecryptionKeyCached, () => {
-      void crypto.checkKeyBackupAndEnable()
-      this.scheduleAllRoomDecryptionRetry(true)
-    })
-    client.on(CryptoEvent.KeysChanged, () => {
-      this.invalidateMessageEncryptionTrust()
-      this.observers.forEach((x) => x.onSync?.('CRYPTO_KEYS_CHANGED'))
-      scheduleNativeCryptoSync(client, 0)
-      this.scheduleAllRoomDecryptionRetry()
-    })
-    client.on(CryptoEvent.DevicesUpdated, () => {
-      this.invalidateMessageEncryptionTrust()
-      this.observers.forEach((x) => x.onSync?.('CRYPTO_DEVICES_UPDATED'))
-    })
-    client.on(CryptoEvent.UserTrustStatusChanged, (userId) => {
-      this.invalidateMessageEncryptionTrust()
-      this.observers.forEach((x) => x.onSync?.(`CRYPTO_USER_TRUST_STATUS_CHANGED:${userId}`))
-    })
+    if (nativeObserverMode) {
+      installNativeMatrixTransport(client, session.userId)
+    } else {
+      await client.initRustCrypto({ cryptoDatabasePrefix: `foxchat-crypto-${storeIdentity}` })
+      const crypto = client.getCrypto()!
+      client.on(CryptoEvent.VerificationRequestReceived, (request) =>
+        this.publishVerificationRequest(request),
+      )
+      client.on(CryptoEvent.KeyBackupDecryptionKeyCached, () => {
+        void crypto.checkKeyBackupAndEnable()
+        this.scheduleAllRoomDecryptionRetry(true)
+      })
+      client.on(CryptoEvent.KeysChanged, () => {
+        this.invalidateMessageEncryptionTrust()
+        this.observers.forEach((x) => x.onSync?.('CRYPTO_KEYS_CHANGED'))
+        scheduleNativeCryptoSync(client, 0)
+        this.scheduleAllRoomDecryptionRetry()
+      })
+      client.on(CryptoEvent.DevicesUpdated, () => {
+        this.invalidateMessageEncryptionTrust()
+        this.observers.forEach((x) => x.onSync?.('CRYPTO_DEVICES_UPDATED'))
+      })
+      client.on(CryptoEvent.UserTrustStatusChanged, (userId) => {
+        this.invalidateMessageEncryptionTrust()
+        this.observers.forEach((x) => x.onSync?.(`CRYPTO_USER_TRUST_STATUS_CHANGED:${userId}`))
+      })
+    }
     client.on(ClientEvent.Sync, (state) => {
       this.observers.forEach((x) => x.onSync?.(String(state)))
       this.retryBackedOffSyncAfterResume(client)
-      if (String(state) === 'PREPARED') void this.enableAutomaticKeySync()
+      if (!nativeObserverMode && String(state) === 'PREPARED') void this.enableAutomaticKeySync()
     })
     client.on(ClientEvent.Room, (room) => {
       this.trackRoomOwner(client, room)
       this.observers.forEach((observer) => observer.onRoom?.(room))
     })
+    const nativeDecryptionsInFlight = new WeakSet<MatrixEvent>()
+    const requestNativeDecryption = (event: MatrixEvent, room?: Room) => {
+      if (!nativeObserverMode || nativeDecryptionsInFlight.has(event)) return
+      if (event.getWireType() !== EventType.RoomMessageEncrypted) return
+      nativeDecryptionsInFlight.add(event)
+      void (async () => {
+        let lastError: unknown
+        for (const wait of [0, 250, 750, 1_500, 3_000, 7_000, 15_000]) {
+          if (wait) await new Promise((resolve) => window.setTimeout(resolve, wait))
+          try {
+            if (await decryptEventWithNativeMatrix(event)) return
+          } catch (error) {
+            lastError = error
+          }
+        }
+        console.warn('[native-matrix] Could not decrypt timeline event after retries', {
+          roomId: room?.roomId,
+          eventId: event.getId(),
+          error: lastError,
+        })
+      })().finally(() => nativeDecryptionsInFlight.delete(event))
+    }
     const watchDecryption = (event: MatrixEvent, room?: Room) => {
       this.trackEventOwner(client, event, room)
       if (this.watchedEvents.has(event)) return
@@ -1098,15 +1146,17 @@ export class MatrixClientService {
       event.on(MatrixEventEvent.Decrypted, (decrypted, error) => {
         this.trackEventOwner(client, decrypted, room)
         this.observers.forEach((x) => x.onEvent?.(decrypted, room))
-        if (!error) scheduleNativeCryptoSyncForEvent(client, decrypted)
-        if (error && room && !this.decryptionRetriesInFlight.has(decrypted))
+        if (!error && !nativeObserverMode) scheduleNativeCryptoSyncForEvent(client, decrypted)
+        if (!nativeObserverMode && error && room && !this.decryptionRetriesInFlight.has(decrypted))
           this.scheduleDecryptionRetry(decrypted, room)
       })
+      requestNativeDecryption(event, room)
     }
     client.on(RoomEvent.Timeline, (event, room) => {
       this.trackEventOwner(client, event, room)
       watchDecryption(event, room)
-      if (room && event.isDecryptionFailure()) this.scheduleDecryptionRetry(event, room)
+      if (!nativeObserverMode && room && event.isDecryptionFailure())
+        this.scheduleDecryptionRetry(event, room)
       this.observers.forEach((x) => x.onEvent?.(event, room))
     })
     client.on(RoomEvent.LocalEchoUpdated, (event, room, oldEventId, oldStatus) => {
@@ -1129,7 +1179,7 @@ export class MatrixClientService {
     client.on(RoomEvent.MyMembership, (room) => {
       this.trackRoomOwner(client, room)
       this.observers.forEach((x) => x.onRoom?.(room))
-      scheduleNativeCryptoSync(client)
+      if (!nativeObserverMode) scheduleNativeCryptoSync(client)
     })
     client.on(RoomEvent.Tags, (_event, room) => {
       this.trackRoomOwner(client, room)
@@ -1154,7 +1204,7 @@ export class MatrixClientService {
           event.getType(),
         )
       ) {
-        scheduleNativeCryptoSync(client, 0)
+        if (!nativeObserverMode) scheduleNativeCryptoSync(client, 0)
       }
       if (event.getType() !== EventType.RoomPinnedEvents) return
       const room = client.getRoom(event.getRoomId())
@@ -1190,13 +1240,18 @@ export class MatrixClientService {
     const initialSync = this.waitForInitialSync(client)
     await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true })
     await initialSync
-    for (const room of client.getRooms()) this.trackRoomOwner(client, room)
+    for (const room of client.getRooms()) {
+      this.trackRoomOwner(client, room)
+      if (nativeObserverMode) {
+        for (const event of room.getLiveTimeline().getEvents()) watchDecryption(event, room)
+      }
+    }
     if (!this.ephemeral) {
       // Android upgrades keep the existing WebView Matrix session and crypto store. Always
       // repopulate the process-dead notification companion after the first sync, even when
       // FCM registration is delayed or the pusher was already current. This is intentionally
       // a no-op in normal browsers and desktop builds.
-      scheduleNativeCryptoSync(client, 0, true)
+      if (!nativeObserverMode) scheduleNativeCryptoSync(client, 0, true)
       void registerMatrixPush(client).catch(() => undefined)
     }
     if (!this.secondary && this.combinedAccountsEnabled()) await this.startSecondaryAccounts()
@@ -2065,6 +2120,9 @@ export class MatrixClientService {
 
   async unlockSecretStorage(recoveryKey: string) {
     if (!this.client) throw new Error('Encryption is not initialized')
+    const userId = this.client.getUserId()
+    if (userId && (await nativeMatrixReady(userId)))
+      return nativeRecover(userId, recoveryKey.trim())
     const key = decodeRecoveryKey(recoveryKey.trim())
     const defaultKey = await this.client.secretStorage.getKey()
     if (!defaultKey) throw new Error('Secret storage is not configured for this account')
@@ -2088,8 +2146,15 @@ export class MatrixClientService {
       passphraseInfo.iterations,
       passphraseInfo.bits,
     )
+    if (!key) throw new Error('Could not derive the recovery key')
     if (!(await this.client.secretStorage.checkKey(key, defaultKey[1])))
       throw new Error('The recovery passphrase is not valid')
+    const userId = this.client.getUserId()
+    if (userId && (await nativeMatrixReady(userId))) {
+      const encodedKey = encodeRecoveryKey(key)
+      if (!encodedKey) throw new Error('Could not encode the recovery key')
+      return nativeRecover(userId, encodedKey)
+    }
     return this.finishSecretStorageUnlock(defaultKey[0], key)
   }
 
@@ -4407,6 +4472,7 @@ export class MatrixClientService {
 
   private notificationDecryptListenerRegistered = false
   private pushTokenListenerRegistered = false
+  private nativeMatrixSessionListenerRegistered = false
 
   async listenForNotificationDecryptRequests() {
     const invoke = window.__TAURI_INTERNALS__?.invoke
@@ -4465,6 +4531,41 @@ export class MatrixClientService {
       } catch (error) {
         this.pushTokenListenerRegistered = false
         console.warn('[push] Could not register Firebase token listener', error)
+      }
+    }
+    if (!this.nativeMatrixSessionListenerRegistered) {
+      this.nativeMatrixSessionListenerRegistered = true
+      try {
+        await addPluginListener<{
+          userId: string
+          accessToken: string
+          refreshToken?: string
+        }>('remote-push', 'native-matrix-session-changed', (tokens) => {
+          const accounts = this.savedAccounts().map((session) =>
+            session.userId === tokens.userId
+              ? {
+                  ...session,
+                  accessToken: tokens.accessToken,
+                  refreshToken: tokens.refreshToken ?? session.refreshToken,
+                }
+              : session,
+          )
+          localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts))
+          this.savedAccountsSource = undefined
+          for (const account of this.availableAccounts()) {
+            if (account.userId === tokens.userId) account.client.setAccessToken(tokens.accessToken)
+          }
+          const current = this.restoreSession()
+          if (current?.userId === tokens.userId) {
+            current.accessToken = tokens.accessToken
+            current.refreshToken = tokens.refreshToken ?? current.refreshToken
+            localStorage.setItem(SESSION_KEY, JSON.stringify(current))
+            sessionStorage.setItem(SESSION_KEY, JSON.stringify(current))
+          }
+        })
+      } catch (error) {
+        this.nativeMatrixSessionListenerRegistered = false
+        console.warn('[native-matrix] Could not register native session listener', error)
       }
     }
   }

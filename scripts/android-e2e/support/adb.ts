@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process'
-import { adbBin } from '../lib/avd.mjs'
+import { adbBin, adbEnvironment } from '../lib/avd.mjs'
 import { androidHome } from '../lib/sdk.mjs'
 
 function env() {
   const home = androidHome()
-  return { ...process.env, ANDROID_HOME: home, ANDROID_SDK_ROOT: home }
+  return adbEnvironment(home)
 }
 
 export function adb(args: string[]): string {

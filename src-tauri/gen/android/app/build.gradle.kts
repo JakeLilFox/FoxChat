@@ -1,4 +1,11 @@
 import java.util.Properties
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.util.jar.JarInputStream
+import java.util.jar.JarOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 plugins {
     id("com.android.application")
@@ -19,6 +26,55 @@ val tauriProperties = Properties().apply {
     val propFile = file("tauri.properties")
     if (propFile.exists()) {
         propFile.inputStream().use { load(it) }
+    }
+}
+
+// sdk-android embeds the current `uniffi.matrix_sdk_crypto` model classes. The legacy
+// crypto-only compatibility AAR also carries an older copy of that package in addition to
+// its independent `org.matrix.rustcomponents.sdk.crypto` OlmMachine API. Keep the latter
+// (and its separate native library) for one-time upgrade migration, but remove only the
+// duplicate model package so Android can safely package both APIs.
+val legacyCryptoAar by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+val sanitizedLegacyCryptoAar = layout.buildDirectory.file(
+    "generated/legacy-crypto/crypto-android-26.05.12-sanitized.aar",
+)
+val sanitizeLegacyCryptoAar by tasks.registering {
+    inputs.files(legacyCryptoAar)
+    outputs.file(sanitizedLegacyCryptoAar)
+    doLast {
+        val source = legacyCryptoAar.singleFile
+        val target = sanitizedLegacyCryptoAar.get().asFile
+        target.parentFile.mkdirs()
+        ZipInputStream(source.inputStream().buffered()).use { input ->
+            ZipOutputStream(target.outputStream().buffered()).use { output ->
+                while (true) {
+                    val entry = input.nextEntry ?: break
+                    output.putNextEntry(ZipEntry(entry.name))
+                    if (entry.name == "classes.jar") {
+                        val classes = ByteArrayOutputStream()
+                        JarInputStream(ByteArrayInputStream(input.readBytes())).use { jarInput ->
+                            JarOutputStream(classes).use { jarOutput ->
+                                while (true) {
+                                    val classEntry = jarInput.nextJarEntry ?: break
+                                    if (!classEntry.name.startsWith("uniffi/")) {
+                                        jarOutput.putNextEntry(ZipEntry(classEntry.name))
+                                        jarInput.copyTo(jarOutput)
+                                        jarOutput.closeEntry()
+                                    }
+                                }
+                            }
+                        }
+                        output.write(classes.toByteArray())
+                    } else {
+                        input.copyTo(output)
+                    }
+                    output.closeEntry()
+                }
+            }
+        }
     }
 }
 
@@ -96,6 +152,7 @@ rust {
 }
 
 dependencies {
+    legacyCryptoAar("org.matrix.rustcomponents:crypto-android:26.05.12@aar")
     implementation("com.google.firebase:firebase-messaging:24.1.2")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
@@ -103,10 +160,10 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     implementation("androidx.security:security-crypto:1.1.0")
-    // Matrix's supported native crypto implementation. Keep this aligned with the
-    // Rust crypto generation used by matrix-js-sdk; room sessions are exported by
-    // the WebView and imported into this native store for process-dead push decrypts.
-    implementation("org.matrix.rustcomponents:crypto-android:26.05.12")
+    // Android owns Matrix through the production Rust SDK. The sanitized compatibility
+    // AAR is only the pre-cutover fallback for existing installations.
+    implementation("org.matrix.rustcomponents:sdk-android:26.08.05")
+    implementation(files(sanitizedLegacyCryptoAar).builtBy(sanitizeLegacyCryptoAar))
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

@@ -44,12 +44,75 @@ test.describe('foldable phone layout', () => {
         isMobile: true,
         hasTouch: true,
       })
-      // Signing in and creating a room needs the real Tauri bridge to be absent for
-      // everything except the android detection this test cares about, so stub only
-      // the marker isAndroidApp() looks for.
+      // This is a layout test, but Android authentication is native-only. Emulate the
+      // native login boundary while reporting no migrated accounts so the remainder
+      // of the journey can keep using the browser Matrix client.
       await context.addInitScript(() => {
-        ;(window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
-          invoke: async () => undefined,
+        ;(
+          window as unknown as {
+            __TAURI_INTERNALS__: {
+              invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>
+            }
+          }
+        ).__TAURI_INTERNALS__ = {
+          invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+            if (command !== 'plugin:remote-push|native_matrix') return undefined as T
+            const action = String(args?.action ?? '')
+            if (action === 'status') {
+              return {
+                available: true,
+                owner: 'matrix-rust-sdk',
+                accounts: [],
+              } as T
+            }
+            if (action !== 'login') return undefined as T
+            const payload = JSON.parse(String(args?.payload ?? '{}')) as {
+              homeserver: string
+              username: string
+              password: string
+            }
+            const enteredUrl = /^https?:\/\//i.test(payload.homeserver)
+              ? payload.homeserver
+              : `https://${payload.homeserver}`
+            const wellKnownResponse = await fetch(
+              new URL('/.well-known/matrix/client', enteredUrl),
+            )
+            const wellKnown = wellKnownResponse.ok
+              ? ((await wellKnownResponse.json()) as {
+                  'm.homeserver'?: { base_url?: string }
+                })
+              : undefined
+            const baseUrl = (wellKnown?.['m.homeserver']?.base_url ?? enteredUrl).replace(
+              /\/$/,
+              '',
+            )
+            const response = await fetch(`${baseUrl}/_matrix/client/v3/login`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                type: 'm.login.password',
+                identifier: { type: 'm.id.user', user: payload.username },
+                password: payload.password,
+                refresh_token: true,
+                initial_device_display_name: 'FoxChat fold layout test',
+              }),
+            })
+            if (!response.ok) throw new Error(`Matrix login returned ${response.status}`)
+            const session = (await response.json()) as {
+              access_token: string
+              refresh_token?: string
+              user_id: string
+              device_id: string
+              home_server?: string
+            }
+            return {
+              baseUrl,
+              accessToken: session.access_token,
+              refreshToken: session.refresh_token,
+              userId: session.user_id,
+              deviceId: session.device_id,
+            } as T
+          },
         }
       })
       page = await context.newPage()

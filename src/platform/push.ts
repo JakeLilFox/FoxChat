@@ -1,5 +1,6 @@
 import { EventType, RoomType, type MatrixClient, type MatrixEvent } from 'matrix-js-sdk'
 import { timelineAppearanceSettings } from '../lib/constants'
+import { adoptExistingAndroidMatrixDevice, nativeMatrixStatus } from './nativeMatrix'
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 
@@ -25,6 +26,8 @@ const syncedRoomSessions = new WeakMap<MatrixClient, Set<string>>()
 const nativeCryptoValidated = new WeakSet<MatrixClient>()
 const CRYPTO_SYNC_INTERVAL_MS = 5 * 60_000
 const NATIVE_CRYPTO_SETUP_TIMEOUT_MS = 150_000
+let nativeAdoptionInFlight = false
+let nativeAdoptionReloadScheduled = false
 
 type NativeCryptoStatus = {
   accounts: Array<{
@@ -196,9 +199,72 @@ export async function syncNativeCryptoNow(client: MatrixClient) {
     }
     await delay(500)
   }
+  if (await adoptAndroidMatrixDeviceOnce(client)) return
   lastCryptoSync.set(client, Date.now())
   syncedRoomSessions.set(client, exportedSessions)
   cryptoSyncRetries.set(client, 0)
+}
+
+async function adoptAndroidMatrixDeviceOnce(client: MatrixClient) {
+  if (nativeAdoptionReloadScheduled) return true
+  const userId = client.getUserId()
+  if (!userId) return false
+  const status = await nativeMatrixStatus()
+  const account = status?.accounts.find((candidate) => candidate.userId === userId)
+  if (account?.state === 'ready') return false
+  if (account?.state === 'error') {
+    throw new Error(`${userId}: Native Matrix adoption failed: ${account.error || 'unknown error'}`)
+  }
+  // Only one account may cross the device-ownership boundary at a time. A reload
+  // will migrate another saved account after this one is known to be native-ready.
+  if (nativeAdoptionInFlight) return false
+  nativeAdoptionInFlight = true
+  try {
+    const cryptoApi = client.getCrypto()
+    await cryptoApi?.checkKeyBackupAndEnable().catch(() => undefined)
+    const exportSecretsBundle = cryptoApi?.exportSecretsBundle
+    const secretsBundle = exportSecretsBundle
+      ? await exportSecretsBundle.call(cryptoApi)
+      : undefined
+    const backupInfo = await cryptoApi?.getKeyBackupInfo()
+    if (!secretsBundle || !backupInfo) {
+      throw new Error(
+        `${userId}: Android migration needs a trusted key backup before it can safely take over this device`,
+      )
+    }
+    const validation = client
+      .getRooms()
+      .flatMap((room) =>
+        [...room.getLiveTimeline().getEvents()].reverse().map((event) => ({ room, event })),
+      )
+      .find(
+        ({ event }) =>
+          event.getWireType() === EventType.RoomMessageEncrypted &&
+          !event.isDecryptionFailure() &&
+          !!event.getId(),
+      )
+    if (!validation?.event.getId()) {
+      throw new Error(`${userId}: No decrypted encrypted event is available to validate migration`)
+    }
+    // Let an already enabled backup uploader flush its current batch. The complete
+    // local room-key export above remains available to the legacy native fallback.
+    await delay(3_000)
+    client.stopClient()
+    await adoptExistingAndroidMatrixDevice(client, secretsBundle, backupInfo, {
+      roomId: validation.room.roomId,
+      eventId: validation.event.getId()!,
+    })
+    nativeAdoptionReloadScheduled = true
+    window.location.reload()
+    return true
+  } catch (error) {
+    // Adoption marks ERROR transactionally. Keep the old WebView session usable
+    // during this run instead of leaving the UI on a deliberately stopped client.
+    await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true }).catch(() => undefined)
+    throw error
+  } finally {
+    nativeAdoptionInFlight = false
+  }
 }
 
 export async function testNativeCryptoWithLoadedEvent(client: MatrixClient, force = false) {
