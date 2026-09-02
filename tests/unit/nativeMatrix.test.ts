@@ -6,6 +6,7 @@ import {
   adoptFreshAndroidMatrixSession,
   decryptEventWithNativeMatrix,
   installNativeMatrixTransport,
+  nativeMatrixLogin,
   nativeMatrixReady,
 } from '../../src/platform/nativeMatrix'
 
@@ -65,6 +66,17 @@ describe('Android native Matrix bridge', () => {
         deviceId: 'NEWDEVICE',
       }),
     })
+  })
+
+  it('preserves native login failure details returned as a Tauri rejection string', async () => {
+    const invoke = vi
+      .fn()
+      .mockRejectedValue('Native Matrix login failed during password login: forbidden')
+    enableAndroid(invoke)
+
+    await expect(
+      nativeMatrixLogin('https://example.org', '@me:example.org', 'wrong-password'),
+    ).rejects.toThrow('Native Matrix login failed during password login: forbidden')
   })
 
   it('applies Rust-decrypted clear content to the existing timeline event', async () => {

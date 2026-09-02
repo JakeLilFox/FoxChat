@@ -113,6 +113,11 @@ class MainActivity : TauriActivity() {
           )
           JSONObject().put("ok", true).toString()
         }
+        "watchRoom" -> NativeMatrixClientManager.watchRoom(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getString("roomId"),
+        ).toString()
         "sendStateRaw" -> JSONObject()
           .put("ok", true)
           .put(

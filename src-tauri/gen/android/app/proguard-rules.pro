@@ -35,3 +35,4 @@
 -dontwarn java.awt.GraphicsEnvironment
 -dontwarn java.awt.HeadlessException
 -dontwarn java.awt.Window
+-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }

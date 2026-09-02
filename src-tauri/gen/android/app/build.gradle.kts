@@ -6,6 +6,7 @@ import java.util.jar.JarOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import groovy.json.JsonSlurper
 
 plugins {
     id("com.android.application")
@@ -151,6 +152,45 @@ rust {
     rootDirRel = "../../../"
 }
 
+// rustls-platform-verifier ships its small Android trust-manager bridge inside the
+// Cargo crate so its Kotlin and Rust halves always stay on matching versions.
+fun rustlsPlatformVerifierComponent(): Pair<File, String> {
+    val cargo = System.getenv("CARGO")?.takeIf { it.isNotBlank() }
+        ?: if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            File(System.getProperty("user.home"), ".cargo/bin/cargo.exe").absolutePath
+        } else {
+            "cargo"
+        }
+    val metadata = providers.exec {
+        workingDir = file("../../..")
+        commandLine(
+            cargo,
+            "metadata",
+            "--format-version",
+            "1",
+            "--filter-platform",
+            "aarch64-linux-android",
+            "--manifest-path",
+            "Cargo.toml",
+        )
+    }.standardOutput.asText.get()
+    val packages = (JsonSlurper().parseText(metadata) as Map<*, *>)["packages"] as List<*>
+    val component = packages
+        .filterIsInstance<Map<*, *>>()
+        .first { it["name"] == "rustls-platform-verifier-android" }
+    val manifestPath = component["manifest_path"] as String
+    val version = component["version"] as String
+    return File(File(manifestPath).parentFile, "maven") to version
+}
+
+val rustlsPlatformVerifier = rustlsPlatformVerifierComponent()
+repositories {
+    maven {
+        url = uri(rustlsPlatformVerifier.first)
+        metadataSources { artifact() }
+    }
+}
+
 dependencies {
     legacyCryptoAar("org.matrix.rustcomponents:crypto-android:26.05.12@aar")
     implementation("com.google.firebase:firebase-messaging:24.1.2")
@@ -163,6 +203,7 @@ dependencies {
     // Android owns Matrix through the production Rust SDK. The sanitized compatibility
     // AAR is only the pre-cutover fallback for existing installations.
     implementation("org.matrix.rustcomponents:sdk-android:26.08.05")
+    implementation("rustls:rustls-platform-verifier:${rustlsPlatformVerifier.second}@aar")
     implementation(files(sanitizedLegacyCryptoAar).builtBy(sanitizeLegacyCryptoAar))
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")

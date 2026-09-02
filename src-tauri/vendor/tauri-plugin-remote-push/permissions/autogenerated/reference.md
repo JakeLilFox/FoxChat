@@ -11,8 +11,11 @@ Allows FoxChat remote-push registration, notification updates, and native crypto
 - `allow-sync-native-crypto`
 - `allow-native-crypto-status`
 - `allow-native-session-tokens`
+- `allow-native-matrix`
 - `allow-test-native-crypto`
 - `allow-test-android-auto-notification`
+- `allow-register-listener`
+- `allow-remove-listener`
 
 ## Permission Table
 
@@ -104,6 +107,32 @@ Denies the native_crypto_status command without any pre-configured scope.
 <tr>
 <td>
 
+`remote-push:allow-native-matrix`
+
+</td>
+<td>
+
+Enables the native_matrix command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`remote-push:deny-native-matrix`
+
+</td>
+<td>
+
+Denies the native_matrix command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `remote-push:allow-native-session-tokens`
 
 </td>
@@ -123,6 +152,58 @@ Enables the native_session_tokens command without any pre-configured scope.
 <td>
 
 Denies the native_session_tokens command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`remote-push:allow-register-listener`
+
+</td>
+<td>
+
+Enables the register_listener command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`remote-push:deny-register-listener`
+
+</td>
+<td>
+
+Denies the register_listener command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`remote-push:allow-remove-listener`
+
+</td>
+<td>
+
+Enables the remove_listener command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`remote-push:deny-remove-listener`
+
+</td>
+<td>
+
+Denies the remove_listener command without any pre-configured scope.
 
 </td>
 </tr>

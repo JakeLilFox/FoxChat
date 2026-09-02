@@ -18,6 +18,7 @@
     "android:build": "node scripts/tauri.mjs android build --apk --debug --target aarch64 --target armv7 --target i686 --target x86_64",
     "android:build:unsigned": "node scripts/tauri.mjs android build --apk --target aarch64 --target armv7 --target i686 --target x86_64",
     "android:aab": "node scripts/tauri.mjs android build --aab --target aarch64 --target armv7 --target i686 --target x86_64",
+    "android:apk:arm64": "node scripts/tauri.mjs android build --apk --target aarch64",
     "android:e2e:bake-avd": "node scripts/android-e2e/bake-avd-snapshot.mjs",
     "android:e2e:setup-emulator": "node scripts/android-e2e/setup-android-emulator.mjs",
     "format": "prettier --write --ignore-unknown src foxchathomepage/src push-gateway scripts tests",

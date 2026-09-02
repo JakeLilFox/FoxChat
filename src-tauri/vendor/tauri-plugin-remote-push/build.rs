@@ -9,8 +9,13 @@ const COMMANDS: &[&str] = &[
   "sync_native_crypto",
   "native_crypto_status",
   "native_session_tokens",
+  "native_matrix",
   "test_native_crypto",
   "test_android_auto_notification",
+  // Inherited from Tauri's Android Plugin base class and required by
+  // @tauri-apps/api/core.addPluginListener.
+  "register_listener",
+  "remove_listener",
 ];
 
 fn main() {

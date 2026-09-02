@@ -8,6 +8,9 @@ permissions = [
   "allow-sync-native-crypto",
   "allow-native-crypto-status",
   "allow-native-session-tokens",
+  "allow-native-matrix",
   "allow-test-native-crypto",
   "allow-test-android-auto-notification",
+  "allow-register-listener",
+  "allow-remove-listener",
 ]

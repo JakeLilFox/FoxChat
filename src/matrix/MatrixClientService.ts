@@ -41,7 +41,9 @@ import { decodeRecoveryKey, encodeRecoveryKey } from 'matrix-js-sdk/lib/crypto-a
 import type { EncryptedFile, ImageInfo } from 'matrix-js-sdk/lib/@types/media'
 import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts'
 import { GroupCallIntent, GroupCallType, type GroupCall } from 'matrix-js-sdk/lib/webrtc/groupCall'
-import { SetPresence } from 'matrix-js-sdk/lib/sync'
+import { SetPresence, SyncApi } from 'matrix-js-sdk/lib/sync'
+import { DuplicateStrategy } from 'matrix-js-sdk/lib/models/event-timeline-set'
+import { logger } from 'matrix-js-sdk/lib/logger'
 import {
   clearMatrixPushRoom,
   registerMatrixPush,
@@ -82,6 +84,7 @@ import {
   nativeMatrixLogin,
   nativeMatrixReady,
   nativeRecover,
+  nativeWatchRoom,
 } from '../platform/nativeMatrix'
 
 declare global {
@@ -1240,6 +1243,7 @@ export class MatrixClientService {
     const initialSync = this.waitForInitialSync(client)
     await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true })
     await initialSync
+    if (nativeObserverMode) await this.hydrateNativeRooms(client)
     for (const room of client.getRooms()) {
       this.trackRoomOwner(client, room)
       if (nativeObserverMode) {
@@ -4254,7 +4258,23 @@ export class MatrixClientService {
   async joinRoomAs(roomIdOrAlias: string, accountId: string, viaServers?: string[]) {
     const client = this.accountClient(accountId)
     if (!client) throw new Error('Account is not available')
-    return client.joinRoom(roomIdOrAlias.trim(), { viaServers })
+    const joined = await client.joinRoom(roomIdOrAlias.trim(), { viaServers })
+    // Matrix-JS can keep the stripped invite membership in its in-memory Room while
+    // persisting the correct joined `state_after` from /sync. The Rust-owned Android
+    // session has already completed the server join at this point, so publish that
+    // authoritative transition immediately instead of leaving navigation stuck until
+    // the WebView is recreated. Normal browser and desktop clients retain SDK behavior.
+    if (isAndroidNativeMatrix()) {
+      // joinRoom creates a temporary Room when the cached invitation has not yet
+      // received its joined sync. Update and return the cached instance because
+      // getRooms(), roomAccounts(), and the React room list all retain that object.
+      const cached = client.getRoom(joined.roomId) ?? joined
+      if (cached.getMyMembership() !== 'join') cached.updateMyMembership('join')
+      this.trackRoomOwner(client, cached)
+      this.observers.forEach((observer) => observer.onRoom?.(cached))
+      return cached
+    }
+    return joined
   }
 
   async waitForJoinedRoomAs(roomId: string, accountId: string, timeoutMs = 30_000) {
@@ -4473,11 +4493,130 @@ export class MatrixClientService {
   private notificationDecryptListenerRegistered = false
   private pushTokenListenerRegistered = false
   private nativeMatrixSessionListenerRegistered = false
+  private nativeMatrixTimelineListenerRegistered = false
+  private nativeMatrixRoomListListenerRegistered = false
+  private nativeRoomHydrations = new WeakMap<MatrixClient, Promise<void>>()
+
+  private hydrateNativeRooms(client: MatrixClient) {
+    const current = this.nativeRoomHydrations.get(client)
+    if (current) return current
+    const hydration = (async () => {
+      const accessToken = client.getAccessToken()
+      if (!accessToken) throw new Error('The Android observer session has no access token')
+      // Rust owns incremental sync on Android. This un-tokened, bounded snapshot is only used
+      // to hydrate Matrix-JS Room models after process recreation or a membership change; it
+      // does not establish another device or crypto client and it does not take over sync.
+      const filter = {
+        room: {
+          timeline: { limit: 30 },
+          state: { lazy_load_members: true },
+        },
+      }
+      const url = `${client.getHomeserverUrl().replace(/\/$/, '')}/_matrix/client/v3/sync?timeout=0&filter=${encodeURIComponent(JSON.stringify(filter))}&org.matrix.msc4222.use_state_after=true`
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
+      if (!response.ok) throw new Error(`Android room snapshot failed with HTTP ${response.status}`)
+      const data = (await response.json()) as { next_batch?: string }
+      const syncApi = new SyncApi(client, undefined, { logger })
+      await (
+        syncApi as unknown as {
+          processSyncResponse(
+            state: {
+              oldSyncToken?: string
+              nextSyncToken?: string
+              catchingUp?: boolean
+              fromCache?: boolean
+            },
+            response: unknown,
+          ): Promise<void>
+        }
+      ).processSyncResponse(
+        {
+          nextSyncToken: data.next_batch,
+          catchingUp: false,
+          fromCache: false,
+        },
+        data,
+      )
+    })().finally(() => this.nativeRoomHydrations.delete(client))
+    this.nativeRoomHydrations.set(client, hydration)
+    return hydration
+  }
+
+  async watchNativeRoom(roomId: string) {
+    const accountId = this.selectedRoomAccountId(roomId)
+    const account = this.availableAccounts().find((candidate) => candidate.id === accountId)
+    if (!account || !(await nativeMatrixReady(account.userId))) return
+    await nativeWatchRoom(account.userId, roomId)
+  }
 
   async listenForNotificationDecryptRequests() {
     const invoke = window.__TAURI_INTERNALS__?.invoke
     if (!invoke) return
     const { addPluginListener } = await import('@tauri-apps/api/core')
+    if (!this.nativeMatrixTimelineListenerRegistered) {
+      this.nativeMatrixTimelineListenerRegistered = true
+      try {
+        await addPluginListener<{
+          userId: string
+          roomId: string
+          eventId: string
+          rawEvent: string
+        }>('remote-push', 'native-matrix-event', ({ userId, roomId, eventId, rawEvent }) => {
+          void (async () => {
+            const account = this.availableAccounts().find(
+              (candidate) => candidate.userId === userId,
+            )
+            const room = account?.client.getRoom(roomId)
+            if (!account || !room) return
+            const existing = room.findEventById(eventId)
+            // A room snapshot can install the encrypted wire event before Rust emits
+            // the corresponding clear event. Replace that copy, but ignore repeats once
+            // a clear event is already present.
+            if (existing && existing.getWireType() !== EventType.RoomMessageEncrypted) return
+            const raw = JSON.parse(rawEvent) as Record<string, unknown>
+            const mapper = account.client.getEventMapper()
+            const event = mapper({ ...raw, room_id: roomId } as Parameters<typeof mapper>[0])
+            await room.addLiveEvents([event], {
+              duplicateStrategy: DuplicateStrategy.Replace,
+              addToState: true,
+            })
+          })().catch((error) =>
+            console.warn('[native-matrix] Could not apply native timeline event', {
+              roomId,
+              eventId,
+              error,
+            }),
+          )
+        })
+      } catch (error) {
+        this.nativeMatrixTimelineListenerRegistered = false
+        console.warn('[native-matrix] Could not register native timeline listener', error)
+      }
+    }
+    if (!this.nativeMatrixRoomListListenerRegistered) {
+      this.nativeMatrixRoomListListenerRegistered = true
+      try {
+        await addPluginListener<{ userId: string }>(
+          'remote-push',
+          'native-matrix-rooms-changed',
+          ({ userId }) => {
+            const account = this.availableAccounts().find(
+              (candidate) => candidate.userId === userId,
+            )
+            if (!account) return
+            void this.hydrateNativeRooms(account.client).catch((error) =>
+              console.warn('[native-matrix] Could not hydrate changed native rooms', {
+                userId,
+                error,
+              }),
+            )
+          },
+        )
+      } catch (error) {
+        this.nativeMatrixRoomListListenerRegistered = false
+        console.warn('[native-matrix] Could not register native room-list listener', error)
+      }
+    }
     if (!this.notificationDecryptListenerRegistered) {
       this.notificationDecryptListenerRegistered = true
       try {

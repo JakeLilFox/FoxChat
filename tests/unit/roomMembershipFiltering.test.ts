@@ -34,6 +34,7 @@ const serviceWithRooms = (rooms: Room[]) => {
 describe('joined room filtering', () => {
   afterEach(() => {
     localStorage.clear()
+    delete window.__TAURI_INTERNALS__
     vi.restoreAllMocks()
   })
 
@@ -100,5 +101,40 @@ describe('joined room filtering', () => {
     await expect(synchronized).resolves.toBe(room)
     expect(listeners.get(ClientEvent.Room)).toHaveLength(0)
     expect(listeners.get(RoomEvent.MyMembership)).toHaveLength(0)
+  })
+
+  it('publishes a successful Android join when Matrix-JS still exposes stripped invite state', async () => {
+    let membership: 'invite' | 'join' = 'invite'
+    const updateMyMembership = vi.fn()
+    const cachedRoom = {
+      ...fakeRoom('!invited:example.org', 'invite'),
+      getMyMembership: () => membership,
+      updateMyMembership: (next: 'invite' | 'join') => {
+        updateMyMembership(next)
+        membership = next
+      },
+    } as unknown as Room
+    const joinResult = fakeRoom(cachedRoom.roomId, 'invite')
+    const client = {
+      getRoom: () => cachedRoom,
+      getRooms: () => [cachedRoom],
+      joinRoom: vi.fn().mockResolvedValue(joinResult),
+    } as unknown as MatrixClient
+    const service = new MatrixClientService()
+    ;(
+      service as unknown as {
+        availableAccounts: () => Array<{ id: string; userId: string; client: MatrixClient }>
+      }
+    ).availableAccounts = () => [{ id: 'account', userId: '@user:example.org', client }]
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Android')
+    window.__TAURI_INTERNALS__ = { invoke: vi.fn() }
+    const onRoom = vi.fn()
+    service.subscribe({ onRoom })
+
+    await expect(service.joinRoomAs(cachedRoom.roomId, 'account')).resolves.toBe(cachedRoom)
+
+    expect(updateMyMembership).toHaveBeenCalledWith('join')
+    expect(service.rooms()).toEqual([cachedRoom])
+    expect(onRoom).toHaveBeenCalledWith(cachedRoom)
   })
 })

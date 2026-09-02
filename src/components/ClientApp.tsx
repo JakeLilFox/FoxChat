@@ -404,6 +404,15 @@ export function ClientApp({
   }, [openedRoomId, spaceOverview])
   useEffect(() => {
     if (!openedRoomId) return
+    void matrixService.watchNativeRoom(openedRoomId).catch((error) =>
+      console.warn('[native-matrix] Could not watch opened room', {
+        roomId: openedRoomId,
+        error,
+      }),
+    )
+  }, [openedRoomId])
+  useEffect(() => {
+    if (!openedRoomId) return
     const closeCurrentChat = (event: KeyboardEvent) => {
       if (
         event.key !== 'Escape' ||

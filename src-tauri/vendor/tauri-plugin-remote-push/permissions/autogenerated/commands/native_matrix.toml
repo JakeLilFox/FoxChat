@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-native-matrix"
+description = "Enables the native_matrix command without any pre-configured scope."
+commands.allow = ["native_matrix"]
+
+[[permission]]
+identifier = "deny-native-matrix"
+description = "Denies the native_matrix command without any pre-configured scope."
+commands.deny = ["native_matrix"]

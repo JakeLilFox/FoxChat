@@ -40,10 +40,20 @@ export function isAndroidNativeMatrix() {
 async function command<T>(action: string, payload: Record<string, unknown> = {}) {
   const invoke = window.__TAURI_INTERNALS__?.invoke
   if (!invoke) throw new Error('Native Matrix is only available in the Android app')
-  return invoke<T>('plugin:remote-push|native_matrix', {
-    action,
-    payload: JSON.stringify(payload),
-  })
+  try {
+    return await invoke<T>('plugin:remote-push|native_matrix', {
+      action,
+      payload: JSON.stringify(payload),
+    })
+  } catch (error) {
+    if (error instanceof Error) throw error
+    if (typeof error === 'string' && error.trim()) throw new Error(error.trim())
+    if (error && typeof error === 'object' && 'message' in error) {
+      const message = String((error as { message?: unknown }).message ?? '').trim()
+      if (message) throw new Error(message)
+    }
+    throw new Error(`Native Matrix ${action} failed`)
+  }
 }
 
 export async function nativeMatrixStatus(): Promise<NativeMatrixStatus | undefined> {
@@ -197,6 +207,10 @@ export function nativeLogout(userId: string) {
 
 export function nativeRecover(userId: string, recoveryKey: string) {
   return command<{ ok: true; background: true }>('recover', { userId, recoveryKey })
+}
+
+export function nativeWatchRoom(userId: string, roomId: string) {
+  return command<{ ok: true; alreadyWatching?: boolean }>('watchRoom', { userId, roomId })
 }
 
 export function installNativeMatrixTransport(client: MatrixClient, userId: string) {
