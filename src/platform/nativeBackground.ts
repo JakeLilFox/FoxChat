@@ -3,6 +3,7 @@ type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promi
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: { invoke: TauriInvoke }
+    FoxChatWindowAppearance?: { setTheme: (mode: 'light' | 'dark') => void }
   }
 }
 
@@ -16,6 +17,7 @@ export const isNativeApp = () => typeof window !== 'undefined' && !!window.__TAU
 export const isAndroidApp = () => isNativeApp() && /android/i.test(navigator.userAgent)
 
 export function syncNativeBackground(mode: 'light' | 'dark') {
+  if (isAndroidApp()) window.FoxChatWindowAppearance?.setTheme(mode)
   const invoke = window.__TAURI_INTERNALS__?.invoke
   if (!invoke) return
   void invoke('plugin:webview|set_webview_background_color', {

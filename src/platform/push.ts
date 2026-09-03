@@ -227,6 +227,7 @@ async function adoptAndroidMatrixDeviceOnce(client: MatrixClient) {
   // will migrate another saved account after this one is known to be native-ready.
   if (nativeAdoptionInFlight) return false
   nativeAdoptionInFlight = true
+  let webClientStopped = false
   try {
     const cryptoApi = client.getCrypto()
     await cryptoApi?.checkKeyBackupAndEnable().catch(() => undefined)
@@ -258,6 +259,7 @@ async function adoptAndroidMatrixDeviceOnce(client: MatrixClient) {
     // local room-key export above remains available to the legacy native fallback.
     await delay(3_000)
     client.stopClient()
+    webClientStopped = true
     await adoptExistingAndroidMatrixDevice(client, secretsBundle, backupInfo, {
       roomId: validation.room.roomId,
       eventId: validation.event.getId()!,
@@ -266,9 +268,14 @@ async function adoptAndroidMatrixDeviceOnce(client: MatrixClient) {
     window.location.reload()
     return true
   } catch (error) {
-    // Adoption marks ERROR transactionally. Keep the old WebView session usable
-    // during this run instead of leaving the UI on a deliberately stopped client.
-    await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true }).catch(() => undefined)
+    // matrix-js-sdk's Rust crypto object cannot safely be restarted after stopClient(): doing so
+    // leaves disposed internals behind (for example MatrixRTC's groupCalls). A reload constructs
+    // a fresh WebView client from the persisted session; a failed native transaction remains in
+    // ERROR, so the next load stays on the legacy WebView owner without another cut-over attempt.
+    if (webClientStopped) {
+      nativeAdoptionReloadScheduled = true
+      window.location.reload()
+    }
     throw error
   } finally {
     nativeAdoptionInFlight = false

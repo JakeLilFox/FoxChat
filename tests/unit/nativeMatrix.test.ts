@@ -25,11 +25,16 @@ describe('Android native Matrix bridge', () => {
     window.__TAURI_INTERNALS__ = { invoke: invoke as never }
   }
 
-  it('only retries the known Android false-revocation migration failure', () => {
+  it('retries only known Android migration verifier defects', () => {
     expect(isRetryableAndroidVerifierError('InvalidCertificate(Revoked)')).toBe(true)
     expect(
       isRetryableAndroidVerifierError(
         'client creation failed: InvalidCertificate ( Revoked ) while discovering homeserver',
+      ),
+    ).toBe(true)
+    expect(
+      isRetryableAndroidVerifierError(
+        'Native Matrix could not decrypt the cut-over event: NotificationStatus$EventFilteredOut',
       ),
     ).toBe(true)
     expect(isRetryableAndroidVerifierError('InvalidCertificate(Expired)')).toBe(false)

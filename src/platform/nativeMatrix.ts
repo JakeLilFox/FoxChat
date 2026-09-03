@@ -43,7 +43,10 @@ export function isAndroidNativeMatrix() {
 }
 
 export function isRetryableAndroidVerifierError(error: string | null | undefined) {
-  return !!error && /InvalidCertificate\s*\(\s*Revoked\s*\)/i.test(error)
+  return (
+    !!error &&
+    (/InvalidCertificate\s*\(\s*Revoked\s*\)/i.test(error) || /EventFilteredOut/i.test(error))
+  )
 }
 
 async function command<T>(action: string, payload: Record<string, unknown> = {}) {

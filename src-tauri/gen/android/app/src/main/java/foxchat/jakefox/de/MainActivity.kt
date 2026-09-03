@@ -4,6 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
@@ -12,6 +15,7 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.util.Base64
 import android.view.View
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.OnBackPressedCallback
@@ -30,6 +34,7 @@ class MainActivity : TauriActivity() {
   private var pendingShareIntent: Intent? = null
   private var pendingNotificationRoomId: String? = null
   private val shareExecutor = Executors.newSingleThreadExecutor()
+  private val windowAppearanceBridge = WindowAppearanceBridge()
   private val notificationReplyReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) { dispatchPendingNotificationReplies() }
   }
@@ -247,6 +252,12 @@ class MainActivity : TauriActivity() {
       WebView.setWebContentsDebuggingEnabled(true)
     }
     this.webView = webView
+    // setContentView(WebView) can expose a physical-pixel-wide strip of the
+    // Activity surface on some edge-to-edge Android/WebView combinations. Keep
+    // every native surface behind the page painted with the same app color so
+    // that strip can never appear as the Material theme's default white.
+    applyAppBackground(defaultAppBackground())
+    webView.addJavascriptInterface(windowAppearanceBridge, "FoxChatWindowAppearance")
     onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
         webView.evaluateJavascript(
@@ -268,6 +279,27 @@ class MainActivity : TauriActivity() {
     handleWindowInsets(webView)
     getSharedPreferences("foxchat_boot_diagnostics", Context.MODE_PRIVATE).edit()
       .putString("stage", "WebView created").apply()
+  }
+
+  private fun defaultAppBackground(): Int {
+    val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+    return if (nightMode == Configuration.UI_MODE_NIGHT_YES) DARK_APP_BACKGROUND else LIGHT_APP_BACKGROUND
+  }
+
+  private fun applyAppBackground(color: Int) {
+    runOnUiThread {
+      window.setBackgroundDrawable(ColorDrawable(color))
+      window.decorView.setBackgroundColor(color)
+      window.decorView.findViewById<View>(android.R.id.content)?.setBackgroundColor(color)
+      webView?.setBackgroundColor(color)
+    }
+  }
+
+  private inner class WindowAppearanceBridge {
+    @JavascriptInterface
+    fun setTheme(mode: String) {
+      applyAppBackground(if (mode == "dark") DARK_APP_BACKGROUND else LIGHT_APP_BACKGROUND)
+    }
   }
 
   // Chromium owns keyboard resizing. Native insets only expose navigation mode
@@ -328,6 +360,11 @@ class MainActivity : TauriActivity() {
     ViewCompat.requestApplyInsets(contentRoot)
   }
 
+  companion object {
+    private val LIGHT_APP_BACKGROUND = Color.rgb(245, 246, 250)
+    private val DARK_APP_BACKGROUND = Color.rgb(17, 19, 26)
+  }
+
   private fun dispatchPendingNotificationReplies() {
     val target = webView ?: return
     val preferences = getSharedPreferences("foxchat_pending_notification_replies", Context.MODE_PRIVATE)
@@ -347,6 +384,12 @@ class MainActivity : TauriActivity() {
     setIntent(intent)
     acceptNotificationIntent(intent)
     acceptShareIntent(intent)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    NativeCryptoBridge.webViewActive = true
+    NativeMatrixClientManager.ensureRunning(applicationContext, "activity-resume")
   }
 
   private fun acceptNotificationIntent(intent: Intent?) {

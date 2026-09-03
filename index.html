@@ -15,6 +15,9 @@
         document.documentElement.setAttribute("data-theme", mode);
         document.documentElement.style.colorScheme = mode;
         document.documentElement.style.backgroundColor = bg;
+        // MainActivity installs this before Wry starts loading the page. Match
+        // the Android window behind the WebView during the very first paint.
+        window.FoxChatWindowAppearance?.setTheme(mode);
       })();
     </script>
   </head>

@@ -87,6 +87,7 @@ object NativeMatrixClientManager {
     private val accounts = ConcurrentHashMap<String, AccountRuntime>()
     private val locks = ConcurrentHashMap<String, Mutex>()
     private val roomListSubscriptions = ConcurrentHashMap<String, RoomListSubscription>()
+    private val healthChecks = ConcurrentHashMap.newKeySet<String>()
     @Volatile private var applicationContext: Context? = null
     @Volatile private var platformInitialized = false
 
@@ -135,25 +136,36 @@ object NativeMatrixClientManager {
     }
 
     fun bootstrap(context: Context) {
+        ensureRunning(context, "process-bootstrap")
+    }
+
+    /**
+     * Restores every READY account and repairs a runtime whose sync service actually terminated.
+     * OFFLINE is deliberately left alone: it is a live SyncService waiting for connectivity, not
+     * a dead client. The per-account guard makes process bootstrap and Activity resume safe to call
+     * back-to-back without creating competing clients for the same Matrix device/store.
+     */
+    fun ensureRunning(context: Context, reason: String) {
         initializePlatform()
         applicationContext = context.applicationContext
         NativeMatrixMigrationStore.accounts(context)
             .filter { it.state == NativeMatrixMigrationStore.State.READY }
             .forEach { account ->
+                if (!healthChecks.add(account.userId)) return@forEach
                 scope.launch {
-                    runCatching {
-                        val runtime = ensureRuntime(context, account.userId)
-                        awaitSyncRunning(runtime)
-                        ensureRoomListSubscription(runtime, account.userId)
-                    }
+                    try {
+                        runCatching { ensureReadyAccountRunning(context, account.userId, reason) }
                         .onFailure { error ->
-                            Log.e(TAG, "Could not restore ${account.userId}", error)
+                            Log.e(TAG, "Could not ensure ${account.userId} is running ($reason)", error)
                             NativeClientLogStore.recordNative(
                                 context.applicationContext,
-                                "native-matrix:restore:${account.userId}",
+                                "native-matrix:health:${account.userId}:$reason",
                                 error,
                             )
                         }
+                    } finally {
+                        healthChecks.remove(account.userId)
+                    }
                 }
             }
     }
@@ -177,6 +189,21 @@ object NativeMatrixClientManager {
     ): JSONObject = runBlocking(Dispatchers.IO) {
         initializePlatform()
         applicationContext = context.applicationContext
+        val existing = NativeMatrixMigrationStore.account(context, userId)
+        if (existing?.state == NativeMatrixMigrationStore.State.READY) {
+            val existingSession = existing.session
+                ?: error("Native Matrix READY session for $userId is missing")
+            check(existingSession.optString("deviceId") == deviceId) {
+                "Refusing to re-adopt $userId with a different Matrix device"
+            }
+            ensureReadyAccountRunning(context, userId, "idempotent-adoption")
+            return@runBlocking JSONObject()
+                .put("ok", true)
+                .put("userId", userId)
+                .put("deviceId", deviceId)
+                .put("state", NativeMatrixMigrationStore.State.READY.wireName)
+                .put("alreadyReady", true)
+        }
         val sessionJson = JSONObject()
             .put("userId", userId)
             .put("deviceId", deviceId)
@@ -201,12 +228,11 @@ object NativeMatrixClientManager {
             ensureRoomListSubscription(runtime, userId)
             withTimeout(60_000L) {
                 runtime.client.encryption().waitForE2eeInitializationTasks()
-                val validation = runtime.notificationClient.getNotification(
-                    validationRoomId,
-                    validationEventId,
-                )
-                check(validation is NotificationStatus.Event) {
-                    "Native Matrix could not decrypt the cut-over event: $validation"
+                val room = runtime.client.getRoom(validationRoomId)
+                    ?: error("Native Matrix has not synced validation room $validationRoomId")
+                val validation = JSONObject(timelineEventJson(room, validationEventId))
+                check(validation.optString("type") != "m.room.encrypted") {
+                    "Native Matrix still returned encrypted content for the cut-over event"
                 }
             }
             NativeMatrixMigrationStore.setState(context, userId, NativeMatrixMigrationStore.State.READY)
@@ -218,10 +244,19 @@ object NativeMatrixClientManager {
                 .put("state", NativeMatrixMigrationStore.State.READY.wireName)
         } catch (error: Throwable) {
             accounts.remove(userId)?.let(::closeRuntime)
-            NativeMatrixMigrationStore.setState(
-                context, userId, NativeMatrixMigrationStore.State.ERROR, error,
+            val contextualError = IllegalStateException(
+                "Native Matrix adoption failed for $userId: ${errorSummary(error)}",
+                error,
             )
-            throw error
+            NativeMatrixMigrationStore.setState(
+                context, userId, NativeMatrixMigrationStore.State.ERROR, contextualError,
+            )
+            NativeClientLogStore.recordNative(
+                context.applicationContext,
+                "native-matrix:adoption:$userId",
+                contextualError,
+            )
+            throw contextualError
         }
     }
 
@@ -575,9 +610,17 @@ object NativeMatrixClientManager {
 
     private suspend fun ensureRuntime(context: Context, userId: String): AccountRuntime {
         initializePlatform()
-        accounts[userId]?.let { return it }
+        accounts[userId]?.takeUnless { isTerminalSyncState(it.syncState.get()) }?.let { return it }
         return lockFor(userId).withLock {
-            accounts[userId]?.let { return@withLock it }
+            accounts[userId]?.let { existing ->
+                if (!isTerminalSyncState(existing.syncState.get())) return@withLock existing
+                Log.w(
+                    TAG,
+                    "Discarding terminal Matrix runtime for $userId (state=${existing.syncState.get()})",
+                )
+                accounts.remove(userId, existing)
+                closeRuntime(existing)
+            }
             val account = NativeMatrixMigrationStore.account(context, userId)
                 ?: error("Native Matrix account $userId is not staged")
             val json = account.session ?: error("Native Matrix session for $userId is missing")
@@ -646,6 +689,44 @@ object NativeMatrixClientManager {
             runtime
         }
     }
+
+    private suspend fun ensureReadyAccountRunning(context: Context, userId: String, reason: String) {
+        var restarted = false
+        while (true) {
+            val runtime = ensureRuntime(context, userId)
+            val state = if (runtime.syncState.get() == SyncServiceState.IDLE) {
+                try {
+                    withTimeout(60_000L) { runtime.syncStartup.await() }
+                } catch (error: Throwable) {
+                    runtime.syncState.get().takeIf(::isTerminalSyncState) ?: throw error
+                }
+            } else {
+                runtime.syncState.get()
+            }
+
+            if (!isTerminalSyncState(state)) {
+                // OFFLINE is healthy lifecycle-wise and will resume through the SDK when the
+                // network returns. Its room list remains useful from the local Rust store.
+                check(state == SyncServiceState.RUNNING || state == SyncServiceState.OFFLINE) {
+                    "Native Matrix sync for $userId remained in $state"
+                }
+                ensureRoomListSubscription(runtime, userId)
+                return
+            }
+
+            check(!restarted) {
+                "Native Matrix sync for $userId remained in $state after one restart"
+            }
+            restarted = true
+            Log.w(TAG, "Recreating terminated Matrix runtime for $userId ($reason, state=$state)")
+            lockFor(userId).withLock {
+                if (accounts.remove(userId, runtime)) closeRuntime(runtime)
+            }
+        }
+    }
+
+    private fun isTerminalSyncState(state: SyncServiceState): Boolean =
+        state == SyncServiceState.ERROR || state == SyncServiceState.TERMINATED
 
     private suspend fun runtimeForRoom(context: Context, roomId: String): AccountRuntime {
         for (account in NativeMatrixMigrationStore.accounts(context)) {
@@ -769,16 +850,24 @@ object NativeMatrixClientManager {
         val currentState = AtomicReference(SyncServiceState.IDLE)
         val handle = syncService.state(object : SyncServiceStateObserver {
             override fun onUpdate(update: SyncServiceState) {
-                currentState.set(update)
+                val previous = currentState.getAndSet(update)
                 Log.i(TAG, "Sync state for $userId: $update")
                 if (update == SyncServiceState.RUNNING || update == SyncServiceState.ERROR ||
                     update == SyncServiceState.TERMINATED || update == SyncServiceState.OFFLINE
                 ) startup.complete(update)
+                if (previous != update && isTerminalSyncState(update)) {
+                    NativeClientLogStore.recordNative(
+                        context,
+                        "native-matrix:sync-state:$userId",
+                        IllegalStateException("Native Matrix sync entered $update"),
+                    )
+                }
             }
         })
         scope.launch {
             runCatching { syncService.start() }
                 .onFailure { error ->
+                    currentState.set(SyncServiceState.ERROR)
                     startup.completeExceptionally(error)
                     Log.e(TAG, "Sync stopped for $userId", error)
                     NativeClientLogStore.recordNative(
