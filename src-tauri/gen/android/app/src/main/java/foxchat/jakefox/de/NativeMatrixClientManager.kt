@@ -15,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.json.JSONArray
 import org.json.JSONObject
 import org.matrix.rustcomponents.sdk.Client
 import org.matrix.rustcomponents.sdk.ClientBuilder
@@ -96,6 +97,7 @@ object NativeMatrixClientManager {
         val notificationClient: NotificationClient,
         val syncStartup: CompletableDeferred<SyncServiceState>,
         val syncStateHandle: TaskHandle,
+        val syncState: AtomicReference<SyncServiceState>,
         val timelineSubscriptions: ConcurrentHashMap<String, TimelineSubscription> = ConcurrentHashMap(),
     )
 
@@ -144,7 +146,14 @@ object NativeMatrixClientManager {
                         awaitSyncRunning(runtime)
                         ensureRoomListSubscription(runtime, account.userId)
                     }
-                        .onFailure { Log.e(TAG, "Could not restore ${account.userId}", it) }
+                        .onFailure { error ->
+                            Log.e(TAG, "Could not restore ${account.userId}", error)
+                            NativeClientLogStore.recordNative(
+                                context.applicationContext,
+                                "native-matrix:restore:${account.userId}",
+                                error,
+                            )
+                        }
                 }
             }
     }
@@ -271,7 +280,17 @@ object NativeMatrixClientManager {
         }
     }
 
-    fun status(context: Context): JSONObject = NativeMatrixMigrationStore.status(context)
+    fun status(context: Context): JSONObject = NativeMatrixMigrationStore.status(context).also { status ->
+        val storedAccounts = status.optJSONArray("accounts") ?: JSONArray()
+        for (index in 0 until storedAccounts.length()) {
+            val account = storedAccounts.optJSONObject(index) ?: continue
+            val runtime = accounts[account.optString("userId")]
+            account
+                .put("runtimeActive", runtime != null)
+                .put("syncState", runtime?.syncState?.get()?.name?.lowercase())
+                .put("watchedRooms", runtime?.timelineSubscriptions?.size ?: 0)
+        }
+    }
 
     fun loginNewAccount(
         context: Context,
@@ -335,9 +354,12 @@ object NativeMatrixClientManager {
             val notificationClient = client.notificationClient(
                 NotificationProcessSetup.SingleProcess(syncService),
             )
-            val (syncStartup, syncStateHandle) = startSync(syncService, session.userId)
+            val (syncStartup, syncStateHandle, syncState) = startSync(
+                context.applicationContext, syncService, session.userId,
+            )
             val runtime = AccountRuntime(
                 session.userId, client, syncService, notificationClient, syncStartup, syncStateHandle,
+                syncState,
             )
             accounts[session.userId] = runtime
             stage = "starting native sync"
@@ -613,9 +635,12 @@ object NativeMatrixClientManager {
             val notificationClient = client.notificationClient(
                 NotificationProcessSetup.SingleProcess(syncService),
             )
-            val (syncStartup, syncStateHandle) = startSync(syncService, userId)
+            val (syncStartup, syncStateHandle, syncState) = startSync(
+                context.applicationContext, syncService, userId,
+            )
             val runtime = AccountRuntime(
                 userId, client, syncService, notificationClient, syncStartup, syncStateHandle,
+                syncState,
             )
             accounts[userId] = runtime
             runtime
@@ -736,12 +761,15 @@ object NativeMatrixClientManager {
         .joinToString("|")
 
     private fun startSync(
+        context: Context,
         syncService: SyncService,
         userId: String,
-    ): Pair<CompletableDeferred<SyncServiceState>, TaskHandle> {
+    ): Triple<CompletableDeferred<SyncServiceState>, TaskHandle, AtomicReference<SyncServiceState>> {
         val startup = CompletableDeferred<SyncServiceState>()
+        val currentState = AtomicReference(SyncServiceState.IDLE)
         val handle = syncService.state(object : SyncServiceStateObserver {
             override fun onUpdate(update: SyncServiceState) {
+                currentState.set(update)
                 Log.i(TAG, "Sync state for $userId: $update")
                 if (update == SyncServiceState.RUNNING || update == SyncServiceState.ERROR ||
                     update == SyncServiceState.TERMINATED || update == SyncServiceState.OFFLINE
@@ -753,9 +781,14 @@ object NativeMatrixClientManager {
                 .onFailure { error ->
                     startup.completeExceptionally(error)
                     Log.e(TAG, "Sync stopped for $userId", error)
+                    NativeClientLogStore.recordNative(
+                        context,
+                        "native-matrix:sync:$userId",
+                        error,
+                    )
                 }
         }
-        return startup to handle
+        return Triple(startup, handle, currentState)
     }
 
     private suspend fun awaitSyncRunning(runtime: AccountRuntime) {

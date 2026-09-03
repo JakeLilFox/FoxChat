@@ -1,6 +1,10 @@
 import { EventType, RoomType, type MatrixClient, type MatrixEvent } from 'matrix-js-sdk'
 import { timelineAppearanceSettings } from '../lib/constants'
-import { adoptExistingAndroidMatrixDevice, nativeMatrixStatus } from './nativeMatrix'
+import {
+  adoptExistingAndroidMatrixDevice,
+  isRetryableAndroidVerifierError,
+  nativeMatrixStatus,
+} from './nativeMatrix'
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 
@@ -212,9 +216,13 @@ async function adoptAndroidMatrixDeviceOnce(client: MatrixClient) {
   const status = await nativeMatrixStatus()
   const account = status?.accounts.find((candidate) => candidate.userId === userId)
   if (account?.state === 'ready') return false
-  if (account?.state === 'error') {
+  if (account?.state === 'error' && !isRetryableAndroidVerifierError(account.error)) {
     throw new Error(`${userId}: Native Matrix adoption failed: ${account.error || 'unknown error'}`)
   }
+  if (account?.state === 'error')
+    console.info('[native-matrix] Retrying migration after the Android certificate verifier bug', {
+      userId,
+    })
   // Only one account may cross the device-ownership boundary at a time. A reload
   // will migrate another saved account after this one is known to be native-ready.
   if (nativeAdoptionInFlight) return false

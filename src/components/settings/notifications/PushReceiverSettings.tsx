@@ -2,6 +2,7 @@ import { DevJson, devJson } from '../../../styles'
 import { useCallback, useEffect, useState } from 'react'
 import {
   Avatar,
+  Alert,
   Button,
   Collapse,
   Popconfirm,
@@ -12,13 +13,11 @@ import {
 } from 'antd'
 import { BellOutlined } from '@ant-design/icons'
 import { matrixService } from '../../../matrix/MatrixClientService'
-import {
-  registerMatrixPush,
-  syncNativeCryptoNow,
-  testNativeCryptoWithLoadedEvent,
-} from '../../../platform/push'
+import { registerMatrixPush } from '../../../platform/push'
 import { roomIdFromUrl } from '../../../lib/urlState'
 import { RoomType } from 'matrix-js-sdk'
+import { isAndroidNativeMatrix } from '../../../platform/nativeMatrix'
+import { reportClientError } from '../../../platform/errorLogging'
 
 type NativeCryptoAccountStatus = {
   userId: string
@@ -58,6 +57,28 @@ type NativeCryptoStatus = {
   bootStage?: string
   bootStageAt?: number
   notificationDiagnostics?: NotificationDiagnostic[]
+  matrixClient?: {
+    available: boolean
+    owner: 'matrix-rust-sdk'
+    accounts: Array<{
+      userId: string
+      deviceId?: string
+      state: 'legacy' | 'staged' | 'adopting' | 'validating' | 'ready' | 'error'
+      startedAt?: number
+      completedAt?: number
+      error?: string | null
+      runtimeActive?: boolean
+      syncState?: 'idle' | 'running' | 'terminated' | 'error' | 'offline' | null
+      watchedRooms?: number
+    }>
+  }
+  clientErrors?: Array<{
+    at: string | number
+    context: string
+    summary: string
+    details?: unknown
+    callSite?: string
+  }>
   accounts: NativeCryptoAccountStatus[]
 }
 function errorMessage(error: unknown, fallback: string): string {
@@ -111,11 +132,12 @@ export function PushReceiverSettings() {
   const [receivers, setReceivers] = useState<PushReceiver[]>([])
   const [loading, setLoading] = useState(false)
   const [cryptoStatus, setCryptoStatus] = useState<NativeCryptoStatus>()
-  const [cryptoTesting, setCryptoTesting] = useState(false)
+  const [healthChecking, setHealthChecking] = useState(false)
   const [autoTesting, setAutoTesting] = useState(false)
   const loadCryptoStatus = useCallback(async () => {
     const result = await nativeInvoke<NativeCryptoStatus>('plugin:remote-push|native_crypto_status')
     setCryptoStatus(result)
+    return result
   }, [])
   const load = useCallback(async () => {
     setLoading(true)
@@ -188,37 +210,40 @@ export function PushReceiverSettings() {
       setLoading(false)
     }
   }
-  const testNativeDecryption = async () => {
-    setCryptoTesting(true)
+  const checkNativeHealth = async () => {
+    setHealthChecking(true)
     try {
-      const accounts = matrixService.availableAccounts()
-      if (!accounts.length) throw new Error('No signed-in Matrix account is available')
-      await Promise.all(accounts.map((account) => syncNativeCryptoNow(account.client)))
-      await loadCryptoStatus()
-      const tests = await Promise.allSettled(
-        accounts.map((account) => testNativeCryptoWithLoadedEvent(account.client, true)),
+      const status = await loadCryptoStatus()
+      const native = status?.matrixClient
+      if (!native?.available) throw new Error('The Android Matrix Rust client is unavailable')
+      if (!native.accounts.length)
+        throw new Error('No account has been migrated to the Rust client')
+      const unhealthy = native.accounts.filter(
+        (account) =>
+          account.state !== 'ready' ||
+          account.runtimeActive === false ||
+          (account.syncState != null && account.syncState !== 'running'),
       )
-      const successfulTest = tests.find((test) => test.status === 'fulfilled' && test.value?.ok)
-      const result = successfulTest?.status === 'fulfilled' ? successfulTest.value : undefined
-      if (!result) {
-        const failure = tests.find((test) => test.status === 'rejected')
-        if (failure?.status === 'rejected') throw failure.reason
+      if (unhealthy.length)
         throw new Error(
-          'No decrypted encrypted event is currently loaded. Open an encrypted room with messages and try again.',
+          unhealthy
+            .map(
+              (account) =>
+                `${account.userId}: ${account.error || account.syncState || account.state || 'not running'}`,
+            )
+            .join('\n'),
         )
-      }
-      message.success({
-        content: `Native decryption worked: ${result.senderId || 'Someone'}: ${result.body}`,
-        duration: 10,
-      })
+      message.success(
+        `Rust client is running for ${native.accounts.length} account${native.accounts.length === 1 ? '' : 's'}`,
+      )
     } catch (error) {
+      reportClientError('native-matrix-health-check', 'Android Matrix health check failed', error)
       message.error({
-        content: errorMessage(error, 'Could not sync keys or test native decryption'),
+        content: errorMessage(error, 'Could not read Android Matrix health'),
         duration: 12,
       })
     } finally {
-      await loadCryptoStatus().catch(() => undefined)
-      setCryptoTesting(false)
+      setHealthChecking(false)
     }
   }
   const copyCryptoDiagnostics = async () => {
@@ -229,7 +254,16 @@ export function PushReceiverSettings() {
           {
             capturedAt: new Date().toISOString(),
             userAgent: navigator.userAgent,
-            nativeCrypto: cryptoStatus,
+            androidMatrix: cryptoStatus.matrixClient,
+            notificationFallback: {
+              available: cryptoStatus.available,
+              enabled: cryptoStatus.enabled,
+              bootStage: cryptoStatus.bootStage,
+              bootStageAt: cryptoStatus.bootStageAt,
+              accounts: cryptoStatus.accounts,
+              notificationDiagnostics: cryptoStatus.notificationDiagnostics,
+            },
+            clientErrors: cryptoStatus.clientErrors,
           },
           null,
           2,
@@ -358,228 +392,340 @@ export function PushReceiverSettings() {
           )}
         />
       </Spin>
-      <h3 style={{ marginTop: 20 }}>Native notification decryption</h3>
-      <p>
-        Setup runs automatically after sign-in. Room keys are copied from the WebView crypto store
-        into the encrypted Android notification store and FoxChat validates decryption when an
-        encrypted event is available. A synced key store means the copy completed; it does not claim
-        that every individual message session is already present in key backup.
-      </p>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        <Button loading={cryptoTesting} onClick={() => void testNativeDecryption()}>
-          Run decryption diagnostic
-        </Button>
-        <Button disabled={cryptoTesting} onClick={() => void loadCryptoStatus()}>
-          Refresh crypto status
-        </Button>
-        <Button disabled={!cryptoStatus} onClick={() => void copyCryptoDiagnostics()}>
-          Copy diagnostics
-        </Button>
-        <Button loading={autoTesting} onClick={() => void testAndroidAuto()}>
-          Post Android Auto test
-        </Button>
-      </div>
-      {!cryptoStatus ? (
-        <Tag color="default">Native crypto status unavailable</Tag>
-      ) : (
+      {isAndroidNativeMatrix() && (
         <>
-          <div style={{ marginBottom: 10 }}>
-            <Tag color={cryptoStatus.enabled ? 'success' : 'default'}>
-              Native background decrypt{' '}
-              {cryptoStatus.enabled
-                ? 'enabled'
-                : cryptoStatus.accounts.some((account) => account.setupState === 'pending')
-                  ? 'setting up'
-                  : 'not ready'}
-            </Tag>
-            {cryptoStatus.bootStage && <small>Last boot stage: {cryptoStatus.bootStage}</small>}
+          <h3 style={{ marginTop: 20 }}>Android Matrix client and notifications</h3>
+          <p>
+            On Android, the Matrix Rust SDK owns the existing Matrix device, encrypted store, live
+            sync, sending, and notification decryption. It keeps running independently of the
+            WebView, so killing the WebView does not hand crypto ownership back to the browser
+            client. The health check below only reads status; it does not send, decrypt, or change
+            account data.
+          </p>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            <Button loading={healthChecking} onClick={() => void checkNativeHealth()}>
+              Check Rust client health
+            </Button>
+            <Button disabled={healthChecking} onClick={() => void loadCryptoStatus()}>
+              Refresh status
+            </Button>
+            <Button disabled={!cryptoStatus} onClick={() => void copyCryptoDiagnostics()}>
+              Copy diagnostics
+            </Button>
+            <Button loading={autoTesting} onClick={() => void testAndroidAuto()}>
+              Post Android Auto test
+            </Button>
           </div>
-          {cryptoStatus.accounts.length === 0 ? (
-            <Tag color="warning">No keys have reached Android yet</Tag>
+          {!cryptoStatus ? (
+            <Alert type="warning" showIcon message="Android Matrix status is unavailable" />
           ) : (
-            <AntList
-              bordered
-              dataSource={cryptoStatus.accounts}
-              renderItem={(account) => (
-                <AntList.Item>
-                  <div style={{ overflowWrap: 'anywhere', width: '100%' }}>
-                    <b>{account.userId}</b>{' '}
-                    <Tag
-                      color={
-                        account.setupError || account.lastSyncError || account.lastDecryptError
-                          ? 'error'
-                          : account.setupState === 'pending'
-                            ? 'processing'
-                            : account.exportedSessions > 0
-                              ? 'success'
-                              : 'warning'
-                      }
-                    >
-                      {account.setupError
-                        ? 'setup error'
-                        : account.lastDecryptError
-                          ? 'last decrypt failed'
-                          : account.lastSyncError
-                            ? 'key sync failed'
-                            : account.setupState === 'pending'
-                              ? 'setting up'
-                              : account.exportedSessions > 0
-                                ? 'key store synced'
-                                : 'no room keys synced'}
-                    </Tag>
-                    <br />
-                    <small>
-                      Device: <code>{account.deviceId}</code>
-                    </small>
-                    <br />
-                    <small>
-                      Last key sync:{' '}
-                      {account.lastSyncAt ? new Date(account.lastSyncAt).toLocaleString() : 'never'}
-                    </small>
-                    <br />
-                    <small>
-                      Latest sync: {account.importTotal || account.exportedSessions} sessions
-                      checked · {account.importedSessions} newly imported
-                    </small>
-                    <br />
-                    <small>
-                      Key backup recovery:{' '}
-                      {account.backupConfigured ? 'configured' : 'not available'}
-                    </small>
-                    <br />
-                    <small>
-                      Last native decrypt:{' '}
-                      {account.lastDecryptAt
-                        ? new Date(account.lastDecryptAt).toLocaleString()
-                        : 'never'}
-                    </small>
-                    {account.setupPhase && (
-                      <>
-                        <br />
-                        <small>
-                          Setup phase: <code>{account.setupPhase}</code>
-                        </small>
-                      </>
-                    )}
-                    {!!account.setupHeartbeatAt && (
-                      <>
-                        <br />
-                        <small>
-                          Last setup activity: {new Date(account.setupHeartbeatAt).toLocaleString()}
-                        </small>
-                      </>
-                    )}
-                    {account.setupError && (
-                      <>
-                        <br />
-                        <Tag color="error">{account.setupError}</Tag>
-                      </>
-                    )}
-                    {account.lastSyncError && (
-                      <>
-                        <br />
-                        <Tag color="error">{account.lastSyncError}</Tag>
-                      </>
-                    )}
-                    {account.lastDecryptError && (
-                      <>
-                        <br />
-                        <Tag color="error">{account.lastDecryptError}</Tag>
-                      </>
-                    )}
-                    {account.setupErrorDetails && (
-                      <Collapse
-                        size="small"
-                        ghost
-                        items={[
-                          {
-                            key: 'setup-error-details',
-                            label: 'Setup error details',
-                            children: <DevJson>{account.setupErrorDetails}</DevJson>,
-                          },
-                        ]}
-                      />
-                    )}
-                  </div>
-                </AntList.Item>
+            <>
+              {!cryptoStatus.matrixClient ? (
+                <Alert type="error" showIcon message="Matrix Rust client status is missing" />
+              ) : cryptoStatus.matrixClient.accounts.length === 0 ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="No account has been migrated to the Android Matrix client"
+                />
+              ) : (
+                <AntList
+                  bordered
+                  dataSource={cryptoStatus.matrixClient.accounts}
+                  renderItem={(account) => {
+                    const healthy =
+                      account.state === 'ready' &&
+                      account.runtimeActive !== false &&
+                      (account.syncState == null || account.syncState === 'running')
+                    return (
+                      <AntList.Item>
+                        <div style={{ overflowWrap: 'anywhere', width: '100%' }}>
+                          <b>{account.userId}</b>{' '}
+                          <Tag
+                            color={
+                              healthy
+                                ? 'success'
+                                : account.state === 'error'
+                                  ? 'error'
+                                  : 'processing'
+                            }
+                          >
+                            {account.state === 'ready'
+                              ? account.syncState === 'running'
+                                ? 'Rust sync running'
+                                : account.runtimeActive === false
+                                  ? 'Rust client stopped'
+                                  : `Rust client ${account.syncState || 'starting'}`
+                              : `migration ${account.state}`}
+                          </Tag>
+                          <br />
+                          <small>
+                            Device: <code>{account.deviceId || 'unknown'}</code> · owner:{' '}
+                            <code>{cryptoStatus.matrixClient?.owner}</code>
+                          </small>
+                          <br />
+                          <small>
+                            Runtime: {account.runtimeActive ? 'active' : 'not active'} · sync:{' '}
+                            {account.syncState || 'not started'} · watched rooms:{' '}
+                            {account.watchedRooms ?? 0}
+                          </small>
+                          {account.completedAt ? (
+                            <>
+                              <br />
+                              <small>
+                                Device migration completed:{' '}
+                                {new Date(account.completedAt).toLocaleString()}
+                              </small>
+                            </>
+                          ) : null}
+                          {account.error ? (
+                            <>
+                              <br />
+                              <Tag color="error">{account.error}</Tag>
+                            </>
+                          ) : null}
+                        </div>
+                      </AntList.Item>
+                    )
+                  }}
+                />
               )}
-            />
-          )}
-          {!!cryptoStatus.notificationDiagnostics?.length && (
-            <Collapse
-              style={{ marginTop: 12 }}
-              items={[
-                {
-                  key: 'notification-diagnostics',
-                  label: `Recent background decrypt attempts (${cryptoStatus.notificationDiagnostics.length})`,
-                  children: (
-                    <AntList
-                      size="small"
-                      dataSource={[...cryptoStatus.notificationDiagnostics].reverse()}
-                      renderItem={(entry) => (
-                        <AntList.Item>
-                          <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-                            <Tag
-                              color={
-                                entry.outcome.endsWith('decrypted') ||
-                                entry.outcome.includes('succeeded')
+
+              <h4 style={{ marginTop: 18 }}>Legacy notification fallback</h4>
+              <p>
+                This store is retained for migration recovery and notification retry diagnostics. It
+                is not the Android Matrix device owner once the Rust account is ready.
+              </p>
+              <div style={{ marginBottom: 10 }}>
+                <Tag color={cryptoStatus.enabled ? 'success' : 'default'}>
+                  Fallback decrypt {cryptoStatus.enabled ? 'available' : 'not ready'}
+                </Tag>
+                {cryptoStatus.bootStage && <small>Last boot stage: {cryptoStatus.bootStage}</small>}
+              </div>
+              {cryptoStatus.accounts.length === 0 ? (
+                <Tag color="warning">No keys have reached Android yet</Tag>
+              ) : (
+                <AntList
+                  bordered
+                  dataSource={cryptoStatus.accounts}
+                  renderItem={(account) => (
+                    <AntList.Item>
+                      <div style={{ overflowWrap: 'anywhere', width: '100%' }}>
+                        <b>{account.userId}</b>{' '}
+                        <Tag
+                          color={
+                            account.setupError || account.lastSyncError || account.lastDecryptError
+                              ? 'error'
+                              : account.setupState === 'pending'
+                                ? 'processing'
+                                : account.exportedSessions > 0
                                   ? 'success'
-                                  : entry.outcome.includes('failed') ||
-                                      entry.outcome === 'timed-out'
-                                    ? 'error'
-                                    : 'default'
-                              }
-                            >
-                              {entry.outcome}
-                            </Tag>
-                            <small>{new Date(entry.at).toLocaleString()}</small>
+                                  : 'warning'
+                          }
+                        >
+                          {account.setupError
+                            ? 'setup error'
+                            : account.lastDecryptError
+                              ? 'last decrypt failed'
+                              : account.lastSyncError
+                                ? 'key sync failed'
+                                : account.setupState === 'pending'
+                                  ? 'setting up'
+                                  : account.exportedSessions > 0
+                                    ? 'key store synced'
+                                    : 'no room keys synced'}
+                        </Tag>
+                        <br />
+                        <small>
+                          Device: <code>{account.deviceId}</code>
+                        </small>
+                        <br />
+                        <small>
+                          Last key sync:{' '}
+                          {account.lastSyncAt
+                            ? new Date(account.lastSyncAt).toLocaleString()
+                            : 'never'}
+                        </small>
+                        <br />
+                        <small>
+                          Latest sync: {account.importTotal || account.exportedSessions} sessions
+                          checked · {account.importedSessions} newly imported
+                        </small>
+                        <br />
+                        <small>
+                          Key backup recovery:{' '}
+                          {account.backupConfigured ? 'configured' : 'not available'}
+                        </small>
+                        <br />
+                        <small>
+                          Last native decrypt:{' '}
+                          {account.lastDecryptAt
+                            ? new Date(account.lastDecryptAt).toLocaleString()
+                            : 'never'}
+                        </small>
+                        {account.setupPhase && (
+                          <>
                             <br />
                             <small>
-                              Room: <code>{entry.roomRef || entry.roomId || 'unknown'}</code>
+                              Setup phase: <code>{account.setupPhase}</code>
                             </small>
+                          </>
+                        )}
+                        {!!account.setupHeartbeatAt && (
+                          <>
                             <br />
                             <small>
-                              Event: <code>{entry.eventId}</code>
+                              Last setup activity:{' '}
+                              {new Date(account.setupHeartbeatAt).toLocaleString()}
                             </small>
-                            {entry.requestStage && (
-                              <>
+                          </>
+                        )}
+                        {account.setupError && (
+                          <>
+                            <br />
+                            <Tag color="error">{account.setupError}</Tag>
+                          </>
+                        )}
+                        {account.lastSyncError && (
+                          <>
+                            <br />
+                            <Tag color="error">{account.lastSyncError}</Tag>
+                          </>
+                        )}
+                        {account.lastDecryptError && (
+                          <>
+                            <br />
+                            <Tag color="error">{account.lastDecryptError}</Tag>
+                          </>
+                        )}
+                        {account.setupErrorDetails && (
+                          <Collapse
+                            size="small"
+                            ghost
+                            items={[
+                              {
+                                key: 'setup-error-details',
+                                label: 'Setup error details',
+                                children: <DevJson>{account.setupErrorDetails}</DevJson>,
+                              },
+                            ]}
+                          />
+                        )}
+                      </div>
+                    </AntList.Item>
+                  )}
+                />
+              )}
+              {!!cryptoStatus.notificationDiagnostics?.length && (
+                <Collapse
+                  style={{ marginTop: 12 }}
+                  items={[
+                    {
+                      key: 'notification-diagnostics',
+                      label: `Recent background decrypt attempts (${cryptoStatus.notificationDiagnostics.length})`,
+                      children: (
+                        <AntList
+                          size="small"
+                          dataSource={[...cryptoStatus.notificationDiagnostics].reverse()}
+                          renderItem={(entry) => (
+                            <AntList.Item>
+                              <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                                <Tag
+                                  color={
+                                    entry.outcome.endsWith('decrypted') ||
+                                    entry.outcome.includes('succeeded')
+                                      ? 'success'
+                                      : entry.outcome.includes('failed') ||
+                                          entry.outcome === 'timed-out'
+                                        ? 'error'
+                                        : 'default'
+                                  }
+                                >
+                                  {entry.outcome}
+                                </Tag>
+                                <small>{new Date(entry.at).toLocaleString()}</small>
                                 <br />
                                 <small>
-                                  Request stage: <code>{entry.requestStage}</code>
-                                  {entry.httpStatus ? ` · HTTP ${entry.httpStatus}` : ''}
+                                  Room: <code>{entry.roomRef || entry.roomId || 'unknown'}</code>
                                 </small>
-                              </>
-                            )}
-                            {entry.matrixErrorCode && (
-                              <>
                                 <br />
                                 <small>
-                                  Matrix error: <code>{entry.matrixErrorCode}</code>
-                                  {entry.matrixErrorMessage ? ` · ${entry.matrixErrorMessage}` : ''}
+                                  Event: <code>{entry.eventId}</code>
                                 </small>
-                              </>
-                            )}
-                            {entry.likelyCause && (
-                              <>
+                                {entry.requestStage && (
+                                  <>
+                                    <br />
+                                    <small>
+                                      Request stage: <code>{entry.requestStage}</code>
+                                      {entry.httpStatus ? ` · HTTP ${entry.httpStatus}` : ''}
+                                    </small>
+                                  </>
+                                )}
+                                {entry.matrixErrorCode && (
+                                  <>
+                                    <br />
+                                    <small>
+                                      Matrix error: <code>{entry.matrixErrorCode}</code>
+                                      {entry.matrixErrorMessage
+                                        ? ` · ${entry.matrixErrorMessage}`
+                                        : ''}
+                                    </small>
+                                  </>
+                                )}
+                                {entry.likelyCause && (
+                                  <>
+                                    <br />
+                                    <Tag color="warning">{entry.likelyCause}</Tag>
+                                  </>
+                                )}
+                                {entry.error && (
+                                  <>
+                                    <br />
+                                    <Tag color="error">{entry.error}</Tag>
+                                  </>
+                                )}
+                                {entry.errorDetails && <DevJson>{entry.errorDetails}</DevJson>}
+                              </div>
+                            </AntList.Item>
+                          )}
+                        />
+                      ),
+                    },
+                  ]}
+                />
+              )}
+              {!!cryptoStatus.clientErrors?.length && (
+                <Collapse
+                  style={{ marginTop: 12 }}
+                  items={[
+                    {
+                      key: 'client-errors',
+                      label: `Recent app errors (${cryptoStatus.clientErrors.length})`,
+                      children: (
+                        <AntList
+                          size="small"
+                          dataSource={[...cryptoStatus.clientErrors].reverse()}
+                          renderItem={(entry) => (
+                            <AntList.Item>
+                              <div style={{ minWidth: 0, overflowWrap: 'anywhere', width: '100%' }}>
+                                <Tag color="error">{entry.context || 'app error'}</Tag>
+                                <small>{new Date(entry.at).toLocaleString()}</small>
                                 <br />
-                                <Tag color="warning">{entry.likelyCause}</Tag>
-                              </>
-                            )}
-                            {entry.error && (
-                              <>
-                                <br />
-                                <Tag color="error">{entry.error}</Tag>
-                              </>
-                            )}
-                            {entry.errorDetails && <DevJson>{entry.errorDetails}</DevJson>}
-                          </div>
-                        </AntList.Item>
-                      )}
-                    />
-                  ),
-                },
-              ]}
-            />
+                                <b>{entry.summary}</b>
+                                {entry.details != null && (
+                                  <DevJson>{devJson(entry.details)}</DevJson>
+                                )}
+                                {entry.callSite && <DevJson>{entry.callSite}</DevJson>}
+                              </div>
+                            </AntList.Item>
+                          )}
+                        />
+                      ),
+                    },
+                  ]}
+                />
+              )}
+            </>
           )}
         </>
       )}

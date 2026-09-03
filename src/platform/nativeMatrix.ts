@@ -7,6 +7,11 @@ type NativeMatrixAccountStatus = {
   state: 'legacy' | 'staged' | 'adopting' | 'validating' | 'ready' | 'error'
   deviceId?: string
   error?: string | null
+  startedAt?: number
+  completedAt?: number
+  runtimeActive?: boolean
+  syncState?: 'idle' | 'running' | 'terminated' | 'error' | 'offline' | null
+  watchedRooms?: number
 }
 
 export type NativeMatrixStatus = {
@@ -35,6 +40,10 @@ declare global {
 
 export function isAndroidNativeMatrix() {
   return !!window.__TAURI_INTERNALS__?.invoke && /Android/i.test(navigator.userAgent)
+}
+
+export function isRetryableAndroidVerifierError(error: string | null | undefined) {
+  return !!error && /InvalidCertificate\s*\(\s*Revoked\s*\)/i.test(error)
 }
 
 async function command<T>(action: string, payload: Record<string, unknown> = {}) {

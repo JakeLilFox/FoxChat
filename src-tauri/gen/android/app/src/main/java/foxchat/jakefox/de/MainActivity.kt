@@ -35,8 +35,9 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    val appContext = applicationContext
     NativeCryptoBridge.webViewActive = true
-    NativeMatrixClientManager.bootstrap(applicationContext)
+    NativeMatrixClientManager.bootstrap(appContext)
     getSharedPreferences("foxchat_boot_diagnostics", Context.MODE_PRIVATE).edit()
       .putString("stage", "MainActivity.onCreate entered")
       .putLong("at", System.currentTimeMillis()).commit()
@@ -49,15 +50,23 @@ class MainActivity : TauriActivity() {
     NativeCryptoBridge.status = {
       NativeNotificationCrypto.status(applicationContext)
         .put("matrixClient", NativeMatrixClientManager.status(applicationContext))
+        .put("clientErrors", NativeClientLogStore.entries(applicationContext))
         .toString()
     }
     NativeCryptoBridge.sessionTokens = { userId ->
       (NativeMatrixClientManager.sessionTokens(applicationContext, userId)
         ?: NativeNotificationCrypto.nativeSessionTokens(applicationContext, userId)).toString()
     }
+    NativeCryptoBridge.recordError = { source, error ->
+      NativeClientLogStore.recordNative(appContext, source, error)
+    }
     NativeCryptoBridge.matrix = { action, rawPayload ->
       val payload = JSONObject(rawPayload)
       when (action) {
+        "logClientError" -> {
+          NativeClientLogStore.record(applicationContext, rawPayload)
+          JSONObject().put("ok", true).toString()
+        }
         "status" -> NativeMatrixClientManager.status(applicationContext).toString()
         "login" -> NativeMatrixClientManager.loginNewAccount(
           applicationContext,

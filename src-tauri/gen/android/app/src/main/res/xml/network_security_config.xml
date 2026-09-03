@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <!--
+      Android's rustls platform verifier currently needs Let's Encrypt's HTTP certificate
+      information endpoints to validate post-OCSP certificates. Matrix traffic remains HTTPS.
+      Remove this exception when rustls-platform-verifier#221 is fixed in the bundled SDK.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">lencr.org</domain>
+    </domain-config>
+</network-security-config>

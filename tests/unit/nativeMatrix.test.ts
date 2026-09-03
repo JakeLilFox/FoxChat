@@ -6,6 +6,7 @@ import {
   adoptFreshAndroidMatrixSession,
   decryptEventWithNativeMatrix,
   installNativeMatrixTransport,
+  isRetryableAndroidVerifierError,
   nativeMatrixLogin,
   nativeMatrixReady,
 } from '../../src/platform/nativeMatrix'
@@ -23,6 +24,17 @@ describe('Android native Matrix bridge', () => {
     })
     window.__TAURI_INTERNALS__ = { invoke: invoke as never }
   }
+
+  it('only retries the known Android false-revocation migration failure', () => {
+    expect(isRetryableAndroidVerifierError('InvalidCertificate(Revoked)')).toBe(true)
+    expect(
+      isRetryableAndroidVerifierError(
+        'client creation failed: InvalidCertificate ( Revoked ) while discovering homeserver',
+      ),
+    ).toBe(true)
+    expect(isRetryableAndroidVerifierError('InvalidCertificate(Expired)')).toBe(false)
+    expect(isRetryableAndroidVerifierError('M_UNKNOWN_TOKEN')).toBe(false)
+  })
 
   it('only enables observer mode for a transactionally ready account', async () => {
     const invoke = vi.fn().mockResolvedValue({

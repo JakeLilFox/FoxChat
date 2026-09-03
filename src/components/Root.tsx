@@ -12,6 +12,7 @@ import { listenForAndroidResume, syncNativeBackground } from '../platform/native
 import { startAutomationApiIntegration } from '../platform/automationApi'
 import { applyCliLogin, fetchCliLoginOptions } from '../platform/cliBootstrap'
 import { listenForDesktopExternalLinks } from '../platform/externalLinks'
+import { ErrorLoggingBridge } from './ErrorLoggingBridge'
 
 export function Root() {
   const [mode, setMode] = useState<ThemeMode>(
@@ -91,6 +92,7 @@ export function Root() {
       }}
     >
       <AntApp>
+        <ErrorLoggingBridge />
         <ThemeProvider theme={themes[mode]}>
           <GlobalStyle />
           {auth === 'loading' || auth === 'syncing' ? (
