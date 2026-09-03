@@ -53,7 +53,7 @@ export const Shell = styled.div<{ $detailsOpen?: boolean; $mobileLayout?: boolea
     padding-right: 0;
   }
   @media (max-width: 760px) {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: ${(p) => (p.$mobileLayout ? 'minmax(0, 1fr)' : '310px minmax(0, 1fr)')};
   }
   html.foxchat-android & {
     padding-top: var(--foxchat-top-inset, 0px);
@@ -80,9 +80,6 @@ export const Sidebar = styled.aside<{ $mobile?: boolean }>`
   min-height: 0;
   height: 100%;
   overflow: hidden;
-  @media (max-width: 760px) {
-    display: ${(p) => (p.$mobile ? 'flex' : 'none')};
-  }
 `
 export const SideHeader = styled.div`
   height: 76px;
@@ -3409,6 +3406,9 @@ export const MobileMenu = styled(IconBtn)`
   }
   [data-mobile-layout='true'] & {
     display: inline-flex;
+  }
+  html.foxchat-android [data-mobile-layout='false'] & {
+    display: none;
   }
 `
 export const PresenceWrap = styled.span`

@@ -112,7 +112,8 @@ export function ClientApp({
   const wideDetailsViewport = useMediaQuery('(min-width: 1101px)')
   const narrowViewport = useMediaQuery(`(max-width: ${MOBILE_LAYOUT_BREAKPOINT}px)`)
   const narrowHeightViewport = useMediaQuery(`(max-height: ${MOBILE_LAYOUT_BREAKPOINT}px)`)
-  const mobileLayout = shouldUseMobileLayout(narrowViewport, isAndroidApp(), narrowHeightViewport)
+  const androidApp = isAndroidApp()
+  const mobileLayout = shouldUseMobileLayout(narrowViewport, androidApp, narrowHeightViewport)
   const desktopDetails = wideDetailsViewport && !mobileLayout
   const [desktopInfo, setDesktopInfo] = useState(desktopDetailsOpen)
   const [welcomeOpen, setWelcomeOpen] = useState(() => !!justRegistered)
@@ -147,6 +148,12 @@ export function ClientApp({
   mobileRef.current = mobile
   const mobileLayoutRef = useRef(mobileLayout)
   mobileLayoutRef.current = mobileLayout
+  useEffect(() => {
+    if (!androidApp || mobileLayout || !mobileRef.current) return
+    mobileRef.current = false
+    setMobile(false)
+    setDrawerOpenUrl(false, true)
+  }, [androidApp, mobileLayout])
   const [info, setInfo] = useState(false)
   const [callViewOpen, setCallViewOpen] = useState(false)
   const [unreadInbox, setUnreadInbox] = useState(unreadFromUrl)

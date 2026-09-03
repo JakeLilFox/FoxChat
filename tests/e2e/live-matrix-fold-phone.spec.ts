@@ -1,8 +1,9 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page, type TestInfo } from '@playwright/test'
 import { liveMatrixConfig } from './support/env'
 import { cleanTestRoom, storedSessions, type StoredSession } from './support/matrix-api'
 import { retryMutatingRequest } from './support/retry'
 import { expectNoHorizontalOverflow, openRoomActions, signIn } from './support/ui'
+import { MOBILE_LAYOUT_BREAKPOINT } from '../../src/lib/responsiveLayout'
 
 const live = liveMatrixConfig()
 
@@ -16,6 +17,12 @@ const UNFOLDED = { width: 884, height: 1104 }
 const ANDROID_USER_AGENT =
   'Mozilla/5.0 (Linux; Android 14; Pixel Fold) AppleWebKit/537.36 (KHTML, like Gecko) ' +
   'Chrome/125.0.0.0 Mobile Safari/537.36'
+
+async function captureLayout(page: Page, testInfo: TestInfo, name: string) {
+  const path = testInfo.outputPath(`${name}.png`)
+  await page.screenshot({ path, animations: 'disabled' })
+  await testInfo.attach(name, { path, contentType: 'image/png' })
+}
 
 test.describe('foldable phone layout', () => {
   test.describe.configure({ mode: 'serial' })
@@ -43,6 +50,26 @@ test.describe('foldable phone layout', () => {
         userAgent: ANDROID_USER_AGENT,
         isMobile: true,
         hasTouch: true,
+      })
+      // Some Android WebViews can update CSS media queries before the JS MediaQueryList used by
+      // React catches up. The final step deliberately freezes the JS layout decision as wide while
+      // crossing the CSS breakpoint, reproducing the old empty/transparent sidebar column.
+      await context.addInitScript(() => {
+        const originalMatchMedia = window.matchMedia.bind(window)
+        const responsiveQueries = new Set(['(max-width: 760px)', '(max-height: 760px)'])
+        const testWindow = window as typeof window & { __foxchatE2EForceWideLayout?: boolean }
+        testWindow.__foxchatE2EForceWideLayout = false
+        window.matchMedia = ((query: string) => {
+          const media = originalMatchMedia(query)
+          if (!responsiveQueries.has(query)) return media
+          return new Proxy(media, {
+            get(target, property) {
+              if (property === 'matches' && testWindow.__foxchatE2EForceWideLayout) return false
+              const value = Reflect.get(target, property, target) as unknown
+              return typeof value === 'function' ? value.bind(target) : value
+            },
+          })
+        }) as typeof window.matchMedia
       })
       // This is a layout test, but Android authentication is native-only. Emulate the
       // native login boundary while reporting no migrated accounts so the remainder
@@ -74,18 +101,13 @@ test.describe('foldable phone layout', () => {
             const enteredUrl = /^https?:\/\//i.test(payload.homeserver)
               ? payload.homeserver
               : `https://${payload.homeserver}`
-            const wellKnownResponse = await fetch(
-              new URL('/.well-known/matrix/client', enteredUrl),
-            )
+            const wellKnownResponse = await fetch(new URL('/.well-known/matrix/client', enteredUrl))
             const wellKnown = wellKnownResponse.ok
               ? ((await wellKnownResponse.json()) as {
                   'm.homeserver'?: { base_url?: string }
                 })
               : undefined
-            const baseUrl = (wellKnown?.['m.homeserver']?.base_url ?? enteredUrl).replace(
-              /\/$/,
-              '',
-            )
+            const baseUrl = (wellKnown?.['m.homeserver']?.base_url ?? enteredUrl).replace(/\/$/, '')
             const response = await fetch(`${baseUrl}/_matrix/client/v3/login`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -153,8 +175,16 @@ test.describe('foldable phone layout', () => {
         await expect(sidebar.getByTestId('room-row').filter({ hasText: roomName })).toBeVisible()
         const box = await sidebar.boundingBox()
         expect(box?.width ?? 0).toBeGreaterThan(300)
+        const appearance = await sidebar.evaluate((element) => {
+          const style = getComputedStyle(element)
+          return { display: style.display, background: style.backgroundColor }
+        })
+        expect(appearance.display).toBe('flex')
+        expect(appearance.background).not.toBe('rgba(0, 0, 0, 0)')
         await expect(page!.getByRole('button', { name: 'Open room list' })).toBeHidden()
         await expectNoHorizontalOverflow(page!)
+        await expect(page!.locator('.ant-message-notice')).toHaveCount(0, { timeout: 10_000 })
+        await captureLayout(page!, testInfo, 'android-unfolded-persistent-sidebar')
       })
 
       await test.step('folding closed switches to the mobile drawer', async () => {
@@ -167,6 +197,7 @@ test.describe('foldable phone layout', () => {
         const menu = page!.getByRole('button', { name: 'Open room list' })
         await expect(menu).toBeVisible()
         await expectNoHorizontalOverflow(page!)
+        await captureLayout(page!, testInfo, 'android-folded-drawer-closed')
 
         await menu.click()
         const drawerSidebar = page!.getByTestId('room-sidebar').last()
@@ -174,10 +205,8 @@ test.describe('foldable phone layout', () => {
         await expect(
           drawerSidebar.getByTestId('room-row').filter({ hasText: roomName }),
         ).toBeVisible()
-        await page!
-          .locator('.ant-drawer-mask')
-          .last()
-          .click({ position: { x: FOLDED.width - 20, y: 20 } })
+        await captureLayout(page!, testInfo, 'android-folded-drawer-open')
+        await page!.keyboard.press('Escape')
         await expect(page!.getByTestId('room-sidebar')).toHaveCount(0)
       })
 
@@ -192,6 +221,8 @@ test.describe('foldable phone layout', () => {
       })
 
       await test.step('unfolding again brings the persistent sidebar back', async () => {
+        await page!.getByRole('button', { name: 'Open room list' }).click()
+        await expect(page!.getByTestId('room-sidebar').last()).toBeVisible()
         await page!.setViewportSize(UNFOLDED)
         await expect(page!.locator('[data-mobile-layout]')).toHaveAttribute(
           'data-mobile-layout',
@@ -202,6 +233,33 @@ test.describe('foldable phone layout', () => {
         await expect(sidebar.getByTestId('room-row').filter({ hasText: roomName })).toBeVisible()
         await expect(page!.getByRole('button', { name: 'Open room list' })).toBeHidden()
         await expectNoHorizontalOverflow(page!)
+        await captureLayout(page!, testInfo, 'android-unfolded-again-persistent-sidebar')
+      })
+
+      await test.step('Android CSS and JS viewport disagreement cannot blank the sidebar', async () => {
+        await page!.evaluate(() => {
+          ;(
+            window as typeof window & { __foxchatE2EForceWideLayout?: boolean }
+          ).__foxchatE2EForceWideLayout = true
+        })
+        await page!.setViewportSize({ width: MOBILE_LAYOUT_BREAKPOINT, height: UNFOLDED.height })
+        await expect(page!.locator('[data-mobile-layout]')).toHaveAttribute(
+          'data-mobile-layout',
+          'false',
+        )
+        const sidebar = page!.getByTestId('room-sidebar')
+        await expect(sidebar).toHaveCount(1)
+        await expect(sidebar).toBeVisible()
+        await expect(sidebar.getByTestId('room-row').filter({ hasText: roomName })).toBeVisible()
+        await expect(page!.getByRole('button', { name: 'Open room list' })).toBeHidden()
+        const appearance = await sidebar.evaluate((element) => {
+          const style = getComputedStyle(element)
+          return { display: style.display, background: style.backgroundColor }
+        })
+        expect(appearance.display).toBe('flex')
+        expect(appearance.background).not.toBe('rgba(0, 0, 0, 0)')
+        await expectNoHorizontalOverflow(page!)
+        await captureLayout(page!, testInfo, 'android-webview-breakpoint-disagreement')
       })
     } catch (error) {
       journeyError = error
