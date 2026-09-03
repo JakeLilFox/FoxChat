@@ -25,10 +25,13 @@
 -keep class com.sun.jna.** { *; }
 -keep interface com.sun.jna.** { *; }
 
-# Matrix Rust Crypto's generated UniFFI/JNA bindings cross the native boundary.
-# Preserve their class and member names for the same reason.
--keep class org.matrix.rustcomponents.sdk.crypto.** { *; }
--keep class uniffi.matrix_sdk_crypto.** { *; }
+# Matrix Rust SDK's generated UniFFI/JNA bindings cross the native boundary.
+# This must cover the full SDK, not only the legacy crypto package: the full-client
+# bindings place JNA structures such as UniffiRustCallStatus directly in
+# org.matrix.rustcomponents.sdk. R8 removing or renaming their fields makes the
+# release app crash before MainActivity is created.
+-keep class org.matrix.rustcomponents.sdk.** { *; }
+-keep class uniffi.** { *; }
 
 # JNA contains optional desktop AWT helpers which are unreachable on Android.
 -dontwarn java.awt.Component
