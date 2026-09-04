@@ -80,12 +80,10 @@ import {
   adoptFreshAndroidMatrixSession,
   decryptEventWithNativeMatrix,
   isAndroidNativeMatrix,
-  isAndroidMigrationRetryAvailable,
   installNativeMatrixTransport,
   nativeLogout,
   nativeMatrixLogin,
   nativeMatrixReady,
-  nativeMatrixStatus,
   nativeRecover,
   nativeWatchRoom,
 } from '../platform/nativeMatrix'
@@ -972,31 +970,23 @@ export class MatrixClientService {
     this.persistSession(session)
   }
 
-  async retryNativeMigration(userId: string) {
+  retryNativeMigration(
+    userId: string,
+    deviceId?: string,
+    reloadPage = () => window.location.reload(),
+  ) {
     if (!isAndroidNativeMatrix()) throw new Error('Native Matrix migration is Android-only')
-    const status = await nativeMatrixStatus()
-    const nativeAccount = status?.accounts.find((account) => account.userId === userId)
-    if (!nativeAccount) throw new Error(`${userId}: No native migration transaction exists`)
-    if (!isAndroidMigrationRetryAvailable(nativeAccount)) {
-      throw new Error(
-        `${userId}: This migration is not eligible for an automatic safe retry${nativeAccount.error ? `: ${nativeAccount.error}` : ''}`,
-      )
-    }
-
-    const running = this.availableAccounts().find((account) => account.userId === userId)
-    if (running) {
-      // Use the normal guarded queue so a push-registration sync cannot race the manual retry.
-      scheduleNativeCryptoSync(running.client, 0, true)
-      return
-    }
-
-    // Loading the account as the selected WebView session reconstructs its preserved legacy
-    // crypto owner. Normal startup then exports a fresh transaction and performs the versioned
-    // native retry. No login or new Matrix device is involved.
-    const session = this.savedAccounts().find((saved) => saved.userId === userId)
+    // Never retry through a secondary service merely because it has allocated a MatrixClient:
+    // its crypto initialization may still be pending, making the queued export a silent no-op.
+    // Selecting and reloading reconstructs the preserved legacy crypto owner as the primary
+    // client. Normal startup then performs the version-gated native retry without a new login or
+    // Matrix device.
+    const session = this.savedAccounts().find(
+      (saved) => saved.userId === userId && (!deviceId || saved.deviceId === deviceId),
+    )
     if (!session) throw new Error(`${userId}: The preserved WebView session is unavailable`)
     this.selectAccount(this.accountId(session))
-    window.location.reload()
+    reloadPage()
   }
 
   async logoutAccount(accountId: string) {

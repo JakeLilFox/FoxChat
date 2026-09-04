@@ -861,6 +861,10 @@ object NativeMatrixClientManager {
                         "native-matrix:sync-state:$userId",
                         IllegalStateException("Native Matrix sync entered $update"),
                     )
+                    // A READY account must recover without waiting for an Activity/WebView
+                    // resume. ensureRunning is non-blocking and its per-account guard prevents
+                    // ERROR -> TERMINATED callbacks from creating competing runtimes.
+                    ensureRunning(context, "sync-state-${update.name.lowercase()}")
                 }
             }
         })

@@ -252,12 +252,10 @@ export function PushReceiverSettings() {
       setHealthChecking(false)
     }
   }
-  const retryMigration = async (userId: string) => {
+  const retryMigration = async (userId: string, deviceId?: string) => {
     setRetryingMigration(userId)
     try {
-      await matrixService.retryNativeMigration(userId)
-      await loadCryptoStatus()
-      message.success(`Migration retry started for ${userId}`)
+      matrixService.retryNativeMigration(userId, deviceId)
     } catch (error) {
       reportClientError(
         'native-matrix-migration-retry',
@@ -477,7 +475,9 @@ export function PushReceiverSettings() {
                                     retryingMigration !== undefined &&
                                     retryingMigration !== account.userId
                                   }
-                                  onClick={() => void retryMigration(account.userId)}
+                                  onClick={() =>
+                                    void retryMigration(account.userId, account.deviceId)
+                                  }
                                 >
                                   Retry migration
                                 </Button>,
