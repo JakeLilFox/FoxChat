@@ -75,6 +75,7 @@ import {
 } from '../lib/emojiData'
 import { downloadAndDecryptMedia } from '../lib/mediaDecrypt'
 import { gifItemsBySlug, pickGifFile, triggerGifShare, type KlipyGif } from '../lib/gifs'
+import { reportClientError } from '../platform/errorLogging'
 import {
   adoptFreshAndroidMatrixSession,
   decryptEventWithNativeMatrix,
@@ -235,6 +236,31 @@ const IMAGE_PACK_ORDER_EVENT = 'chat.foxchat.image_pack_order'
 export const IMAGE_PACK_LIST_TTL_MS = 60 * 60 * 1000
 const REACTION_PARENT_CACHE_LIMIT = 2_000
 const PRESENCE_IDLE_MS = 5 * 60 * 1000
+export const ANDROID_ROOM_SNAPSHOT_TIMEOUT_MS = 20_000
+
+export async function fetchAndroidRoomSnapshot(
+  url: string,
+  accessToken: string,
+  timeoutMs = ANDROID_ROOM_SNAPSHOT_TIMEOUT_MS,
+  fetcher: typeof fetch = fetch,
+) {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetcher(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(`Android room snapshot failed with HTTP ${response.status}`)
+    return (await response.json()) as { next_batch?: string }
+  } catch (error) {
+    if (controller.signal.aborted)
+      throw new Error(`Android room snapshot timed out after ${timeoutMs} ms`, { cause: error })
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
 const normalizedPowerLevel = (value: unknown) =>
   value === null
     ? Number.MAX_SAFE_INTEGER
@@ -1243,7 +1269,18 @@ export class MatrixClientService {
     const initialSync = this.waitForInitialSync(client)
     await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true })
     await initialSync
-    if (nativeObserverMode) await this.hydrateNativeRooms(client)
+    if (nativeObserverMode) {
+      // Rust is already the authoritative live client. The HTTP snapshot only
+      // enriches the WebView's transient Room models, so it must never hold the
+      // entire app on the startup screen when a homeserver stalls.
+      void this.hydrateNativeRooms(client).catch((error) => {
+        reportClientError(
+          'native-matrix-room-hydration',
+          `Could not hydrate Android rooms for ${session.userId}`,
+          error,
+        )
+      })
+    }
     for (const room of client.getRooms()) {
       this.trackRoomOwner(client, room)
       if (nativeObserverMode) {
@@ -1258,7 +1295,19 @@ export class MatrixClientService {
       if (!nativeObserverMode) scheduleNativeCryptoSync(client, 0, true)
       void registerMatrixPush(client).catch(() => undefined)
     }
-    if (!this.secondary && this.combinedAccountsEnabled()) await this.startSecondaryAccounts()
+    if (!this.secondary && this.combinedAccountsEnabled()) {
+      if (nativeObserverMode) {
+        void this.startSecondaryAccounts().catch((error) =>
+          reportClientError(
+            'secondary-account-startup',
+            'Could not start background Matrix accounts',
+            error,
+          ),
+        )
+      } else {
+        await this.startSecondaryAccounts()
+      }
+    }
     if (!this.secondary && !this.ephemeral) this.startPresenceTracking()
     return client
   }
@@ -4513,9 +4562,7 @@ export class MatrixClientService {
         },
       }
       const url = `${client.getHomeserverUrl().replace(/\/$/, '')}/_matrix/client/v3/sync?timeout=0&filter=${encodeURIComponent(JSON.stringify(filter))}&org.matrix.msc4222.use_state_after=true`
-      const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
-      if (!response.ok) throw new Error(`Android room snapshot failed with HTTP ${response.status}`)
-      const data = (await response.json()) as { next_batch?: string }
+      const data = await fetchAndroidRoomSnapshot(url, accessToken)
       const syncApi = new SyncApi(client, undefined, { logger })
       await (
         syncApi as unknown as {
