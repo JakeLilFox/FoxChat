@@ -80,10 +80,12 @@ import {
   adoptFreshAndroidMatrixSession,
   decryptEventWithNativeMatrix,
   isAndroidNativeMatrix,
+  isAndroidMigrationRetryAvailable,
   installNativeMatrixTransport,
   nativeLogout,
   nativeMatrixLogin,
   nativeMatrixReady,
+  nativeMatrixStatus,
   nativeRecover,
   nativeWatchRoom,
 } from '../platform/nativeMatrix'
@@ -968,6 +970,33 @@ export class MatrixClientService {
     const session = this.savedAccounts().find((saved) => this.accountId(saved) === accountId)
     if (!session) throw new Error('Saved account not found')
     this.persistSession(session)
+  }
+
+  async retryNativeMigration(userId: string) {
+    if (!isAndroidNativeMatrix()) throw new Error('Native Matrix migration is Android-only')
+    const status = await nativeMatrixStatus()
+    const nativeAccount = status?.accounts.find((account) => account.userId === userId)
+    if (!nativeAccount) throw new Error(`${userId}: No native migration transaction exists`)
+    if (!isAndroidMigrationRetryAvailable(nativeAccount)) {
+      throw new Error(
+        `${userId}: This migration is not eligible for an automatic safe retry${nativeAccount.error ? `: ${nativeAccount.error}` : ''}`,
+      )
+    }
+
+    const running = this.availableAccounts().find((account) => account.userId === userId)
+    if (running) {
+      // Use the normal guarded queue so a push-registration sync cannot race the manual retry.
+      scheduleNativeCryptoSync(running.client, 0, true)
+      return
+    }
+
+    // Loading the account as the selected WebView session reconstructs its preserved legacy
+    // crypto owner. Normal startup then exports a fresh transaction and performs the versioned
+    // native retry. No login or new Matrix device is involved.
+    const session = this.savedAccounts().find((saved) => saved.userId === userId)
+    if (!session) throw new Error(`${userId}: The preserved WebView session is unavailable`)
+    this.selectAccount(this.accountId(session))
+    window.location.reload()
   }
 
   async logoutAccount(accountId: string) {

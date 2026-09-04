@@ -6,6 +6,7 @@ import {
   adoptFreshAndroidMatrixSession,
   decryptEventWithNativeMatrix,
   installNativeMatrixTransport,
+  isAndroidMigrationRetryAvailable,
   isRetryableAndroidVerifierError,
   nativeMatrixLogin,
   nativeMatrixReady,
@@ -39,6 +40,23 @@ describe('Android native Matrix bridge', () => {
     ).toBe(true)
     expect(isRetryableAndroidVerifierError('InvalidCertificate(Expired)')).toBe(false)
     expect(isRetryableAndroidVerifierError('M_UNKNOWN_TOKEN')).toBe(false)
+  })
+
+  it('honors the native transaction version gate before retrying a migration', () => {
+    const oldFailure = {
+      state: 'error' as const,
+      error: 'NotificationStatus$EventFilteredOut',
+    }
+    expect(isAndroidMigrationRetryAvailable(oldFailure)).toBe(true)
+    expect(isAndroidMigrationRetryAvailable({ ...oldFailure, retryAvailable: true })).toBe(true)
+    expect(isAndroidMigrationRetryAvailable({ ...oldFailure, retryAvailable: false })).toBe(false)
+    expect(
+      isAndroidMigrationRetryAvailable({
+        state: 'ready',
+        error: 'NotificationStatus$EventFilteredOut',
+        retryAvailable: true,
+      }),
+    ).toBe(false)
   })
 
   it('only enables observer mode for a transactionally ready account', async () => {

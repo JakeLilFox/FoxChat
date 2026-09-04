@@ -1,8 +1,9 @@
 import { EventType, RoomType, type MatrixClient, type MatrixEvent } from 'matrix-js-sdk'
 import { timelineAppearanceSettings } from '../lib/constants'
+import { reportClientError } from './errorLogging'
 import {
   adoptExistingAndroidMatrixDevice,
-  isRetryableAndroidVerifierError,
+  isAndroidMigrationRetryAvailable,
   nativeMatrixStatus,
 } from './nativeMatrix'
 
@@ -84,6 +85,11 @@ async function runNativeCryptoSync(client: MatrixClient) {
       console.warn('[push] Could not sync native notification crypto', error)
       const attempt = (cryptoSyncRetries.get(client) ?? 0) + 1
       cryptoSyncRetries.set(client, attempt)
+      reportClientError(
+        'native-crypto-sync',
+        `Could not synchronize or migrate ${client.getUserId() || 'the Matrix account'} (attempt ${attempt})`,
+        error,
+      )
       if (attempt <= 3)
         scheduleNativeCryptoSync(client, Math.min(30_000, 5_000 * 2 ** (attempt - 1)))
       return
@@ -216,7 +222,7 @@ async function adoptAndroidMatrixDeviceOnce(client: MatrixClient) {
   const status = await nativeMatrixStatus()
   const account = status?.accounts.find((candidate) => candidate.userId === userId)
   if (account?.state === 'ready') return false
-  if (account?.state === 'error' && !isRetryableAndroidVerifierError(account.error)) {
+  if (account?.state === 'error' && !isAndroidMigrationRetryAvailable(account)) {
     throw new Error(`${userId}: Native Matrix adoption failed: ${account.error || 'unknown error'}`)
   }
   if (account?.state === 'error')

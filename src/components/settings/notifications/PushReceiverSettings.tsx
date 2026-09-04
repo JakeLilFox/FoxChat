@@ -16,7 +16,10 @@ import { matrixService } from '../../../matrix/MatrixClientService'
 import { registerMatrixPush } from '../../../platform/push'
 import { roomIdFromUrl } from '../../../lib/urlState'
 import { RoomType } from 'matrix-js-sdk'
-import { isAndroidNativeMatrix } from '../../../platform/nativeMatrix'
+import {
+  isAndroidMigrationRetryAvailable,
+  isAndroidNativeMatrix,
+} from '../../../platform/nativeMatrix'
 import { reportClientError } from '../../../platform/errorLogging'
 
 type NativeCryptoAccountStatus = {
@@ -67,6 +70,8 @@ type NativeCryptoStatus = {
       startedAt?: number
       completedAt?: number
       error?: string | null
+      migrationVersion?: number
+      retryAvailable?: boolean
       runtimeActive?: boolean
       syncState?: 'idle' | 'running' | 'terminated' | 'error' | 'offline' | null
       watchedRooms?: number
@@ -134,6 +139,7 @@ export function PushReceiverSettings() {
   const [cryptoStatus, setCryptoStatus] = useState<NativeCryptoStatus>()
   const [healthChecking, setHealthChecking] = useState(false)
   const [autoTesting, setAutoTesting] = useState(false)
+  const [retryingMigration, setRetryingMigration] = useState<string>()
   const loadCryptoStatus = useCallback(async () => {
     const result = await nativeInvoke<NativeCryptoStatus>('plugin:remote-push|native_crypto_status')
     setCryptoStatus(result)
@@ -244,6 +250,26 @@ export function PushReceiverSettings() {
       })
     } finally {
       setHealthChecking(false)
+    }
+  }
+  const retryMigration = async (userId: string) => {
+    setRetryingMigration(userId)
+    try {
+      await matrixService.retryNativeMigration(userId)
+      await loadCryptoStatus()
+      message.success(`Migration retry started for ${userId}`)
+    } catch (error) {
+      reportClientError(
+        'native-matrix-migration-retry',
+        `Could not retry Android Matrix migration for ${userId}`,
+        error,
+      )
+      message.error({
+        content: errorMessage(error, `Could not retry migration for ${userId}`),
+        duration: 12,
+      })
+    } finally {
+      setRetryingMigration(undefined)
     }
   }
   const copyCryptoDiagnostics = async () => {
@@ -438,7 +464,27 @@ export function PushReceiverSettings() {
                       account.runtimeActive !== false &&
                       (account.syncState == null || account.syncState === 'running')
                     return (
-                      <AntList.Item>
+                      <AntList.Item
+                        actions={
+                          isAndroidMigrationRetryAvailable(account)
+                            ? [
+                                <Button
+                                  key="retry-migration"
+                                  type="primary"
+                                  size="small"
+                                  loading={retryingMigration === account.userId}
+                                  disabled={
+                                    retryingMigration !== undefined &&
+                                    retryingMigration !== account.userId
+                                  }
+                                  onClick={() => void retryMigration(account.userId)}
+                                >
+                                  Retry migration
+                                </Button>,
+                              ]
+                            : undefined
+                        }
+                      >
                         <div style={{ overflowWrap: 'anywhere', width: '100%' }}>
                           <b>{account.userId}</b>{' '}
                           <Tag

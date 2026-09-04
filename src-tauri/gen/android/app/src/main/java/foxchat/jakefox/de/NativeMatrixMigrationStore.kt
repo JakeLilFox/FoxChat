@@ -17,6 +17,11 @@ import android.util.Base64
 object NativeMatrixMigrationStore {
     private const val PREFS = "foxchat_native_matrix"
     private const val ACCOUNTS = "accounts"
+    // Version 1 replaces NotificationClient-based cut-over validation with an unfiltered
+    // timeline lookup. Failed transactions from older builds may be retried exactly once with
+    // that fix; failures produced by this implementation remain terminal until another explicit
+    // migration implementation is shipped.
+    private const val CURRENT_MIGRATION_VERSION = 1
 
     enum class State(val wireName: String) {
         LEGACY("legacy"),
@@ -34,6 +39,7 @@ object NativeMatrixMigrationStore {
         val secretsBundle: String?,
         val backupInfo: String?,
         val storePassphrase: String,
+        val migrationVersion: Int,
         val startedAt: Long,
         val completedAt: Long,
         val error: String?,
@@ -52,6 +58,7 @@ object NativeMatrixMigrationStore {
         val editor = prefs.edit()
             .putString("$userId.session", session.toString())
             .putString("$userId.state", State.STAGED.wireName)
+            .putInt("$userId.migrationVersion", CURRENT_MIGRATION_VERSION)
             .putLong("$userId.startedAt", System.currentTimeMillis())
             .remove("$userId.completedAt")
             .remove("$userId.error")
@@ -108,6 +115,7 @@ object NativeMatrixMigrationStore {
             secretsBundle = prefs.getString("$userId.secretsBundle", null),
             backupInfo = prefs.getString("$userId.backupInfo", null),
             storePassphrase = prefs.getString("$userId.storePassphrase", null).orEmpty(),
+            migrationVersion = prefs.getInt("$userId.migrationVersion", 0),
             startedAt = prefs.getLong("$userId.startedAt", 0L),
             completedAt = prefs.getLong("$userId.completedAt", 0L),
             error = prefs.getString("$userId.error", null),
@@ -122,6 +130,14 @@ object NativeMatrixMigrationStore {
     fun isReady(context: Context, userId: String): Boolean =
         account(context, userId)?.state == State.READY
 
+    fun retryAvailable(account: StoredAccount): Boolean {
+        if (account.state != State.ERROR || account.migrationVersion >= CURRENT_MIGRATION_VERSION)
+            return false
+        val error = account.error.orEmpty()
+        return Regex("InvalidCertificate\\s*\\(\\s*Revoked\\s*\\)", RegexOption.IGNORE_CASE)
+            .containsMatchIn(error) || error.contains("EventFilteredOut", ignoreCase = true)
+    }
+
     @Synchronized
     fun removeAccount(context: Context, userId: String) {
         val prefs = preferences(context)
@@ -132,6 +148,7 @@ object NativeMatrixMigrationStore {
             .remove("$userId.session")
             .remove("$userId.state")
             .remove("$userId.storePassphrase")
+            .remove("$userId.migrationVersion")
             .remove("$userId.startedAt")
             .remove("$userId.completedAt")
             .remove("$userId.error")
@@ -148,6 +165,8 @@ object NativeMatrixMigrationStore {
                 .put("userId", account.userId)
                 .put("state", account.state.wireName)
                 .put("deviceId", account.session?.optString("deviceId"))
+                .put("migrationVersion", account.migrationVersion)
+                .put("retryAvailable", retryAvailable(account))
                 .put("startedAt", account.startedAt)
                 .put("completedAt", account.completedAt)
                 .put("error", account.error)

@@ -2,11 +2,13 @@ import { EventType, MatrixEventEvent, type MatrixClient, type MatrixEvent } from
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 
-type NativeMatrixAccountStatus = {
+export type NativeMatrixAccountStatus = {
   userId: string
   state: 'legacy' | 'staged' | 'adopting' | 'validating' | 'ready' | 'error'
   deviceId?: string
   error?: string | null
+  migrationVersion?: number
+  retryAvailable?: boolean
   startedAt?: number
   completedAt?: number
   runtimeActive?: boolean
@@ -47,6 +49,15 @@ export function isRetryableAndroidVerifierError(error: string | null | undefined
     !!error &&
     (/InvalidCertificate\s*\(\s*Revoked\s*\)/i.test(error) || /EventFilteredOut/i.test(error))
   )
+}
+
+export function isAndroidMigrationRetryAvailable(
+  account: Pick<NativeMatrixAccountStatus, 'state' | 'error' | 'retryAvailable'>,
+) {
+  if (account.state !== 'error') return false
+  // Older Android bridges do not expose retryAvailable. Keep the narrow error classifier as a
+  // compatibility fallback; new bridges version-gate retries in durable native storage.
+  return account.retryAvailable ?? isRetryableAndroidVerifierError(account.error)
 }
 
 async function command<T>(action: string, payload: Record<string, unknown> = {}) {
