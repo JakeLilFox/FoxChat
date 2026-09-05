@@ -198,6 +198,11 @@ class PushNotificationPlugin(private val activity: Activity) : Plugin(activity) 
         trigger("native-matrix-rooms-changed", data)
     }
 
+    /** Publishes retained verification state from the process-wide Rust client. */
+    fun handleNativeMatrixVerification(event: JSONObject) {
+        trigger("native-matrix-verification", JSObject(event.toString()))
+    }
+
     fun handleMessage(message: RemoteMessage) {
         val data = JSObject()
         message.notification?.let {

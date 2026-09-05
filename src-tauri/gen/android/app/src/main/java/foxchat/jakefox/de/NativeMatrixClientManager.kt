@@ -22,10 +22,13 @@ import org.matrix.rustcomponents.sdk.Client
 import org.matrix.rustcomponents.sdk.ClientBuilder
 import org.matrix.rustcomponents.sdk.ClientSessionDelegate
 import org.matrix.rustcomponents.sdk.DateDividerMode
+import org.matrix.rustcomponents.sdk.EnableRecoveryProgress
+import org.matrix.rustcomponents.sdk.EnableRecoveryProgressListener
 import org.matrix.rustcomponents.sdk.LogLevel
 import org.matrix.rustcomponents.sdk.NotificationClient
 import org.matrix.rustcomponents.sdk.NotificationProcessSetup
 import org.matrix.rustcomponents.sdk.NotificationStatus
+import org.matrix.rustcomponents.sdk.PresenceState
 import org.matrix.rustcomponents.sdk.ReceiptType
 import org.matrix.rustcomponents.sdk.RoomList
 import org.matrix.rustcomponents.sdk.RoomListEntriesListener
@@ -34,6 +37,10 @@ import org.matrix.rustcomponents.sdk.RoomListEntriesWithDynamicAdaptersResult
 import org.matrix.rustcomponents.sdk.RoomListService
 import org.matrix.rustcomponents.sdk.Session
 import org.matrix.rustcomponents.sdk.SecretsBundleWithUserId
+import org.matrix.rustcomponents.sdk.SessionVerificationController
+import org.matrix.rustcomponents.sdk.SessionVerificationControllerDelegate
+import org.matrix.rustcomponents.sdk.SessionVerificationData
+import org.matrix.rustcomponents.sdk.SessionVerificationRequestDetails
 import org.matrix.rustcomponents.sdk.SlidingSyncVersion
 import org.matrix.rustcomponents.sdk.SlidingSyncVersionBuilder
 import org.matrix.rustcomponents.sdk.SqliteStoreBuilder
@@ -56,6 +63,7 @@ import java.io.File
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
+import java.util.UUID
 
 data class NativeMatrixDecryptedEvent(
     val userId: String,
@@ -90,6 +98,7 @@ object NativeMatrixClientManager {
     private val roomListSubscriptions = ConcurrentHashMap<String, RoomListSubscription>()
     private val healthChecks = ConcurrentHashMap.newKeySet<String>()
     private val terminalRestarts = ConcurrentHashMap.newKeySet<String>()
+    private val verificationSessions = ConcurrentHashMap<String, VerificationSession>()
     @Volatile private var applicationContext: Context? = null
     @Volatile private var platformInitialized = false
 
@@ -98,11 +107,45 @@ object NativeMatrixClientManager {
         val client: Client,
         val syncService: SyncService,
         val notificationClient: NotificationClient,
+        val verificationController: SessionVerificationController,
         val syncStartup: CompletableDeferred<SyncServiceState>,
         val syncStateHandle: TaskHandle,
         val syncState: AtomicReference<SyncServiceState>,
         val timelineSubscriptions: ConcurrentHashMap<String, TimelineSubscription> = ConcurrentHashMap(),
     )
+
+    private data class VerificationSession(
+        val requestId: String = UUID.randomUUID().toString(),
+        val userId: String,
+        val initiatedByMe: Boolean,
+        var otherUserId: String = userId,
+        var otherDeviceId: String? = null,
+        var senderId: String? = null,
+        var flowId: String? = null,
+        var phase: String = "requested",
+        var error: String? = null,
+        var emojis: List<Pair<String, String>>? = null,
+        var decimals: List<Int>? = null,
+    ) {
+        @Synchronized
+        fun json(): JSONObject = JSONObject()
+            .put("active", true)
+            .put("requestId", requestId)
+            .put("userId", userId)
+            .put("initiatedByMe", initiatedByMe)
+            .put("otherUserId", otherUserId)
+            .put("otherDeviceId", otherDeviceId)
+            .put("senderId", senderId)
+            .put("flowId", flowId)
+            .put("phase", phase)
+            .put("error", error)
+            .put("emojis", emojis?.let { values ->
+                JSONArray(values.map { (symbol, description) ->
+                    JSONArray().put(symbol).put(description)
+                })
+            })
+            .put("decimals", decimals?.let(::JSONArray))
+    }
 
     private data class TimelineSubscription(
         val timeline: Timeline,
@@ -458,12 +501,13 @@ object NativeMatrixClientManager {
             val notificationClient = client.notificationClient(
                 NotificationProcessSetup.SingleProcess(syncService),
             )
+            val verificationController = createVerificationController(session.userId, client)
             val (syncStartup, syncStateHandle, syncState) = observeSyncState(
                 context.applicationContext, syncService, session.userId,
             )
             val runtime = AccountRuntime(
-                session.userId, client, syncService, notificationClient, syncStartup, syncStateHandle,
-                syncState,
+                session.userId, client, syncService, notificationClient, verificationController,
+                syncStartup, syncStateHandle, syncState,
             )
             accounts[session.userId] = runtime
             ensureRoomListSubscription(runtime, session.userId)
@@ -657,10 +701,169 @@ object NativeMatrixClientManager {
             room.typingNotice(typing)
         }
 
+    fun setPresence(context: Context, userId: String, presence: String) =
+        runBlocking(Dispatchers.IO) {
+            val state = when (presence.lowercase()) {
+                "online" -> PresenceState.ONLINE
+                "unavailable", "away" -> PresenceState.UNAVAILABLE
+                else -> PresenceState.OFFLINE
+            }
+            ensureRuntime(context, userId).client.setPresence(state, true)
+        }
+
     fun recover(context: Context, userId: String, recoveryKey: String) =
         runBlocking(Dispatchers.IO) {
-            ensureRuntime(context, userId).client.encryption().recover(recoveryKey.trim())
+            ensureReadyRuntimeForUi(context, userId).client.encryption().recover(recoveryKey.trim())
         }
+
+    fun setupRecovery(
+        context: Context,
+        userId: String,
+        passphrase: String?,
+    ): JSONObject = runBlocking(Dispatchers.IO) {
+        val encryption = ensureReadyRuntimeForUi(context, userId).client.encryption()
+        check(!encryption.backupExistsOnServer()) {
+            "An encrypted key backup already exists for this account"
+        }
+        val recoveryKey = encryption.enableRecovery(
+            true,
+            passphrase,
+            object : EnableRecoveryProgressListener {
+                override fun onUpdate(update: EnableRecoveryProgress) {
+                    Log.i(TAG, "Recovery setup for $userId: ${update::class.java.simpleName}")
+                }
+            },
+        )
+        JSONObject().put("recoveryKey", recoveryKey).put("version", "native")
+    }
+
+    fun securityStatus(context: Context, userId: String): JSONObject =
+        runBlocking(Dispatchers.IO) {
+            val encryption = ensureReadyRuntimeForUi(context, userId).client.encryption()
+            encryption.waitForE2eeInitializationTasks()
+            val backupExists = encryption.backupExistsOnServer()
+            val backupEnabled = encryption.backupState().name == "ENABLED"
+            val recoveryEnabled = encryption.recoveryState().name == "ENABLED"
+            val verified = encryption.verificationState().name == "VERIFIED"
+            JSONObject()
+                .put("crossSigningReady", verified)
+                .put("publicCrossSigningKeys", verified)
+                .put("privateKeysInSecretStorage", recoveryEnabled)
+                .put("privateKeysCachedLocally", recoveryEnabled)
+                .put("keyBackupVersion", if (backupExists) "native" else JSONObject.NULL)
+                .put("keyBackupActive", backupExists && backupEnabled)
+                .put("hasBackupKey", recoveryEnabled)
+                .put("hasSecretStorageKey", recoveryEnabled)
+                .put("secretStorageKeyCached", recoveryEnabled)
+                .put("secretStorageReady", recoveryEnabled)
+                .put(
+                    "dehydrationSupported",
+                    runCatching { encryption.isDehydratedDeviceSupported() }.getOrDefault(false),
+                )
+        }
+
+    fun userIdentities(context: Context, userId: String, targetUserIds: JSONArray): JSONObject =
+        runBlocking(Dispatchers.IO) {
+            val encryption = ensureReadyRuntimeForUi(context, userId).client.encryption()
+            val identities = JSONObject()
+            for (index in 0 until targetUserIds.length()) {
+                val targetUserId = targetUserIds.optString(index).takeIf { it.isNotBlank() } ?: continue
+                val identity = encryption.userIdentity(targetUserId, true)
+                if (identity == null) {
+                    identities.put(targetUserId, JSONObject().put("known", false))
+                    continue
+                }
+                try {
+                    identities.put(
+                        targetUserId,
+                        JSONObject()
+                            .put("known", true)
+                            .put("verified", identity.isVerified())
+                            .put("previouslyVerified", identity.wasPreviouslyVerified())
+                            .put("needsApproval", identity.hasVerificationViolation())
+                            .put("masterKey", identity.masterKey()),
+                    )
+                } finally {
+                    identity.close()
+                }
+            }
+            identities
+        }
+
+    fun verificationStatus(context: Context, userId: String): JSONObject =
+        runBlocking(Dispatchers.IO) {
+            ensureReadyRuntimeForUi(context, userId)
+            verificationSessions[userId]?.json() ?: JSONObject().put("active", false)
+        }
+
+    fun requestVerification(
+        context: Context,
+        userId: String,
+        targetUserId: String?,
+    ): JSONObject = runBlocking(Dispatchers.IO) {
+        val runtime = ensureReadyRuntimeForUi(context, userId)
+        val target = targetUserId?.takeIf { it.isNotBlank() } ?: userId
+        val session = VerificationSession(
+            userId = userId,
+            initiatedByMe = true,
+            otherUserId = target,
+        )
+        verificationSessions[userId] = session
+        publishVerification(session)
+        try {
+            if (target == userId) runtime.verificationController.requestDeviceVerification()
+            else runtime.verificationController.requestUserVerification(target)
+            session.json()
+        } catch (error: Throwable) {
+            updateVerification(userId) {
+                phase = "failed"
+                this.error = errorSummary(error)
+            }
+            throw error
+        }
+    }
+
+    fun acceptVerification(context: Context, userId: String, requestId: String): JSONObject =
+        verificationAction(context, userId, requestId) { controller, session ->
+            val sender = session.senderId ?: error("Incoming verification has no sender")
+            val flow = session.flowId ?: error("Incoming verification has no flow id")
+            controller.acknowledgeVerificationRequest(sender, flow)
+            controller.acceptVerificationRequest()
+        }
+
+    fun startSasVerification(context: Context, userId: String, requestId: String): JSONObject =
+        verificationAction(context, userId, requestId) { controller, _ ->
+            controller.startSasVerification()
+        }
+
+    fun approveVerification(context: Context, userId: String, requestId: String): JSONObject =
+        verificationAction(context, userId, requestId) { controller, _ ->
+            controller.approveVerification()
+        }
+
+    fun declineVerification(context: Context, userId: String, requestId: String): JSONObject =
+        verificationAction(context, userId, requestId) { controller, _ ->
+            controller.declineVerification()
+        }
+
+    fun cancelVerification(context: Context, userId: String, requestId: String): JSONObject =
+        verificationAction(context, userId, requestId) { controller, _ ->
+            controller.cancelVerification()
+        }
+
+    private fun verificationAction(
+        context: Context,
+        userId: String,
+        requestId: String,
+        action: suspend (SessionVerificationController, VerificationSession) -> Unit,
+    ): JSONObject = runBlocking(Dispatchers.IO) {
+        val runtime = ensureReadyRuntimeForUi(context, userId)
+        val session = verificationSessions[userId]
+            ?: error("No native verification is active for $userId")
+        check(session.requestId == requestId) { "The native verification request is no longer active" }
+        action(runtime.verificationController, session)
+        session.json()
+    }
 
     fun logout(context: Context, userId: String) = runBlocking(Dispatchers.IO) {
         val root = NativeMatrixMigrationStore.account(context, userId)?.session
@@ -755,18 +958,26 @@ object NativeMatrixClientManager {
             val notificationClient = client.notificationClient(
                 NotificationProcessSetup.SingleProcess(syncService),
             )
+            val verificationController = createVerificationController(userId, client)
             val (syncStartup, syncStateHandle, syncState) = observeSyncState(
                 context.applicationContext, syncService, userId,
             )
             val runtime = AccountRuntime(
-                userId, client, syncService, notificationClient, syncStartup, syncStateHandle,
-                syncState,
+                userId, client, syncService, notificationClient, verificationController,
+                syncStartup, syncStateHandle, syncState,
             )
             accounts[userId] = runtime
             ensureRoomListSubscription(runtime, userId)
             startSync(context.applicationContext, runtime)
             runtime
         }
+    }
+
+    private suspend fun ensureReadyRuntimeForUi(context: Context, userId: String): AccountRuntime {
+        check(NativeMatrixMigrationStore.isReady(context, userId)) {
+            "Native Matrix account $userId is not ready; retry its one-time Android migration"
+        }
+        return ensureRuntime(context, userId)
     }
 
     private suspend fun ensureReadyAccountRunning(context: Context, userId: String, reason: String) {
@@ -1033,6 +1244,91 @@ object NativeMatrixClientManager {
         .joinToString("; ")
         .ifBlank { "unknown native error" }
 
+    /**
+     * The SDK only forwards incoming verification events after this controller exists. Install
+     * its delegate before sync starts so requests are retained even while there is no WebView.
+     */
+    private suspend fun createVerificationController(
+        userId: String,
+        client: Client,
+    ): SessionVerificationController {
+        val controller = client.getSessionVerificationController()
+        controller.setDelegate(object : SessionVerificationControllerDelegate {
+            override fun didReceiveVerificationRequest(details: SessionVerificationRequestDetails) {
+                val session = VerificationSession(
+                    userId = userId,
+                    initiatedByMe = false,
+                    otherUserId = details.senderProfile.userId,
+                    otherDeviceId = details.deviceId,
+                    senderId = details.senderProfile.userId,
+                    flowId = details.flowId,
+                )
+                verificationSessions[userId] = session
+                publishVerification(session)
+            }
+
+            override fun didAcceptVerificationRequest() {
+                updateVerification(userId) { phase = "ready" }
+            }
+
+            override fun didStartSasVerification() {
+                updateVerification(userId) { phase = "started" }
+            }
+
+            override fun didReceiveVerificationData(data: SessionVerificationData) {
+                try {
+                    updateVerification(userId) {
+                        phase = "started"
+                        when (data) {
+                            is SessionVerificationData.Emojis -> {
+                                emojis = data.emojis.map { emoji ->
+                                    try {
+                                        emoji.symbol() to emoji.description()
+                                    } finally {
+                                        emoji.close()
+                                    }
+                                }
+                                decimals = null
+                            }
+                            is SessionVerificationData.Decimals -> {
+                                decimals = data.values.map { it.toInt() }
+                                emojis = null
+                            }
+                        }
+                    }
+                } finally {
+                    data.destroy()
+                }
+            }
+
+            override fun didFail() {
+                updateVerification(userId) {
+                    phase = "failed"
+                    error = "Native Matrix verification failed"
+                }
+            }
+
+            override fun didCancel() {
+                updateVerification(userId) { phase = "cancelled" }
+            }
+
+            override fun didFinish() {
+                updateVerification(userId) { phase = "done" }
+            }
+        })
+        return controller
+    }
+
+    private fun updateVerification(userId: String, update: VerificationSession.() -> Unit) {
+        val session = verificationSessions[userId] ?: return
+        synchronized(session) { session.update() }
+        publishVerification(session)
+    }
+
+    private fun publishVerification(session: VerificationSession) {
+        PushNotificationPlugin.instance?.handleNativeMatrixVerification(session.json())
+    }
+
     private fun closeRuntime(runtime: AccountRuntime) {
         roomListSubscriptions.remove(runtime.userId)?.let(::closeRoomListSubscription)
         runtime.timelineSubscriptions.values.forEach(::closeTimelineSubscription)
@@ -1041,6 +1337,7 @@ object NativeMatrixClientManager {
         runCatching { runtime.syncStateHandle.close() }
         runCatching { runBlocking { runtime.syncService.stop() } }
         runCatching { runtime.notificationClient.close() }
+        runCatching { runtime.verificationController.close() }
         runCatching { runtime.syncService.close() }
         runCatching { runtime.client.close() }
     }

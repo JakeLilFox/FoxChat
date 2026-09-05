@@ -165,6 +165,14 @@ class MainActivity : TauriActivity() {
           )
           JSONObject().put("ok", true).toString()
         }
+        "setPresence" -> {
+          NativeMatrixClientManager.setPresence(
+            applicationContext,
+            payload.getString("userId"),
+            payload.getString("presence"),
+          )
+          JSONObject().put("ok", true).toString()
+        }
         "markRead" -> {
           NativeMatrixClientManager.markReadForRoom(
             applicationContext,
@@ -187,6 +195,54 @@ class MainActivity : TauriActivity() {
           )
           JSONObject().put("ok", true).put("background", true).toString()
         }
+        "setupRecovery" -> NativeMatrixClientManager.setupRecovery(
+          applicationContext,
+          payload.getString("userId"),
+          payload.optString("passphrase").takeIf { it.isNotBlank() },
+        ).toString()
+        "securityStatus" -> NativeMatrixClientManager.securityStatus(
+          applicationContext,
+          payload.getString("userId"),
+        ).toString()
+        "userIdentities" -> NativeMatrixClientManager.userIdentities(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getJSONArray("targetUserIds"),
+        ).toString()
+        "verificationStatus" -> NativeMatrixClientManager.verificationStatus(
+          applicationContext,
+          payload.getString("userId"),
+        ).toString()
+        "verificationRequest" -> NativeMatrixClientManager.requestVerification(
+          applicationContext,
+          payload.getString("userId"),
+          payload.optString("targetUserId").takeIf { it.isNotBlank() },
+        ).toString()
+        "verificationAccept" -> NativeMatrixClientManager.acceptVerification(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getString("requestId"),
+        ).toString()
+        "verificationStartSas" -> NativeMatrixClientManager.startSasVerification(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getString("requestId"),
+        ).toString()
+        "verificationApprove" -> NativeMatrixClientManager.approveVerification(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getString("requestId"),
+        ).toString()
+        "verificationDecline" -> NativeMatrixClientManager.declineVerification(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getString("requestId"),
+        ).toString()
+        "verificationCancel" -> NativeMatrixClientManager.cancelVerification(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getString("requestId"),
+        ).toString()
         else -> error("Unknown native Matrix action: $action")
       }
     }

@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventType, MatrixEvent, MsgType, type MatrixClient } from 'matrix-js-sdk'
 import {
+  applyNativeVerificationSnapshot,
   adoptFreshAndroidMatrixSession,
   decryptEventWithNativeMatrix,
   installNativeMatrixTransport,
@@ -10,7 +11,11 @@ import {
   isRetryableAndroidVerifierError,
   nativeMatrixLogin,
   nativeMatrixReady,
+  nativeRequestVerification,
+  nativeSecurityStatus,
+  nativeSetupRecovery,
 } from '../../src/platform/nativeMatrix'
+import { VerificationPhase } from 'matrix-js-sdk/lib/crypto-api'
 
 describe('Android native Matrix bridge', () => {
   afterEach(() => {
@@ -203,6 +208,70 @@ describe('Android native Matrix bridge', () => {
           },
         },
       },
+    ])
+  })
+
+  it('keeps the complete SAS verification lifecycle in the native Rust runner', async () => {
+    const base = {
+      active: true,
+      requestId: 'native-request',
+      userId: '@me:example.org',
+      initiatedByMe: true,
+      otherUserId: '@me:example.org',
+    }
+    const invoke = vi.fn().mockImplementation(async (_command, args) => {
+      switch (args.action) {
+        case 'verificationRequest':
+          return { ...base, phase: 'requested' }
+        case 'verificationStartSas':
+          return { ...base, phase: 'started' }
+        case 'verificationApprove':
+          return { ...base, phase: 'done' }
+        default:
+          throw new Error(`Unexpected action ${args.action}`)
+      }
+    })
+    enableAndroid(invoke)
+
+    const request = await nativeRequestVerification('@me:example.org')
+    expect(request?.phase).toBe(VerificationPhase.Requested)
+    const verifier = await request!.startVerification('m.sas.v1')
+    expect(request?.phase).toBe(VerificationPhase.Started)
+
+    applyNativeVerificationSnapshot({
+      ...base,
+      phase: 'started',
+      emojis: [['🐶', 'Dog']],
+    })
+    const sas = verifier.getShowSasCallbacks()
+    expect(sas?.sas.emoji).toEqual([['🐶', 'Dog']])
+    await sas?.confirm()
+    await expect(verifier.verify()).resolves.toBeUndefined()
+    expect(request?.phase).toBe(VerificationPhase.Done)
+
+    expect(invoke.mock.calls.map(([, args]) => args.action)).toEqual([
+      'verificationRequest',
+      'verificationStartSas',
+      'verificationApprove',
+    ])
+  })
+
+  it('routes recovery setup and security inspection to native Matrix', async () => {
+    const invoke = vi
+      .fn()
+      .mockResolvedValueOnce({ recoveryKey: 'EsT1 recovery', version: 'native' })
+      .mockResolvedValueOnce({ crossSigningReady: true })
+    enableAndroid(invoke)
+
+    await expect(nativeSetupRecovery('@me:example.org', 'secret')).resolves.toMatchObject({
+      recoveryKey: 'EsT1 recovery',
+    })
+    await expect(nativeSecurityStatus('@me:example.org')).resolves.toMatchObject({
+      crossSigningReady: true,
+    })
+    expect(invoke.mock.calls.map(([, args]) => args.action)).toEqual([
+      'setupRecovery',
+      'securityStatus',
     ])
   })
 })

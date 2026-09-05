@@ -78,6 +78,8 @@ import { gifItemsBySlug, pickGifFile, triggerGifShare, type KlipyGif } from '../
 import { reportClientError } from '../platform/errorLogging'
 import {
   adoptFreshAndroidMatrixSession,
+  applyNativeVerificationSnapshot,
+  currentNativeVerification,
   decryptEventWithNativeMatrix,
   isAndroidNativeMatrix,
   installNativeMatrixTransport,
@@ -85,6 +87,11 @@ import {
   nativeMatrixLogin,
   nativeMatrixReady,
   nativeRecover,
+  nativeRequestVerification,
+  nativeSecurityStatus,
+  nativeSetupRecovery,
+  nativeUserIdentities,
+  nativeVerificationStatus,
   nativeWatchRoom,
 } from '../platform/nativeMatrix'
 
@@ -408,6 +415,9 @@ export class MatrixClientService {
   }
 
   retrySyncAfterResume(retryWindowMs = 15_000) {
+    // MainActivity.onResume performs the native runtime health check. The Android WebView has no
+    // sync loop of its own and must never attempt to restart one.
+    if (isAndroidNativeMatrix()) return 1
     this.resumeSyncRetryUntil = Date.now() + retryWindowMs
     if (this.client) scheduleNativeCryptoSync(this.client)
     let retried = this.client && this.retryBackedOffSyncAfterResume(this.client) ? 1 : 0
@@ -650,8 +660,7 @@ export class MatrixClientService {
     // The isolated physical-device E2E build deliberately creates a WebView-owned session first
     // so the production one-time Android migration is exercised. Normal Android builds always
     // authenticate directly into the native owner.
-    const forceLegacyAndroidLogin =
-      import.meta.env.VITE_ANDROID_E2E_FORCE_LEGACY_LOGIN === 'true'
+    const forceLegacyAndroidLogin = import.meta.env.VITE_ANDROID_E2E_FORCE_LEGACY_LOGIN === 'true'
     if (isAndroidNativeMatrix() && !forceLegacyAndroidLogin) {
       const session = await nativeMatrixLogin(baseUrl, username, password)
       return session satisfies MatrixSession
@@ -1302,14 +1311,12 @@ export class MatrixClientService {
         : this.effectivePresenceState(this.accountId(session)) === 'unavailable'
           ? SetPresence.Unavailable
           : SetPresence.Offline
-    await client.setSyncPresence(initialPresence)
-    const initialSync = this.waitForInitialSync(client)
-    await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true })
-    await initialSync
     if (nativeObserverMode) {
-      // Rust is already the authoritative live client. The HTTP snapshot only
-      // enriches the WebView's transient Room models, so it must never hold the
-      // entire app on the startup screen when a homeserver stalls.
+      // The WebView client is a transient model adapter on Android. Starting it would create a
+      // second /sync loop using the Rust-owned device token and can race native token refreshes.
+      // Rust is the sole live Matrix runner; a bounded snapshot only hydrates Matrix-JS Room
+      // objects used by the existing React UI.
+      this.observers.forEach((observer) => observer.onSync?.('PREPARED'))
       void this.hydrateNativeRooms(client).catch((error) => {
         reportClientError(
           'native-matrix-room-hydration',
@@ -1317,6 +1324,11 @@ export class MatrixClientService {
           error,
         )
       })
+    } else {
+      await client.setSyncPresence(initialPresence)
+      const initialSync = this.waitForInitialSync(client)
+      await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true })
+      await initialSync
     }
     for (const room of client.getRooms()) {
       this.trackRoomOwner(client, room)
@@ -1998,6 +2010,16 @@ export class MatrixClientService {
     const cached = clientCache.get(cacheKey)
     if (cached) return cached
     const pending = (async (): Promise<MessageEncryptionTrust> => {
+      if (isAndroidNativeMatrix()) {
+        const userId = client.getUserId()
+        if (!userId) return { kind: 'unknown' }
+        const identity = (await nativeUserIdentities(userId, [sender]))[sender]
+        if (!identity?.known) return { kind: 'unknown' }
+        return {
+          kind: identity.verified ? 'verified' : 'unverified',
+          signedByOwner: !!identity.verified,
+        }
+      }
       const crypto = client.getCrypto()
       if (!crypto) return { kind: 'unknown' }
       const deviceMap = await crypto.getUserDeviceInfo([sender], true)
@@ -2022,10 +2044,12 @@ export class MatrixClientService {
       return { kind: 'warning', warningLevel: 'high', reason: 'DECRYPTION_FAILURE' }
     }
     const client = this.clientForEvent(event)
-    const crypto = client?.getCrypto()
     const sender = event.getSender()
     const senderKey = event.getSenderKey()
-    if (!client || !crypto || !sender || !senderKey) return { kind: 'unknown' }
+    if (!client || !sender || !senderKey) return { kind: 'unknown' }
+    if (isAndroidNativeMatrix()) return this.messageSenderDeviceTrust(client, sender, senderKey)
+    const crypto = client.getCrypto()
+    if (!crypto) return { kind: 'unknown' }
 
     const [encryptionInfo, deviceTrust] = await Promise.all([
       crypto.getEncryptionInfoForEvent(event).catch(() => null),
@@ -2076,6 +2100,10 @@ export class MatrixClientService {
     const roomId = event.getRoomId()
     if (!roomId) return false
     const copies = this.eventCopies(event)
+    if (isAndroidNativeMatrix()) {
+      await Promise.allSettled(copies.map((copy) => decryptEventWithNativeMatrix(copy)))
+      return copies.some((copy) => !copy.isDecryptionFailure())
+    }
     const clients = new Set(
       copies
         .map((copy) => this.clientForEvent(copy))
@@ -2189,6 +2217,9 @@ export class MatrixClientService {
   }
 
   async restoreKeyBackupWithPassphrase(passphrase: string) {
+    if (isAndroidNativeMatrix()) {
+      throw new Error('Android recovery requires the Matrix recovery key, not its passphrase')
+    }
     const crypto = this.client?.getCrypto()
     if (!crypto) throw new Error('Encryption is not initialized')
     const result = await crypto.restoreKeyBackupWithPassphrase(passphrase)
@@ -2197,6 +2228,11 @@ export class MatrixClientService {
   }
 
   async restoreKeyBackupWithRecoveryKey(recoveryKey: string) {
+    if (isAndroidNativeMatrix()) {
+      const userId = this.client?.getUserId()
+      if (!userId) throw new Error('Client is not started')
+      return nativeRecover(userId, recoveryKey.trim())
+    }
     const crypto = this.client?.getCrypto()
     if (!crypto) throw new Error('Encryption is not initialized')
     const backup = await crypto.getKeyBackupInfo()
@@ -2211,8 +2247,10 @@ export class MatrixClientService {
   async unlockSecretStorage(recoveryKey: string) {
     if (!this.client) throw new Error('Encryption is not initialized')
     const userId = this.client.getUserId()
-    if (userId && (await nativeMatrixReady(userId)))
+    if (isAndroidNativeMatrix()) {
+      if (!userId) throw new Error('Client is not started')
       return nativeRecover(userId, recoveryKey.trim())
+    }
     const key = decodeRecoveryKey(recoveryKey.trim())
     const defaultKey = await this.client.secretStorage.getKey()
     if (!defaultKey) throw new Error('Secret storage is not configured for this account')
@@ -2223,6 +2261,9 @@ export class MatrixClientService {
 
   async unlockSecretStorageWithPassphrase(passphrase: string) {
     if (!this.client) throw new Error('Encryption is not initialized')
+    if (isAndroidNativeMatrix()) {
+      throw new Error('Android recovery requires the Matrix recovery key, not its passphrase')
+    }
     const defaultKey = await this.client.secretStorage.getKey()
     if (!defaultKey) return this.restoreKeyBackupWithPassphrase(passphrase)
     const passphraseInfo = defaultKey[1].passphrase
@@ -2277,6 +2318,11 @@ export class MatrixClientService {
   }
 
   async setupKeyBackup(passphrase?: string, accountPassword?: string, uiaSession?: string) {
+    if (isAndroidNativeMatrix()) {
+      const userId = this.client?.getUserId()
+      if (!userId) throw new Error('Client is not started')
+      return nativeSetupRecovery(userId, passphrase)
+    }
     const crypto = this.client?.getCrypto()
     if (!crypto || !this.client) throw new Error('Encryption is not initialized')
 
@@ -2330,6 +2376,7 @@ export class MatrixClientService {
   }
 
   async enableAutomaticKeySync() {
+    if (isAndroidNativeMatrix()) return
     if (this.cryptoSyncRunning) return this.cryptoSyncRunning
     const crypto = this.client?.getCrypto()
     if (!crypto) return
@@ -2342,6 +2389,14 @@ export class MatrixClientService {
   }
 
   async requestOwnDeviceVerification() {
+    if (isAndroidNativeMatrix()) {
+      const userId = this.client?.getUserId()
+      if (!userId) throw new Error('Client is not started')
+      const request = await nativeRequestVerification(userId)
+      if (!request) throw new Error('Native Matrix did not create a verification request')
+      this.publishVerificationRequest(request)
+      return request
+    }
     const crypto = this.client?.getCrypto()
     if (!crypto) throw new Error('Encryption is not initialized')
     return crypto.requestOwnUserVerification()
@@ -2386,6 +2441,14 @@ export class MatrixClientService {
     if (!userId) {
       throw new Error('User verification can only be started from a direct chat')
     }
+    if (isAndroidNativeMatrix()) {
+      const ownerUserId = client.getUserId()
+      if (!ownerUserId) throw new Error('The account for this room is not available')
+      const request = await nativeRequestVerification(ownerUserId, userId)
+      if (!request) throw new Error('Native Matrix did not create a verification request')
+      this.publishVerificationRequest(request)
+      return request
+    }
     const crypto = client.getCrypto()
     if (!crypto) throw new Error('Encryption is not initialized')
     const request = await crypto.requestVerificationDM(userId, room.roomId)
@@ -2395,6 +2458,13 @@ export class MatrixClientService {
 
   openRoomVerification(room: Room) {
     const client = this.clientForRoomInstance(room)
+    if (isAndroidNativeMatrix()) {
+      const ownerUserId = client?.getUserId()
+      const request = ownerUserId ? currentNativeVerification(ownerUserId) : undefined
+      if (!request?.pending) throw new Error('This verification request is no longer active')
+      this.publishVerificationRequest(request)
+      return request
+    }
     const request = client
       ?.getCrypto()
       ?.findVerificationRequestDMInProgress(room.roomId, this.roomVerificationUser(room))
@@ -2408,6 +2478,25 @@ export class MatrixClientService {
   async getDeviceSessions(): Promise<MatrixDeviceSession[]> {
     if (!this.client) throw new Error('Client is not started')
     const userId = this.client.getSafeUserId()
+    if (isAndroidNativeMatrix()) {
+      const [serverDevices, identities] = await Promise.all([
+        this.client.getDevices(),
+        nativeUserIdentities(userId, [userId]),
+      ])
+      const verified = !!identities[userId]?.verified
+      return serverDevices.devices.map((device) => ({
+        deviceId: device.device_id,
+        displayName: device.display_name || 'Unnamed device',
+        lastSeenIp: device.last_seen_ip,
+        lastSeenTs: device.last_seen_ts,
+        userAgent: device['org.matrix.msc3852.last_seen_user_agent'] ?? device.last_seen_user_agent,
+        current: device.device_id === this.client!.getDeviceId(),
+        verified,
+        crossSigned: verified,
+        signedByOwner: verified,
+        locallyVerified: verified,
+      }))
+    }
     const crypto = this.client.getCrypto()
     const [serverDevices, cryptoDevices] = await Promise.all([
       this.client.getDevices(),
@@ -2453,6 +2542,11 @@ export class MatrixClientService {
   }
 
   async getSecurityStatus(): Promise<MatrixSecurityStatus> {
+    if (isAndroidNativeMatrix()) {
+      const userId = this.client?.getUserId()
+      if (!userId) throw new Error('Client is not started')
+      return nativeSecurityStatus<MatrixSecurityStatus>(userId)
+    }
     const crypto = this.client?.getCrypto()
     if (!crypto || !this.client) throw new Error('Encryption is not initialized')
     const [
@@ -2495,6 +2589,51 @@ export class MatrixClientService {
     members: MatrixRoomMemberSecurity[]
   }> {
     const client = this.clientForRoomInstance(room)
+    if (isAndroidNativeMatrix()) {
+      if (!client) throw new Error('The account for this room is not available')
+      await room.loadMembersIfNeeded()
+      const roomMembers = room.getJoinedMembers()
+      const ownUserId = client.getSafeUserId()
+      const identities = await nativeUserIdentities(
+        ownUserId,
+        roomMembers.map((member) => member.userId),
+      )
+      const members = roomMembers.map((member) => {
+        const identity = identities[member.userId]
+        return {
+          userId: member.userId,
+          displayName: member.name || member.userId,
+          avatarUrl: member.getMxcAvatarUrl(),
+          identity: {
+            known: !!identity?.known,
+            verified: !!identity?.verified,
+            crossSigningVerified: !!identity?.verified,
+            previouslyVerified: !!identity?.previouslyVerified,
+            needsApproval: !!identity?.needsApproval,
+          },
+          crossSigningKeys: identity?.masterKey
+            ? [
+                {
+                  type: 'master',
+                  usage: ['master'],
+                  keyId: identity.masterKey,
+                  key: identity.masterKey,
+                  signatures: [],
+                },
+              ]
+            : [],
+          devices: [],
+        }
+      })
+      return {
+        viewingAs: ownUserId,
+        members: members.sort(
+          (first, second) =>
+            first.displayName.localeCompare(second.displayName) ||
+            first.userId.localeCompare(second.userId),
+        ),
+      }
+    }
     const crypto = client?.getCrypto()
     if (!client || !crypto) throw new Error('Encryption is not initialized')
     await room.loadMembersIfNeeded()
@@ -4571,6 +4710,13 @@ export class MatrixClientService {
 
   async requestDeviceVerification(userId: string, deviceId: string) {
     if (!this.client) throw new Error('Client is not started')
+    if (isAndroidNativeMatrix()) {
+      const ownUserId = this.client.getSafeUserId()
+      const request = await nativeRequestVerification(ownUserId, userId)
+      if (!request) throw new Error('Native Matrix did not create a verification request')
+      this.publishVerificationRequest(request)
+      return request
+    }
     const crypto = this.client.getCrypto()
     if (!crypto) throw new Error('Encryption is not initialized')
     return crypto.requestDeviceVerification(userId, deviceId)
@@ -4581,6 +4727,7 @@ export class MatrixClientService {
   private nativeMatrixSessionListenerRegistered = false
   private nativeMatrixTimelineListenerRegistered = false
   private nativeMatrixRoomListListenerRegistered = false
+  private nativeMatrixVerificationListenerRegistered = false
   private nativeRoomHydrations = new WeakMap<MatrixClient, Promise<void>>()
 
   private hydrateNativeRooms(client: MatrixClient) {
@@ -4637,6 +4784,28 @@ export class MatrixClientService {
     const invoke = window.__TAURI_INTERNALS__?.invoke
     if (!invoke) return
     const { addPluginListener } = await import('@tauri-apps/api/core')
+    if (!this.nativeMatrixVerificationListenerRegistered) {
+      this.nativeMatrixVerificationListenerRegistered = true
+      try {
+        await addPluginListener<import('../platform/nativeMatrix').NativeVerificationSnapshot>(
+          'remote-push',
+          'native-matrix-verification',
+          (snapshot) => {
+            const request = applyNativeVerificationSnapshot(snapshot)
+            if (request) this.publishVerificationRequest(request)
+          },
+        )
+        await Promise.allSettled(
+          this.savedAccounts().map(async ({ userId }) => {
+            const request = await nativeVerificationStatus(userId)
+            if (request?.pending) this.publishVerificationRequest(request)
+          }),
+        )
+      } catch (error) {
+        this.nativeMatrixVerificationListenerRegistered = false
+        console.warn('[native-matrix] Could not register native verification listener', error)
+      }
+    }
     if (!this.nativeMatrixTimelineListenerRegistered) {
       this.nativeMatrixTimelineListenerRegistered = true
       try {

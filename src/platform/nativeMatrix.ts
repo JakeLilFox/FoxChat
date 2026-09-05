@@ -1,4 +1,12 @@
 import { EventType, MatrixEventEvent, type MatrixClient, type MatrixEvent } from 'matrix-js-sdk'
+import {
+  VerificationPhase,
+  VerificationRequestEvent,
+  VerifierEvent,
+  type ShowSasCallbacks,
+  type VerificationRequest,
+  type Verifier,
+} from 'matrix-js-sdk/lib/crypto-api'
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 
@@ -32,6 +40,257 @@ export type NativeDecryptedEvent = {
   roomName: string
   body: string
   rawEvent: string
+}
+
+export type NativeVerificationSnapshot = {
+  active: boolean
+  requestId?: string
+  userId?: string
+  initiatedByMe?: boolean
+  otherUserId?: string
+  otherDeviceId?: string | null
+  senderId?: string | null
+  flowId?: string | null
+  phase?: 'requested' | 'ready' | 'started' | 'cancelled' | 'done' | 'failed'
+  error?: string | null
+  emojis?: Array<[string, string]> | null
+  decimals?: number[] | null
+}
+
+type NativeListener = (...args: unknown[]) => void
+
+class NativeEmitter {
+  private listeners = new Map<string, Set<NativeListener>>()
+
+  on(event: string, listener: NativeListener) {
+    const listeners = this.listeners.get(event) ?? new Set<NativeListener>()
+    listeners.add(listener)
+    this.listeners.set(event, listeners)
+    return this
+  }
+
+  off(event: string, listener: NativeListener) {
+    this.listeners.get(event)?.delete(listener)
+    return this
+  }
+
+  protected emit(event: string, ...args: unknown[]) {
+    this.listeners.get(event)?.forEach((listener) => listener(...args))
+  }
+}
+
+class NativeVerifierAdapter extends NativeEmitter {
+  private sas: ShowSasCallbacks | null = null
+  private finished: Promise<void>
+  private resolveFinished!: () => void
+  private rejectFinished!: (error: Error) => void
+  hasBeenCancelled = false
+
+  constructor(
+    readonly userId: string,
+    private readonly request: NativeVerificationRequestAdapter,
+  ) {
+    super()
+    this.finished = new Promise<void>((resolve, reject) => {
+      this.resolveFinished = resolve
+      this.rejectFinished = reject
+    })
+  }
+
+  verify() {
+    return this.finished
+  }
+
+  cancel(error: Error) {
+    void this.request.cancel().catch(() => undefined)
+    this.cancelled(error)
+  }
+
+  getShowSasCallbacks() {
+    return this.sas
+  }
+
+  getReciprocateQrCodeCallbacks() {
+    return null
+  }
+
+  apply(snapshot: NativeVerificationSnapshot) {
+    const emoji = snapshot.emojis?.map(
+      ([symbol, description]) => [symbol, description] as [string, string],
+    )
+    const decimal = snapshot.decimals
+    const next =
+      emoji?.length || decimal?.length === 3
+        ? ({
+            sas: {
+              emoji: emoji?.length ? [...emoji] : undefined,
+              decimal:
+                decimal?.length === 3
+                  ? ([decimal[0], decimal[1], decimal[2]] as [number, number, number])
+                  : undefined,
+            },
+            confirm: async () => {
+              this.request.apply(await nativeVerificationAction('verificationApprove', snapshot))
+            },
+            mismatch: () => {
+              void nativeVerificationAction('verificationDecline', snapshot).then((next) =>
+                this.request.apply(next),
+              )
+            },
+            cancel: () => {
+              void nativeVerificationAction('verificationCancel', snapshot).then((next) =>
+                this.request.apply(next),
+              )
+            },
+          } satisfies ShowSasCallbacks)
+        : null
+    const firstSas = !this.sas && next
+    this.sas = next
+    if (firstSas) this.emit(VerifierEvent.ShowSas, firstSas)
+    if (snapshot.phase === 'done') this.resolveFinished()
+    if (snapshot.phase === 'cancelled' || snapshot.phase === 'failed') {
+      const error = new Error(snapshot.error || 'Verification was cancelled')
+      this.cancelled(error)
+    }
+  }
+
+  private cancelled(error: Error) {
+    if (this.hasBeenCancelled) return
+    this.hasBeenCancelled = true
+    this.emit(VerifierEvent.Cancel, error)
+    this.rejectFinished(error)
+  }
+}
+
+class NativeVerificationRequestAdapter extends NativeEmitter {
+  private snapshot: NativeVerificationSnapshot
+  private nativeVerifier?: NativeVerifierAdapter
+
+  constructor(snapshot: NativeVerificationSnapshot) {
+    super()
+    this.snapshot = snapshot
+    this.apply(snapshot)
+  }
+
+  get transactionId() {
+    return this.snapshot.requestId
+  }
+  get roomId() {
+    return undefined
+  }
+  get initiatedByMe() {
+    return !!this.snapshot.initiatedByMe
+  }
+  get otherUserId() {
+    return this.snapshot.otherUserId || this.snapshot.userId || ''
+  }
+  get otherDeviceId() {
+    return this.snapshot.otherDeviceId ?? undefined
+  }
+  get isSelfVerification() {
+    return this.snapshot.otherUserId === this.snapshot.userId
+  }
+  get phase() {
+    return nativeVerificationPhase(this.snapshot.phase)
+  }
+  get pending() {
+    return [
+      VerificationPhase.Requested,
+      VerificationPhase.Ready,
+      VerificationPhase.Started,
+    ].includes(this.phase)
+  }
+  get accepting() {
+    return false
+  }
+  get declining() {
+    return false
+  }
+  get timeout() {
+    return null
+  }
+  get methods() {
+    return ['m.sas.v1']
+  }
+  get chosenMethod() {
+    return this.phase >= VerificationPhase.Started ? 'm.sas.v1' : null
+  }
+  get verifier() {
+    return this.nativeVerifier as unknown as Verifier | undefined
+  }
+  get cancellationCode() {
+    return this.phase === VerificationPhase.Cancelled ? 'm.user' : null
+  }
+  get cancellingUserId() {
+    return undefined
+  }
+
+  otherPartySupportsMethod(method: string) {
+    return method === 'm.sas.v1'
+  }
+
+  async accept() {
+    this.apply(await nativeVerificationAction('verificationAccept', this.snapshot))
+  }
+
+  async cancel() {
+    this.apply(await nativeVerificationAction('verificationCancel', this.snapshot))
+  }
+
+  async startVerification(method: string) {
+    if (method !== 'm.sas.v1') throw new Error(`Unsupported verification method: ${method}`)
+    this.ensureVerifier()
+    this.apply(await nativeVerificationAction('verificationStartSas', this.snapshot))
+    return this.nativeVerifier as unknown as Verifier
+  }
+
+  async scanQRCode() {
+    throw new Error('QR verification is not supported by the Android native client')
+  }
+
+  async generateQRCode() {
+    return undefined
+  }
+
+  apply(snapshot: NativeVerificationSnapshot) {
+    this.snapshot = snapshot
+    if (snapshot.phase === 'started' || snapshot.emojis?.length || snapshot.decimals?.length)
+      this.ensureVerifier()
+    this.nativeVerifier?.apply(snapshot)
+    this.emit(VerificationRequestEvent.Change)
+  }
+
+  private ensureVerifier() {
+    if (!this.nativeVerifier)
+      this.nativeVerifier = new NativeVerifierAdapter(this.otherUserId, this)
+  }
+}
+
+const nativeVerificationRequests = new Map<string, NativeVerificationRequestAdapter>()
+
+function nativeVerificationPhase(phase: NativeVerificationSnapshot['phase']) {
+  switch (phase) {
+    case 'ready':
+      return VerificationPhase.Ready
+    case 'started':
+      return VerificationPhase.Started
+    case 'done':
+      return VerificationPhase.Done
+    case 'cancelled':
+    case 'failed':
+      return VerificationPhase.Cancelled
+    default:
+      return VerificationPhase.Requested
+  }
+}
+
+function nativeVerificationAction(action: string, snapshot: NativeVerificationSnapshot) {
+  if (!snapshot.userId || !snapshot.requestId)
+    throw new Error('The native verification request is incomplete')
+  return command<NativeVerificationSnapshot>(action, {
+    userId: snapshot.userId,
+    requestId: snapshot.requestId,
+  })
 }
 
 declare global {
@@ -220,6 +479,10 @@ export function nativeSetTyping(userId: string, roomId: string, typing: boolean)
   return command<{ ok: true }>('setTyping', { userId, roomId, typing })
 }
 
+export function nativeSetPresence(userId: string, presence: string) {
+  return command<{ ok: true }>('setPresence', { userId, presence })
+}
+
 export function nativeMarkRead(userId: string, roomId: string) {
   return command<{ ok: true }>('markRead', { userId, roomId })
 }
@@ -230,6 +493,61 @@ export function nativeLogout(userId: string) {
 
 export function nativeRecover(userId: string, recoveryKey: string) {
   return command<{ ok: true; background: true }>('recover', { userId, recoveryKey })
+}
+
+export function nativeSetupRecovery(userId: string, passphrase?: string) {
+  return command<{ recoveryKey: string; version: string }>('setupRecovery', {
+    userId,
+    passphrase,
+  })
+}
+
+export function nativeSecurityStatus<T>(userId: string) {
+  return command<T>('securityStatus', { userId })
+}
+
+export function nativeUserIdentities<
+  T extends Record<
+    string,
+    {
+      known: boolean
+      verified?: boolean
+      previouslyVerified?: boolean
+      needsApproval?: boolean
+      masterKey?: string
+    }
+  >,
+>(userId: string, targetUserIds: string[]) {
+  return command<T>('userIdentities', { userId, targetUserIds })
+}
+
+export async function nativeRequestVerification(userId: string, targetUserId?: string) {
+  const snapshot = await command<NativeVerificationSnapshot>('verificationRequest', {
+    userId,
+    targetUserId,
+  })
+  return applyNativeVerificationSnapshot(snapshot)
+}
+
+export async function nativeVerificationStatus(userId: string) {
+  const snapshot = await command<NativeVerificationSnapshot>('verificationStatus', { userId })
+  return snapshot.active ? applyNativeVerificationSnapshot(snapshot) : undefined
+}
+
+export function currentNativeVerification(userId: string) {
+  return nativeVerificationRequests.get(userId) as unknown as VerificationRequest | undefined
+}
+
+export function applyNativeVerificationSnapshot(snapshot: NativeVerificationSnapshot) {
+  if (!snapshot.active || !snapshot.userId || !snapshot.requestId) return undefined
+  let request = nativeVerificationRequests.get(snapshot.userId)
+  if (!request || request.transactionId !== snapshot.requestId) {
+    request = new NativeVerificationRequestAdapter(snapshot)
+    nativeVerificationRequests.set(snapshot.userId, request)
+  } else {
+    request.apply(snapshot)
+  }
+  return request as unknown as VerificationRequest
 }
 
 export function nativeWatchRoom(userId: string, roomId: string) {
@@ -280,6 +598,14 @@ export function installNativeMatrixTransport(client: MatrixClient, userId: strin
     await nativeSetTyping(userId, roomId, typing)
     return {}
   }) as typeof client.sendTyping
+
+  client.setPresence = async ({ presence }) => {
+    await nativeSetPresence(userId, presence)
+  }
+
+  client.setSyncPresence = async (presence) => {
+    await nativeSetPresence(userId, presence ?? 'offline')
+  }
 
   client.setRoomReadMarkers = (async (roomId: string) => {
     await nativeMarkRead(userId, roomId)
