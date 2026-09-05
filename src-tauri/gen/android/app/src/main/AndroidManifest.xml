@@ -17,7 +17,7 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
     <application
-        android:name=".FoxChatApplication"
+        android:name="foxchat.jakefox.de.FoxChatApplication"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.foxchat"
@@ -30,29 +30,29 @@
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="messages_v2" />
         <service
-            android:name=".FoxChatMessagingService"
+            android:name="foxchat.jakefox.de.FoxChatMessagingService"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
         <service
-            android:name=".FoxChatNotificationActionService"
+            android:name="foxchat.jakefox.de.FoxChatNotificationActionService"
             android:exported="false" />
         <service
-            android:name=".NotificationDecryptService"
+            android:name="foxchat.jakefox.de.NotificationDecryptService"
             android:exported="false"
             android:foregroundServiceType="shortService" />
         <service
-            android:name=".NativeCryptoSetupService"
+            android:name="foxchat.jakefox.de.NativeCryptoSetupService"
             android:exported="false"
             android:foregroundServiceType="shortService" />
         <service
-            android:name=".PushTokenRefreshJobService"
+            android:name="foxchat.jakefox.de.PushTokenRefreshJobService"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
         <service
-            android:name=".NotificationDecryptRetryJobService"
+            android:name="foxchat.jakefox.de.NotificationDecryptRetryJobService"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
         <service
@@ -63,7 +63,7 @@
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize"
             android:label="@string/main_activity_title"
-            android:name=".MainActivity"
+            android:name="foxchat.jakefox.de.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

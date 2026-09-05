@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -88,6 +89,7 @@ object NativeMatrixClientManager {
     private val locks = ConcurrentHashMap<String, Mutex>()
     private val roomListSubscriptions = ConcurrentHashMap<String, RoomListSubscription>()
     private val healthChecks = ConcurrentHashMap.newKeySet<String>()
+    private val terminalRestarts = ConcurrentHashMap.newKeySet<String>()
     @Volatile private var applicationContext: Context? = null
     @Volatile private var platformInitialized = false
 
@@ -171,6 +173,32 @@ object NativeMatrixClientManager {
     }
 
     /**
+     * A terminal callback may arrive while the process-bootstrap health check is still waiting
+     * for a room-list subscription. It must not go back through that healthChecks guard: doing
+     * so used to leave the terminated runtime installed forever. Runtime creation/removal is
+     * already serialized per account, while this separate guard coalesces ERROR + TERMINATED.
+     */
+    private fun restartTerminalRuntime(context: Context, userId: String, reason: String) {
+        if (!terminalRestarts.add(userId)) return
+        scope.launch {
+            try {
+                Log.w(TAG, "Repairing terminal Matrix runtime for $userId ($reason)")
+                ensureReadyAccountRunning(context, userId, reason)
+                Log.i(TAG, "Terminal Matrix runtime recovered for $userId ($reason)")
+            } catch (error: Throwable) {
+                Log.e(TAG, "Could not recover terminal Matrix runtime for $userId ($reason)", error)
+                NativeClientLogStore.recordNative(
+                    context.applicationContext,
+                    "native-matrix:terminal-restart:$userId:$reason",
+                    error,
+                )
+            } finally {
+                terminalRestarts.remove(userId)
+            }
+        }
+    }
+
+    /**
      * Starts the one-time same-device hand-off. The caller must have stopped matrix-js-sdk first.
      * We persist STAGED before opening Rust, and READY only after the native session, encrypted
      * stores and SyncService have all opened successfully.
@@ -226,14 +254,55 @@ object NativeMatrixClientManager {
             check(runtime.client.deviceId() == deviceId) { "Native Matrix device does not match the staged device" }
             awaitSyncRunning(runtime)
             ensureRoomListSubscription(runtime, userId)
-            withTimeout(60_000L) {
-                runtime.client.encryption().waitForE2eeInitializationTasks()
-                val room = runtime.client.getRoom(validationRoomId)
-                    ?: error("Native Matrix has not synced validation room $validationRoomId")
-                val validation = JSONObject(timelineEventJson(room, validationEventId))
-                check(validation.optString("type") != "m.room.encrypted") {
-                    "Native Matrix still returned encrypted content for the cut-over event"
+            var e2eeInitialized = false
+            var roomObserved = false
+            var lastValidationError: Throwable? = null
+            try {
+                withTimeout(60_000L) {
+                    runtime.client.encryption().waitForE2eeInitializationTasks()
+                    e2eeInitialized = true
+                    Log.i(TAG, "E2EE initialization completed for migration of $userId")
+                    while (true) {
+                        val room = runtime.client.getRoom(validationRoomId)
+                        if (room != null) {
+                            if (!roomObserved) {
+                                roomObserved = true
+                                Log.i(TAG, "Migration validation room became available for $userId")
+                            }
+                            try {
+                                val validation = JSONObject(
+                                    timelineEventJson(room, validationEventId),
+                                )
+                                if (validation.optString("type") != "m.room.encrypted") {
+                                    Log.i(TAG, "Migration validation event decrypted for $userId")
+                                    return@withTimeout
+                                }
+                                lastValidationError = IllegalStateException(
+                                    "Native timeline still returned the encrypted event",
+                                )
+                            } catch (error: Throwable) {
+                                lastValidationError = error
+                            }
+                        } else {
+                            lastValidationError = IllegalStateException(
+                                "Validation room is not present in the native room list",
+                            )
+                        }
+                        // RUNNING means the sync loop is alive, not that its first room-list update
+                        // has already landed. Migration validation must wait for that update and for
+                        // the focused timeline to decrypt the selected cut-over event.
+                        delay(500L)
+                    }
                 }
+            } catch (error: TimeoutCancellationException) {
+                val lastResult = lastValidationError?.let(::errorSummary)
+                    ?: "validation event was never checked"
+                throw IllegalStateException(
+                    "Cut-over validation timed out after 60 seconds " +
+                        "(e2eeInitialized=$e2eeInitialized, roomAvailable=$roomObserved, " +
+                        "lastResult=$lastResult)",
+                    error,
+                )
             }
             NativeMatrixMigrationStore.setState(context, userId, NativeMatrixMigrationStore.State.READY)
             NativeMatrixMigrationStore.clearMigrationSecrets(context, userId)
@@ -385,11 +454,11 @@ object NativeMatrixClientManager {
                 context, session.userId, NativeMatrixMigrationStore.State.VALIDATING,
             )
             client.enableAllSendQueues(true)
-            val syncService = client.syncService().finish()
+            val syncService = finishSyncService(client)
             val notificationClient = client.notificationClient(
                 NotificationProcessSetup.SingleProcess(syncService),
             )
-            val (syncStartup, syncStateHandle, syncState) = startSync(
+            val (syncStartup, syncStateHandle, syncState) = observeSyncState(
                 context.applicationContext, syncService, session.userId,
             )
             val runtime = AccountRuntime(
@@ -397,9 +466,10 @@ object NativeMatrixClientManager {
                 syncState,
             )
             accounts[session.userId] = runtime
+            ensureRoomListSubscription(runtime, session.userId)
+            startSync(context.applicationContext, runtime)
             stage = "starting native sync"
             awaitSyncRunning(runtime)
-            ensureRoomListSubscription(runtime, session.userId)
             stage = "initializing end-to-end encryption"
             withTimeout(60_000L) { client.encryption().waitForE2eeInitializationTasks() }
             NativeMatrixMigrationStore.setState(
@@ -431,7 +501,14 @@ object NativeMatrixClientManager {
         NativeMatrixMigrationStore.isReady(context, userId)
 
     fun sessionTokens(context: Context, userId: String): JSONObject? {
-        val session = NativeMatrixMigrationStore.account(context, userId)?.session ?: return null
+        val account = NativeMatrixMigrationStore.account(context, userId) ?: return null
+        // ERROR means the cut-over rolled back and the preserved WebView/fallback session owns
+        // this device again. Returning the staged Rust token here can mask credentials refreshed
+        // by that legacy owner and causes repeated M_UNKNOWN_TOKEN failures.
+        if (account.state == NativeMatrixMigrationStore.State.ERROR ||
+            account.state == NativeMatrixMigrationStore.State.LEGACY
+        ) return null
+        val session = account.session ?: return null
         return JSONObject()
             .put("accessToken", session.optString("accessToken"))
             .put("refreshToken", session.optString("refreshToken").takeIf { it.isNotBlank() })
@@ -674,11 +751,11 @@ object NativeMatrixClientManager {
                 }
             }
             client.enableAllSendQueues(true)
-            val syncService = client.syncService().finish()
+            val syncService = finishSyncService(client)
             val notificationClient = client.notificationClient(
                 NotificationProcessSetup.SingleProcess(syncService),
             )
-            val (syncStartup, syncStateHandle, syncState) = startSync(
+            val (syncStartup, syncStateHandle, syncState) = observeSyncState(
                 context.applicationContext, syncService, userId,
             )
             val runtime = AccountRuntime(
@@ -686,6 +763,8 @@ object NativeMatrixClientManager {
                 syncState,
             )
             accounts[userId] = runtime
+            ensureRoomListSubscription(runtime, userId)
+            startSync(context.applicationContext, runtime)
             runtime
         }
     }
@@ -727,6 +806,21 @@ object NativeMatrixClientManager {
 
     private fun isTerminalSyncState(state: SyncServiceState): Boolean =
         state == SyncServiceState.ERROR || state == SyncServiceState.TERMINATED
+
+    /**
+     * UniFFI gives SyncServiceBuilder a Cleaner whose native destructor must run while its Client
+     * is still alive. A temporary `client.syncService().finish()` leaves that destructor to
+     * FinalizerDaemon; if validation closes the Client first, Android aborts in
+     * `free_syncservicebuilder`. Dispose the builder deterministically after finish has cloned it.
+     */
+    private suspend fun finishSyncService(client: Client): SyncService {
+        val builder = client.syncService()
+        return try {
+            builder.finish()
+        } finally {
+            builder.close()
+        }
+    }
 
     private suspend fun runtimeForRoom(context: Context, roomId: String): AccountRuntime {
         for (account in NativeMatrixMigrationStore.accounts(context)) {
@@ -770,7 +864,10 @@ object NativeMatrixClientManager {
             internalIdPrefix = "foxchat-native-event-",
             dateDividerMode = DateDividerMode.DAILY,
             trackReadReceipts = TimelineReadReceiptTracking.DISABLED,
-            reportUtds = true,
+            // UTD reporting requires the UI SDK hook manager. This process-wide headless client
+            // intentionally has no UI hooks; enabling it makes focused timeline construction fail
+            // before the event can be fetched. We inspect the returned wire type ourselves below.
+            reportUtds = false,
         )
         try {
             val focusedTimeline = room.timelineWithConfiguration(configuration)
@@ -841,7 +938,7 @@ object NativeMatrixClientManager {
         .sorted()
         .joinToString("|")
 
-    private fun startSync(
+    private fun observeSyncState(
         context: Context,
         syncService: SyncService,
         userId: String,
@@ -862,26 +959,33 @@ object NativeMatrixClientManager {
                         IllegalStateException("Native Matrix sync entered $update"),
                     )
                     // A READY account must recover without waiting for an Activity/WebView
-                    // resume. ensureRunning is non-blocking and its per-account guard prevents
-                    // ERROR -> TERMINATED callbacks from creating competing runtimes.
-                    ensureRunning(context, "sync-state-${update.name.lowercase()}")
+                    // resume. This path deliberately has its own guard because a bootstrap
+                    // health check may still be in progress when the runtime terminates.
+                    restartTerminalRuntime(
+                        context,
+                        userId,
+                        "sync-state-${update.name.lowercase()}",
+                    )
                 }
             }
         })
+        return Triple(startup, handle, currentState)
+    }
+
+    private fun startSync(context: Context, runtime: AccountRuntime) {
         scope.launch {
-            runCatching { syncService.start() }
+            runCatching { runtime.syncService.start() }
                 .onFailure { error ->
-                    currentState.set(SyncServiceState.ERROR)
-                    startup.completeExceptionally(error)
-                    Log.e(TAG, "Sync stopped for $userId", error)
+                    runtime.syncState.set(SyncServiceState.ERROR)
+                    runtime.syncStartup.completeExceptionally(error)
+                    Log.e(TAG, "Sync stopped for ${runtime.userId}", error)
                     NativeClientLogStore.recordNative(
                         context,
-                        "native-matrix:sync:$userId",
+                        "native-matrix:sync:${runtime.userId}",
                         error,
                     )
                 }
         }
-        return Triple(startup, handle, currentState)
     }
 
     private suspend fun awaitSyncRunning(runtime: AccountRuntime) {

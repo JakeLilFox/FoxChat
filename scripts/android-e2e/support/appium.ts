@@ -31,6 +31,17 @@ async function availablePort(preferred: number): Promise<number> {
 }
 
 export async function startAppiumServer(port = 4723): Promise<AppiumServer> {
+  if (process.env.ANDROID_E2E_EXTERNAL_APPIUM?.toLowerCase() === 'true') {
+    const deadline = Date.now() + 30_000
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/status`)
+        if (response.ok) return { port, stop: () => undefined }
+      } catch {}
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 500))
+    }
+    throw new Error(`External Appium server was not ready on port ${port} within 30s`)
+  }
   const selectedPort = await availablePort(port)
   if (selectedPort !== port)
     console.warn(`Appium port ${port} is already in use; using ${selectedPort} instead.`)

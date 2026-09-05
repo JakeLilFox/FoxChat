@@ -103,6 +103,13 @@ export type MatrixSession = {
   deviceId: string
 }
 
+/** Android renders the selected account as soon as it is usable. Other saved accounts continue
+ * starting in the background so a broken secondary can never hold the whole app on its splash
+ * screen. Browser and desktop retain their existing all-accounts-ready startup semantics. */
+export function shouldAwaitSecondaryAccountStartup(android: boolean) {
+  return !android
+}
+
 export type MatrixRegistrationDetails = {
   homeserver: string
   username: string
@@ -640,7 +647,12 @@ export class MatrixClientService {
   }
 
   private async authenticate(baseUrl: string, username: string, password: string) {
-    if (isAndroidNativeMatrix()) {
+    // The isolated physical-device E2E build deliberately creates a WebView-owned session first
+    // so the production one-time Android migration is exercised. Normal Android builds always
+    // authenticate directly into the native owner.
+    const forceLegacyAndroidLogin =
+      import.meta.env.VITE_ANDROID_E2E_FORCE_LEGACY_LOGIN === 'true'
+    if (isAndroidNativeMatrix() && !forceLegacyAndroidLogin) {
       const session = await nativeMatrixLogin(baseUrl, username, password)
       return session satisfies MatrixSession
     }
@@ -1156,9 +1168,15 @@ export class MatrixClientService {
         this.observers.forEach((x) => x.onSync?.(`CRYPTO_USER_TRUST_STATUS_CHANGED:${userId}`))
       })
     }
-    client.on(ClientEvent.Sync, (state) => {
+    client.on(ClientEvent.Sync, (state, _previousState, data) => {
       this.observers.forEach((x) => x.onSync?.(String(state)))
       this.retryBackedOffSyncAfterResume(client)
+      if (String(state).toUpperCase() === 'ERROR')
+        reportClientError(
+          `matrix-sync:${session.userId}`,
+          `Matrix sync entered ERROR for ${session.userId}`,
+          data?.error,
+        )
       if (!nativeObserverMode && String(state) === 'PREPARED') void this.enableAutomaticKeySync()
     })
     client.on(ClientEvent.Room, (room) => {
@@ -1315,7 +1333,7 @@ export class MatrixClientService {
       void registerMatrixPush(client).catch(() => undefined)
     }
     if (!this.secondary && this.combinedAccountsEnabled()) {
-      if (nativeObserverMode) {
+      if (!shouldAwaitSecondaryAccountStartup(isAndroidNativeMatrix())) {
         void this.startSecondaryAccounts().catch((error) =>
           reportClientError(
             'secondary-account-startup',

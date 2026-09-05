@@ -249,15 +249,22 @@ async function adoptAndroidMatrixDeviceOnce(client: MatrixClient) {
     }
     const validation = client
       .getRooms()
+      .filter((room) => room.getMyMembership() === 'join')
       .flatMap((room) =>
         [...room.getLiveTimeline().getEvents()].reverse().map((event) => ({ room, event })),
       )
-      .find(
+      .filter(
         ({ event }) =>
           event.getWireType() === EventType.RoomMessageEncrypted &&
           !event.isDecryptionFailure() &&
           !!event.getId(),
       )
+      // MatrixClient#getRooms is not an activity-sorted list. Selecting its first matching
+      // event can pick an old room outside Sliding Sync's initial window, leaving the native
+      // cut-over validator waiting for a room Rust was never asked to materialize. A recent
+      // event is both a stronger key-transfer check and belongs to a room the native list will
+      // request first.
+      .sort((first, second) => second.event.getTs() - first.event.getTs())[0]
     if (!validation?.event.getId()) {
       throw new Error(`${userId}: No decrypted encrypted event is available to validate migration`)
     }

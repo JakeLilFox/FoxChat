@@ -58,6 +58,12 @@ function log(step: string) {
 }
 
 function firstDeviceSerial(androidHome: string): string {
+  const requested = process.env.ANDROID_E2E_DEVICE_SERIAL?.trim()
+  if (
+    requested &&
+    process.env.ANDROID_E2E_TRUST_DEVICE_SERIAL?.toLowerCase() === 'true'
+  )
+    return requested
   const result = spawnSync(adbBin(androidHome), ['devices'], {
     encoding: 'utf-8',
     env: adbEnvironment(androidHome),
@@ -68,12 +74,19 @@ function firstDeviceSerial(androidHome: string): string {
       `Could not run adb while looking for a booted Android device: ${result.error.message}`,
     )
   }
-  const line = (result.stdout ?? '')
+  const connected = (result.stdout ?? '')
     .split('\n')
     .slice(1)
-    .find((entry) => entry.trim().endsWith('\tdevice'))
+    .filter((entry) => entry.trim().endsWith('\tdevice'))
+  const line = requested
+    ? connected.find((entry) => entry.split('\t')[0]?.trim() === requested)
+    : connected[0]
   if (!line)
-    throw new Error(`No booted Android device found via \`adb devices\`:\n${result.stdout}`)
+    throw new Error(
+      requested
+        ? `ANDROID_E2E_DEVICE_SERIAL=${requested} is not a booted adb device:\n${result.stdout}`
+        : `No booted Android device found via \`adb devices\`:\n${result.stdout}`,
+    )
   return line.split('\t')[0]!.trim()
 }
 
@@ -1465,6 +1478,9 @@ async function main() {
   }
   const cfg = config as AndroidE2eConfig
   const deviceKeyDiagnostic = process.env.ANDROID_E2E_DIAGNOSTIC === 'device-key-publication'
+  const nativeMigrationDiagnostic = process.env.ANDROID_E2E_DIAGNOSTIC === 'native-migration'
+  const externalDeviceHarness =
+    process.env.ANDROID_E2E_EXTERNAL_APPIUM?.toLowerCase() === 'true'
 
   const androidHome = cfg.androidHome || resolveAndroidHome()
   const serial = firstDeviceSerial(androidHome)
@@ -1489,9 +1505,11 @@ async function main() {
 
     log('start Appium and install the app')
     appium = await startAppiumServer(cfg.appiumPort)
-    uninstall(cfg.packageName)
-    install(cfg.apkPath)
-    clearAppData(cfg.packageName)
+    if (!externalDeviceHarness) {
+      uninstall(cfg.packageName)
+      install(cfg.apkPath)
+      clearAppData(cfg.packageName)
+    }
     browser = await remote({
       hostname: '127.0.0.1',
       port: appium.port,
@@ -1526,19 +1544,21 @@ async function main() {
     await waitForAndroidLoginPage(browser)
     await verifyWebviewNetwork(browser, cfg.account1.homeserver)
 
-    log(
-      deviceKeyDiagnostic
-        ? 'wipe stale devices for Android account 1'
-        : 'wipe stale devices for all four accounts',
-    )
-    const pwForCleanup = await chromium.launch()
-    try {
-      const accountsToClean = deviceKeyDiagnostic
-        ? [cfg.account1]
-        : [cfg.account1, cfg.account2, cfg.account3, cfg.account4]
-      for (const account of accountsToClean) await wipeAllDevices(pwForCleanup, account)
-    } finally {
-      await pwForCleanup.close()
+    if (!nativeMigrationDiagnostic) {
+      log(
+        deviceKeyDiagnostic
+          ? 'wipe stale devices for Android account 1'
+          : 'wipe stale devices for all four accounts',
+      )
+      const pwForCleanup = await chromium.launch()
+      try {
+        const accountsToClean = deviceKeyDiagnostic
+          ? [cfg.account1]
+          : [cfg.account1, cfg.account2, cfg.account3, cfg.account4]
+        for (const account of accountsToClean) await wipeAllDevices(pwForCleanup, account)
+      } finally {
+        await pwForCleanup.close()
+      }
     }
 
     const runId = `${Date.now()}`
@@ -1552,7 +1572,8 @@ async function main() {
 
     log('normal login as account 1')
     await loginAndroid(browser, cfg.account1)
-    await allowAndroidNotificationPermission(browser, cfg.packageName)
+    if (!nativeMigrationDiagnostic)
+      await allowAndroidNotificationPermission(browser, cfg.packageName)
     const primaryAndroidSessions = await sessionsFromAndroidStorage(browser)
     sessions.push(...primaryAndroidSessions)
     let primaryAndroidSession = primaryAndroidSessions.find(
@@ -1582,6 +1603,67 @@ async function main() {
     primaryAndroidSession = postRecoveryPrimary
     sessions.push(postRecoveryPrimary)
     primaryAndroidSession = await waitForPublishedDeviceKey(browser, cfg.account1.userId)
+
+    if (nativeMigrationDiagnostic) {
+      const migrationBrowser: WdioBrowser = browser
+      log('wait for the legacy WebView device to migrate into the native Matrix runtime')
+      let latestStatus: unknown
+      await migrationBrowser.waitUntil(
+        async () => {
+          await switchToWebview(migrationBrowser)
+          latestStatus = await migrationBrowser.executeAsync((userId, done) => {
+            const invoke = (
+              window as typeof window & {
+                __TAURI_INTERNALS__?: {
+                  invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown>
+                }
+              }
+            ).__TAURI_INTERNALS__?.invoke
+            if (!invoke) {
+              done({ error: 'Tauri invoke unavailable' })
+              return
+            }
+            void invoke('plugin:remote-push|native_matrix', {
+              action: 'status',
+              payload: '{}',
+            })
+              .then((status) => done(status))
+              .catch((error) =>
+                done({ error: error instanceof Error ? error.message : String(error), userId }),
+              )
+          }, cfg.account1.userId)
+          const account = (
+            latestStatus as {
+              accounts?: Array<{
+                userId?: string
+                state?: string
+                runtimeActive?: boolean
+                syncState?: string | null
+                error?: string | null
+              }>
+            }
+          )?.accounts?.find((candidate) => candidate.userId === cfg.account1.userId)
+          if (account?.state === 'error')
+            throw new Error(`Native migration entered ERROR: ${account.error || 'no detail'}`)
+          return (
+            account?.state === 'ready' &&
+            account.runtimeActive === true &&
+            account.syncState === 'running'
+          )
+        },
+        {
+          timeout: 300_000,
+          interval: 2_000,
+          timeoutMsg: `Native migration did not reach ready/running. Last status: ${JSON.stringify(latestStatus)}`,
+        },
+      )
+      await migrationBrowser.refresh()
+      await waitForRestoredAndroidSession(migrationBrowser, 1, 90_000)
+      console.log(
+        `Physical Android native migration completed and survived a WebView reload: ${JSON.stringify(latestStatus)}`,
+      )
+      return
+    }
 
     log('check push notifications auto-set-up')
     await verifyPushAutoSetup(browser, [cfg.account1.userId], [cfg.account1.userId])
@@ -1749,7 +1831,7 @@ async function main() {
     } catch (error) {
       console.error('Room cleanup failed (non-fatal):', error)
     }
-    stopEmulator(androidHome)
+    if (!externalDeviceHarness) stopEmulator(androidHome)
   }
 }
 

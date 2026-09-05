@@ -42,10 +42,16 @@ export function ensureAvdHome(home) {
   return avdHome
 }
 
+function androidE2eUserHome(home) {
+  return process.env.ANDROID_E2E_USER_HOME || join(home, 'user-home')
+}
+
 function ensureAdbVendorKey(home) {
   const base64 = process.env.ANDROID_E2E_ADB_KEY_BASE64
   if (!base64) return undefined
-  const keyPath = join(home, 'adb-vendor-key')
+  const userHome = androidE2eUserHome(home)
+  mkdirSync(userHome, { recursive: true })
+  const keyPath = join(userHome, 'adb-vendor-key')
   writeFileSync(keyPath, Buffer.from(base64, 'base64'))
   if (platform() !== 'win32') {
     try {
@@ -57,7 +63,7 @@ function ensureAdbVendorKey(home) {
 
 function sdkEnv(home) {
   const adbVendorKey = ensureAdbVendorKey(home)
-  const androidUserHome = join(home, 'user-home')
+  const androidUserHome = androidE2eUserHome(home)
   mkdirSync(androidUserHome, { recursive: true })
   return {
     ...process.env,

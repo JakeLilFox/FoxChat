@@ -17,10 +17,19 @@ plugins {
 // Firebase configuration is supplied per deployment and is intentionally not
 // committed. Applying the plugin when the file is present generates the
 // Android resources required by Firebase Messaging for background delivery.
-if (file("google-services.json").exists()) {
+val sideBySideE2e = System.getenv("ANDROID_E2E_SIDE_BY_SIDE")
+    ?.equals("true", ignoreCase = true) == true
+
+if (file("google-services.json").exists() && !sideBySideE2e) {
     apply(plugin = "com.google.gms.google-services")
 } else {
-    logger.warn("google-services.json is missing: closed-app FCM notifications will not work")
+    logger.warn(
+        if (sideBySideE2e) {
+            "Side-by-side E2E build: Firebase is disabled because its package is intentionally isolated"
+        } else {
+            "google-services.json is missing: closed-app FCM notifications will not work"
+        }
+    )
 }
 
 val tauriProperties = Properties().apply {
@@ -93,7 +102,7 @@ android {
     namespace = "foxchat.jakefox.de"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = "foxchat.jakefox.de"
+        applicationId = if (sideBySideE2e) "foxchat.jakefox.de.e2e" else "foxchat.jakefox.de"
         minSdk = 24
         targetSdk = 36
         versionCode = System.getenv("VERSION_CODE")?.let { versionCodeOf(it) } ?: tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
@@ -101,6 +110,9 @@ android {
     }
     buildTypes {
         getByName("debug") {
+            if (sideBySideE2e) {
+                versionNameSuffix = "-e2e"
+            }
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
             isJniDebuggable = true
@@ -192,7 +204,13 @@ repositories {
 }
 
 dependencies {
-    legacyCryptoAar("org.matrix.rustcomponents:crypto-android:26.05.12@aar")
+    val legacyCryptoOverride = System.getenv("ANDROID_E2E_LEGACY_CRYPTO_AAR")
+        ?.takeIf { it.isNotBlank() }
+    if (legacyCryptoOverride != null) {
+        legacyCryptoAar(files(legacyCryptoOverride))
+    } else {
+        legacyCryptoAar("org.matrix.rustcomponents:crypto-android:26.05.12@aar")
+    }
     implementation("com.google.firebase:firebase-messaging:24.1.2")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
@@ -212,7 +230,7 @@ dependencies {
 
 // Keep normal desktop/web development buildable before the Firebase file is
 // provisioned. Android push is enabled as soon as google-services.json exists.
-if (file("google-services.json").exists()) {
+if (file("google-services.json").exists() && !sideBySideE2e) {
     apply(plugin = "com.google.gms.google-services")
 }
 

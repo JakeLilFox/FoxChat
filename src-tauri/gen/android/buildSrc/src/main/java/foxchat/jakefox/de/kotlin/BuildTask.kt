@@ -16,11 +16,11 @@ open class BuildTask : DefaultTask() {
 
     @TaskAction
     fun assemble() {
-        val executable = """cargo""";
+        val executable = System.getenv("CARGO")?.takeIf { it.isNotBlank() } ?: "cargo"
         try {
             runTauriCli(executable)
         } catch (e: Exception) {
-            if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+            if (Os.isFamily(Os.FAMILY_WINDOWS) && !File(executable).isAbsolute) {
                 // Try different Windows-specific extensions
                 val fallbacks = listOf(
                     "$executable.exe",

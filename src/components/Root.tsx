@@ -13,6 +13,7 @@ import { startAutomationApiIntegration } from '../platform/automationApi'
 import { applyCliLogin, fetchCliLoginOptions } from '../platform/cliBootstrap'
 import { listenForDesktopExternalLinks } from '../platform/externalLinks'
 import { ErrorLoggingBridge } from './ErrorLoggingBridge'
+import { reportClientError } from '../platform/errorLogging'
 
 export function Root() {
   const [mode, setMode] = useState<ThemeMode>(
@@ -77,7 +78,14 @@ export function Root() {
       matrixService
         .start(session)
         .then(() => setAuth('ready'))
-        .catch(() => setAuth('guest'))
+        .catch((error) => {
+          reportClientError(
+            `matrix-startup:${session.userId}`,
+            `Could not start Matrix account ${session.userId}`,
+            error,
+          )
+          setAuth('guest')
+        })
     })()
   }, [])
   return (

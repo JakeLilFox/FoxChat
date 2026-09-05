@@ -17,11 +17,11 @@ import android.util.Base64
 object NativeMatrixMigrationStore {
     private const val PREFS = "foxchat_native_matrix"
     private const val ACCOUNTS = "accounts"
-    // Version 1 replaces NotificationClient-based cut-over validation with an unfiltered
-    // timeline lookup. Failed transactions from older builds may be retried exactly once with
-    // that fix; failures produced by this implementation remain terminal until another explicit
-    // migration implementation is shipped.
-    private const val CURRENT_MIGRATION_VERSION = 1
+    // Version 1 replaced NotificationClient-based cut-over validation with an unfiltered
+    // timeline lookup. Version 2 stops a failed Rust transaction from masking credentials owned
+    // and refreshed by the restored WebView/fallback client. Each implementation revision gets
+    // one retry; failures produced by the current revision remain terminal.
+    private const val CURRENT_MIGRATION_VERSION = 2
 
     enum class State(val wireName: String) {
         LEGACY("legacy"),
@@ -135,7 +135,11 @@ object NativeMatrixMigrationStore {
             return false
         val error = account.error.orEmpty()
         return Regex("InvalidCertificate\\s*\\(\\s*Revoked\\s*\\)", RegexOption.IGNORE_CASE)
-            .containsMatchIn(error) || error.contains("EventFilteredOut", ignoreCase = true)
+            .containsMatchIn(error) ||
+            error.contains("EventFilteredOut", ignoreCase = true) ||
+            (account.migrationVersion < 2 &&
+                (error.contains("M_UNKNOWN_TOKEN", ignoreCase = true) ||
+                    error.contains("Unknown access token", ignoreCase = true)))
     }
 
     @Synchronized

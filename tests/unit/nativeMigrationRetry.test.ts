@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MatrixClientService, type MatrixSession } from '../../src/matrix/MatrixClientService'
+import {
+  MatrixClientService,
+  shouldAwaitSecondaryAccountStartup,
+  type MatrixSession,
+} from '../../src/matrix/MatrixClientService'
 
 const originalUserAgent = navigator.userAgent
 
@@ -71,5 +75,13 @@ describe('Android native Matrix migration retry', () => {
       new MatrixClientService().retryNativeMigration('@user:example.org', 'DEVICE', reload),
     ).toThrow('Native Matrix migration is Android-only')
     expect(reload).not.toHaveBeenCalled()
+  })
+
+  it('does not block Android startup on secondary accounts', () => {
+    expect(shouldAwaitSecondaryAccountStartup(true)).toBe(false)
+  })
+
+  it('keeps browser and desktop secondary-account startup behavior', () => {
+    expect(shouldAwaitSecondaryAccountStartup(false)).toBe(true)
   })
 })
