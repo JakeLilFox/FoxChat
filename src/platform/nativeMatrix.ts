@@ -7,6 +7,7 @@ import {
   type VerificationRequest,
   type Verifier,
 } from 'matrix-js-sdk/lib/crypto-api'
+import { reportClientError } from './errorLogging'
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 
@@ -526,10 +527,11 @@ export function nativeUserIdentities<
 export async function nativeRequestVerification(userId: string, targetUserId?: string) {
   let timeout: ReturnType<typeof setTimeout> | undefined
   const bridgeTimeout = new Promise<never>((_, reject) => {
-    timeout = setTimeout(
-      () => reject(new Error('Native Matrix verification did not respond within 50 seconds')),
-      VERIFICATION_BRIDGE_TIMEOUT_MS,
-    )
+    timeout = setTimeout(() => {
+      const error = new Error('Native Matrix verification did not respond within 50 seconds')
+      reportClientError('native-matrix:verification-request-timeout', error.message, error)
+      reject(error)
+    }, VERIFICATION_BRIDGE_TIMEOUT_MS)
   })
   const snapshot = await Promise.race([
     command<NativeVerificationSnapshot>('verificationRequest', {

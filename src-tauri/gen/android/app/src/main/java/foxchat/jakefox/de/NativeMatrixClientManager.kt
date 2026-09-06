@@ -175,7 +175,9 @@ object NativeMatrixClientManager {
                     writeToFiles = null,
                     sentryConfig = null,
                 ),
-                useLightweightTokioRuntime = true,
+                // Android owns a full Matrix client in this process. The lightweight runtime is
+                // intended for memory-constrained extension processes and limits blocking work.
+                useLightweightTokioRuntime = false,
             )
             platformInitialized = true
         }
@@ -791,23 +793,23 @@ object NativeMatrixClientManager {
             identities
         }
 
-    fun verificationStatus(context: Context, userId: String): JSONObject =
-        runBlocking(Dispatchers.IO) {
-            ensureReadyRuntimeForUi(context, userId)
-            verificationSessions[userId]?.json() ?: JSONObject().put("active", false)
-        }
+    suspend fun verificationStatus(context: Context, userId: String): JSONObject {
+        ensureReadyRuntimeForUi(context, userId)
+        return verificationSessions[userId]?.json() ?: JSONObject().put("active", false)
+    }
 
-    fun requestVerification(
+    suspend fun requestVerification(
         context: Context,
         userId: String,
         targetUserId: String?,
-    ): JSONObject = runBlocking(Dispatchers.IO) {
+    ): JSONObject {
         val runtime = ensureReadyRuntimeForUi(context, userId)
         val target = targetUserId?.takeIf { it.isNotBlank() } ?: userId
         var stage = "waiting for native sync"
         var session: VerificationSession? = null
-        try {
+        return try {
             withTimeout(VERIFICATION_REQUEST_TIMEOUT_MS) {
+                Log.i(TAG, "Verification for $userId: $stage")
                 while (runtime.syncState.get() != SyncServiceState.RUNNING) {
                     val state = runtime.syncState.get()
                     check(!isTerminalSyncState(state)) {
@@ -817,17 +819,20 @@ object NativeMatrixClientManager {
                 }
 
                 stage = "initializing encryption"
+                Log.i(TAG, "Verification for $userId: $stage")
                 val encryption = runtime.client.encryption()
                 encryption.waitForE2eeInitializationTasks()
 
                 if (target == userId) {
                     stage = "checking other devices"
+                    Log.i(TAG, "Verification for $userId: $stage")
                     check(encryption.hasDevicesToVerifyAgainst()) {
                         "Matrix reports no other device available to verify this device"
                     }
                 }
 
                 stage = "sending the Matrix verification request"
+                Log.i(TAG, "Verification for $userId: $stage")
                 session = VerificationSession(
                     userId = userId,
                     initiatedByMe = true,
@@ -865,7 +870,7 @@ object NativeMatrixClientManager {
         }
     }
 
-    fun acceptVerification(context: Context, userId: String, requestId: String): JSONObject =
+    suspend fun acceptVerification(context: Context, userId: String, requestId: String): JSONObject =
         verificationAction(context, userId, requestId) { controller, session ->
             val sender = session.senderId ?: error("Incoming verification has no sender")
             val flow = session.flowId ?: error("Incoming verification has no flow id")
@@ -873,38 +878,38 @@ object NativeMatrixClientManager {
             controller.acceptVerificationRequest()
         }
 
-    fun startSasVerification(context: Context, userId: String, requestId: String): JSONObject =
+    suspend fun startSasVerification(context: Context, userId: String, requestId: String): JSONObject =
         verificationAction(context, userId, requestId) { controller, _ ->
             controller.startSasVerification()
         }
 
-    fun approveVerification(context: Context, userId: String, requestId: String): JSONObject =
+    suspend fun approveVerification(context: Context, userId: String, requestId: String): JSONObject =
         verificationAction(context, userId, requestId) { controller, _ ->
             controller.approveVerification()
         }
 
-    fun declineVerification(context: Context, userId: String, requestId: String): JSONObject =
+    suspend fun declineVerification(context: Context, userId: String, requestId: String): JSONObject =
         verificationAction(context, userId, requestId) { controller, _ ->
             controller.declineVerification()
         }
 
-    fun cancelVerification(context: Context, userId: String, requestId: String): JSONObject =
+    suspend fun cancelVerification(context: Context, userId: String, requestId: String): JSONObject =
         verificationAction(context, userId, requestId) { controller, _ ->
             controller.cancelVerification()
         }
 
-    private fun verificationAction(
+    private suspend fun verificationAction(
         context: Context,
         userId: String,
         requestId: String,
         action: suspend (SessionVerificationController, VerificationSession) -> Unit,
-    ): JSONObject = runBlocking(Dispatchers.IO) {
+    ): JSONObject {
         val runtime = ensureReadyRuntimeForUi(context, userId)
         val session = verificationSessions[userId]
             ?: error("No native verification is active for $userId")
         check(session.requestId == requestId) { "The native verification request is no longer active" }
         action(runtime.verificationController, session)
-        session.json()
+        return session.json()
     }
 
     fun logout(context: Context, userId: String) = runBlocking(Dispatchers.IO) {

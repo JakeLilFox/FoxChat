@@ -60,7 +60,7 @@ object NativeCryptoBridge {
     var test: ((String, String) -> String)? = null
     var sessionTokens: ((String) -> String)? = null
     /** Android app-owned Matrix Rust SDK dispatcher; kept generic so this plugin stays reusable. */
-    var matrix: ((action: String, payload: String) -> String)? = null
+    var matrix: (suspend (action: String, payload: String) -> String)? = null
     /** App-owned durable logger for native failures that may also surface as WebView toasts. */
     var recordError: ((context: String, error: Throwable) -> Unit)? = null
 }

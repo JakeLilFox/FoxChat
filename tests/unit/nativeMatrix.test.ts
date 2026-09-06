@@ -258,6 +258,7 @@ describe('Android native Matrix bridge', () => {
 
   it('times out a native verification bridge that never answers', async () => {
     vi.useFakeTimers()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const invoke = vi.fn().mockReturnValue(new Promise(() => undefined))
     enableAndroid(invoke)
 
@@ -268,6 +269,14 @@ describe('Android native Matrix bridge', () => {
     await vi.advanceTimersByTimeAsync(50_000)
 
     await rejection
+    expect(invoke.mock.calls.map(([, args]) => args.action)).toEqual([
+      'verificationRequest',
+      'logClientError',
+    ])
+    expect(JSON.parse(invoke.mock.calls[1][1].payload)).toMatchObject({
+      context: 'native-matrix:verification-request-timeout',
+      summary: 'Native Matrix verification did not respond within 50 seconds',
+    })
     vi.useRealTimers()
   })
 
