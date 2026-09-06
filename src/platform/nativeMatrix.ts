@@ -59,6 +59,8 @@ export type NativeVerificationSnapshot = {
 
 type NativeListener = (...args: unknown[]) => void
 
+const VERIFICATION_BRIDGE_TIMEOUT_MS = 50_000
+
 class NativeEmitter {
   private listeners = new Map<string, Set<NativeListener>>()
 
@@ -522,9 +524,21 @@ export function nativeUserIdentities<
 }
 
 export async function nativeRequestVerification(userId: string, targetUserId?: string) {
-  const snapshot = await command<NativeVerificationSnapshot>('verificationRequest', {
-    userId,
-    targetUserId,
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const bridgeTimeout = new Promise<never>((_, reject) => {
+    timeout = setTimeout(
+      () => reject(new Error('Native Matrix verification did not respond within 50 seconds')),
+      VERIFICATION_BRIDGE_TIMEOUT_MS,
+    )
+  })
+  const snapshot = await Promise.race([
+    command<NativeVerificationSnapshot>('verificationRequest', {
+      userId,
+      targetUserId,
+    }),
+    bridgeTimeout,
+  ]).finally(() => {
+    if (timeout !== undefined) clearTimeout(timeout)
   })
   return applyNativeVerificationSnapshot(snapshot)
 }

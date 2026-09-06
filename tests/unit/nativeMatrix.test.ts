@@ -256,6 +256,21 @@ describe('Android native Matrix bridge', () => {
     ])
   })
 
+  it('times out a native verification bridge that never answers', async () => {
+    vi.useFakeTimers()
+    const invoke = vi.fn().mockReturnValue(new Promise(() => undefined))
+    enableAndroid(invoke)
+
+    const request = nativeRequestVerification('@me:example.org')
+    const rejection = expect(request).rejects.toThrow(
+      'Native Matrix verification did not respond within 50 seconds',
+    )
+    await vi.advanceTimersByTimeAsync(50_000)
+
+    await rejection
+    vi.useRealTimers()
+  })
+
   it('routes recovery setup and security inspection to native Matrix', async () => {
     const invoke = vi
       .fn()

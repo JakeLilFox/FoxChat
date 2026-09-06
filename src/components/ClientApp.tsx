@@ -55,7 +55,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import { Drawer, Input, Modal, Segmented, Spin, App as AntApp } from 'antd'
+import { Button, Drawer, Input, Modal, Segmented, Spin, App as AntApp } from 'antd'
 import { Room, RoomType } from 'matrix-js-sdk'
 import { VerificationPhase, type VerificationRequest } from 'matrix-js-sdk/lib/crypto-api'
 import { AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT, matrixService } from '../matrix/MatrixClientService'
@@ -166,6 +166,7 @@ export function ClientApp({
   const [restoring, setRestoring] = useState(false)
   const [verification, setVerification] = useState<VerificationRequest>()
   const [requestingVerification, setRequestingVerification] = useState(false)
+  const verificationAttempt = useRef(0)
   const roomRefreshFrame = useRef<number | undefined>(undefined)
   const changedRoomIds = useRef(new Set<string>())
   const selectedRoomId = useRef(selected)
@@ -594,6 +595,7 @@ export function ClientApp({
     }
   }
   const verify = async (deviceId?: string) => {
+    const attempt = ++verificationAttempt.current
     setRequestingVerification(true)
     try {
       const request = deviceId
@@ -602,6 +604,10 @@ export function ClientApp({
             deviceId,
           )
         : await matrixService.requestOwnDeviceVerification()
+      if (verificationAttempt.current !== attempt) {
+        if (request.pending) void request.cancel().catch(() => undefined)
+        return
+      }
       // The crypto SDK can hand back a previously cancelled/completed request instead of
       // starting a new one if it still considers the old one "in flight". Opening the dialog
       // on that stale request would just show a dead end with no way to retry.
@@ -618,10 +624,15 @@ export function ClientApp({
       // Keep Settings beneath the verification history entry.
       setSettings(false)
     } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Could not request verification')
+      if (verificationAttempt.current === attempt)
+        message.error(e instanceof Error ? e.message : 'Could not request verification')
     } finally {
-      setRequestingVerification(false)
+      if (verificationAttempt.current === attempt) setRequestingVerification(false)
     }
+  }
+  const cancelVerificationRequest = () => {
+    verificationAttempt.current += 1
+    setRequestingVerification(false)
   }
   const showSpaceOverview = (target: Room) => {
     setSpace(target.roomId)
@@ -885,8 +896,18 @@ export function ClientApp({
         />
       </Modal>
       {requestingVerification && (
-        <Modal open footer={null} closable={false}>
-          <Spin /> Sending verification request to your other devices…
+        <Modal
+          title="Verify another device"
+          open
+          footer={null}
+          onCancel={cancelVerificationRequest}
+        >
+          <p>
+            <Spin /> Sending verification request to your other devices…
+          </p>
+          <Button block onClick={cancelVerificationRequest}>
+            Cancel
+          </Button>
         </Modal>
       )}
       {verification && <VerificationDialog request={verification} onClose={hideVerification} />}

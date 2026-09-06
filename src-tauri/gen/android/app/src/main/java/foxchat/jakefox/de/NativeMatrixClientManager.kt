@@ -91,6 +91,7 @@ data class NativeMatrixDecryptedEvent(
  */
 object NativeMatrixClientManager {
     private const val TAG = "FoxChatNativeMatrix"
+    private const val VERIFICATION_REQUEST_TIMEOUT_MS = 45_000L
     private val platformInitLock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val accounts = ConcurrentHashMap<String, AccountRuntime>()
@@ -803,23 +804,64 @@ object NativeMatrixClientManager {
     ): JSONObject = runBlocking(Dispatchers.IO) {
         val runtime = ensureReadyRuntimeForUi(context, userId)
         val target = targetUserId?.takeIf { it.isNotBlank() } ?: userId
-        val session = VerificationSession(
-            userId = userId,
-            initiatedByMe = true,
-            otherUserId = target,
-        )
-        verificationSessions[userId] = session
-        publishVerification(session)
+        var stage = "waiting for native sync"
+        var session: VerificationSession? = null
         try {
-            if (target == userId) runtime.verificationController.requestDeviceVerification()
-            else runtime.verificationController.requestUserVerification(target)
-            session.json()
-        } catch (error: Throwable) {
-            updateVerification(userId) {
-                phase = "failed"
-                this.error = errorSummary(error)
+            withTimeout(VERIFICATION_REQUEST_TIMEOUT_MS) {
+                while (runtime.syncState.get() != SyncServiceState.RUNNING) {
+                    val state = runtime.syncState.get()
+                    check(!isTerminalSyncState(state)) {
+                        "Native Matrix sync cannot send verification while it is $state"
+                    }
+                    delay(100L)
+                }
+
+                stage = "initializing encryption"
+                val encryption = runtime.client.encryption()
+                encryption.waitForE2eeInitializationTasks()
+
+                if (target == userId) {
+                    stage = "checking other devices"
+                    check(encryption.hasDevicesToVerifyAgainst()) {
+                        "Matrix reports no other device available to verify this device"
+                    }
+                }
+
+                stage = "sending the Matrix verification request"
+                session = VerificationSession(
+                    userId = userId,
+                    initiatedByMe = true,
+                    otherUserId = target,
+                ).also {
+                    verificationSessions[userId] = it
+                }
+                if (target == userId) runtime.verificationController.requestDeviceVerification()
+                else runtime.verificationController.requestUserVerification(target)
+                Log.i(TAG, "Verification request sent for $userId to $target")
+                publishVerification(checkNotNull(session))
             }
-            throw error
+            checkNotNull(session).json()
+        } catch (error: Throwable) {
+            val contextualError = if (error is TimeoutCancellationException) {
+                IllegalStateException(
+                    "Native Matrix verification timed out during $stage after " +
+                        "${VERIFICATION_REQUEST_TIMEOUT_MS / 1_000} seconds",
+                    error,
+                )
+            } else {
+                IllegalStateException(
+                    "Native Matrix verification failed during $stage: ${errorSummary(error)}",
+                    error,
+                )
+            }
+            session?.let { activeSession ->
+                synchronized(activeSession) {
+                    activeSession.phase = "failed"
+                    activeSession.error = contextualError.message
+                }
+                verificationSessions.remove(userId, activeSession)
+            }
+            throw contextualError
         }
     }
 
