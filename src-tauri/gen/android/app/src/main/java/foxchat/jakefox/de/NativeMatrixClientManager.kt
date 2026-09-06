@@ -803,12 +803,15 @@ object NativeMatrixClientManager {
         userId: String,
         targetUserId: String?,
     ): JSONObject {
-        val runtime = ensureReadyRuntimeForUi(context, userId)
         val target = targetUserId?.takeIf { it.isNotBlank() } ?: userId
-        var stage = "waiting for native sync"
+        var stage = "resolving the native account runtime"
         var session: VerificationSession? = null
         return try {
             withTimeout(VERIFICATION_REQUEST_TIMEOUT_MS) {
+                Log.i(TAG, "Verification for $userId: $stage")
+                val runtime = ensureReadyRuntimeForUi(context, userId)
+
+                stage = "waiting for native sync"
                 Log.i(TAG, "Verification for $userId: $stage")
                 while (runtime.syncState.get() != SyncServiceState.RUNNING) {
                     val state = runtime.syncState.get()
@@ -822,14 +825,6 @@ object NativeMatrixClientManager {
                 Log.i(TAG, "Verification for $userId: $stage")
                 val encryption = runtime.client.encryption()
                 encryption.waitForE2eeInitializationTasks()
-
-                if (target == userId) {
-                    stage = "checking other devices"
-                    Log.i(TAG, "Verification for $userId: $stage")
-                    check(encryption.hasDevicesToVerifyAgainst()) {
-                        "Matrix reports no other device available to verify this device"
-                    }
-                }
 
                 stage = "sending the Matrix verification request"
                 Log.i(TAG, "Verification for $userId: $stage")

@@ -356,11 +356,17 @@ class PushNotificationPlugin(private val activity: Activity) : Plugin(activity) 
             return
         }
         CoroutineScope(Dispatchers.IO).launch {
+            val userId = runCatching { JSONObject(payload).optString("userId") }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+            val commandLabel = userId?.let { "$action for $it" } ?: action
+            Log.i("FoxChatNativeMatrix", "Native Matrix command received: $commandLabel")
             try {
                 invoke.resolve(JSObject(handler(action, payload)))
+                Log.i("FoxChatNativeMatrix", "Native Matrix command completed: $commandLabel")
             } catch (error: Exception) {
                 NativeCryptoBridge.recordError?.invoke("native-matrix:$action", error)
-                Log.e("FoxChatNativeMatrix", "Native Matrix command $action failed", error)
+                Log.e("FoxChatNativeMatrix", "Native Matrix command failed: $commandLabel", error)
                 invoke.reject(error.message ?: "Native Matrix command failed", error)
             }
         }

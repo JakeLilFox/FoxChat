@@ -375,39 +375,48 @@ class RustWebChromeClient(appActivity: WryActivity) : WebChromeClient() {
     filePathCallback: ValueCallback<Array<Uri?>?>,
     fileChooserParams: FileChooserParams
   ) {
-    val intent = fileChooserParams.createIntent()
-    if (fileChooserParams.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
-      intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+    val validTypes = getValidTypes(fileChooserParams.acceptTypes)
+      .filter { it.isNotBlank() }
+      .toTypedArray()
+    val allowMultiple = fileChooserParams.mode == FileChooserParams.MODE_OPEN_MULTIPLE
+    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+      type = if (validTypes.size == 1) validTypes[0] else "*/*"
+      putExtra(Intent.EXTRA_ALLOW_MULTIPLE, allowMultiple)
+      if (validTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, validTypes)
     }
-    if (fileChooserParams.acceptTypes.size > 1 || intent.type!!.startsWith(".")) {
-      val validTypes = getValidTypes(fileChooserParams.acceptTypes)
-      intent.putExtra(Intent.EXTRA_MIME_TYPES, validTypes)
-      if (intent.type!!.startsWith(".")) {
-        intent.type = validTypes[0]
-      }
-    }
+    android.util.Log.i(
+      "FoxChatFileChooser",
+      "Opening document picker (types=${validTypes.joinToString().ifBlank { "*/*" }}, multiple=$allowMultiple)"
+    )
     try {
       activityListener = object : ActivityResultListener {
         override fun onActivityResult(result: ActivityResult?) {
-          val res: Array<Uri?>?
+          var res: Array<Uri?>? = null
           val resultIntent = result?.data
-          if (result?.resultCode == Activity.RESULT_OK && resultIntent!!.clipData != null) {
-            val numFiles = resultIntent.clipData!!.itemCount
-            res = arrayOfNulls(numFiles)
-            for (i in 0 until numFiles) {
-              res[i] = resultIntent.clipData!!.getItemAt(i).uri
+          if (result?.resultCode == Activity.RESULT_OK && resultIntent != null) {
+            val clipData = resultIntent.clipData
+            res = if (clipData != null) {
+              Array(clipData.itemCount) { index -> clipData.getItemAt(index).uri }
+            } else {
+              resultIntent.data?.let { arrayOf(it) }
             }
-          } else {
-            res = FileChooserParams.parseResult(
-              result?.resultCode ?: 0,
-              resultIntent
-            )
           }
+          val mimeTypes = res.orEmpty().mapNotNull { uri ->
+            uri?.let { runCatching { activity.contentResolver.getType(it) }.getOrNull() }
+          }
+          android.util.Log.i(
+            "FoxChatFileChooser",
+            "Document picker returned ${res?.size ?: 0} file(s) (types=${mimeTypes.joinToString().ifBlank { "unknown" }})"
+          )
           filePathCallback.onReceiveValue(res)
         }
       }
       activityLauncher.launch(intent)
     } catch (e: ActivityNotFoundException) {
+      android.util.Log.e("FoxChatFileChooser", "No Android document picker is available", e)
       filePathCallback.onReceiveValue(null)
     }
   }
