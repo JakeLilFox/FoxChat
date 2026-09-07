@@ -1568,6 +1568,7 @@ async function main() {
     const secondPrime = `android multi-account encrypted-session prime ${runId}`
     const foregroundMessage = `android foreground live message ${runId}`
     const firstMessage = `android push test message ${runId}`
+    const postRestartMessage = `android post-restart live message ${runId}`
     const secondMessage = `android multi-account push test message ${runId}`
 
     log('normal login as account 1')
@@ -1727,6 +1728,13 @@ async function main() {
     log('bring the app back without logging in again')
     relaunchWithE2eDebugFlag(cfg.packageName, cfg.mainActivity)
     await waitForRestoredAndroidSession(browser, 1, 30_000)
+
+    log('confirm the message received while the process was dead is restored into the room')
+    await byText(browser, firstMessage).waitForDisplayed({ timeout: 60_000 })
+
+    log('confirm the restored native room watch continues delivering live messages')
+    await sendMessage(account3Page, postRestartMessage)
+    await byText(browser, postRestartMessage).waitForDisplayed({ timeout: 60_000 })
 
     log('confirm native backup setup survived the process restart')
     await verifyPushAutoSetup(browser, [cfg.account1.userId], [cfg.account1.userId])

@@ -4932,6 +4932,7 @@ export class MatrixClientService {
   private nativeRoomCacheRestored = new WeakSet<MatrixClient>()
   private nativeRoomSnapshotsProcessing = new WeakSet<MatrixClient>()
   private nativeRoomCacheSaveQueues = new WeakMap<MatrixClient, Promise<void>>()
+  private nativeRoomEventApplyQueues = new Map<string, Promise<void>>()
   private nativeRoomTimelinesReady = new Set<string>()
 
   private nativeRoomTimelineKey(userId: string, roomId: string) {
@@ -5093,7 +5094,75 @@ export class MatrixClientService {
     const accountId = this.selectedRoomAccountId(roomId)
     const account = this.availableAccounts().find((candidate) => candidate.id === accountId)
     if (!account || !(await nativeMatrixReady(account.userId))) return
-    await nativeWatchRoom(account.userId, roomId)
+    const replay = await nativeWatchRoom(account.userId, roomId)
+    await this.applyNativeTimelineBatch({
+      userId: account.userId,
+      roomId,
+      events: replay.events ?? [],
+      initial: replay.initial,
+    })
+  }
+
+  private applyNativeTimelineBatch({
+    userId,
+    roomId,
+    events,
+    initial,
+  }: {
+    userId: string
+    roomId: string
+    events: Array<{ eventId: string; rawEvent: string }>
+    initial?: boolean
+  }) {
+    const key = this.nativeRoomTimelineKey(userId, roomId)
+    const previous = this.nativeRoomEventApplyQueues.get(key) ?? Promise.resolve()
+    const apply = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const account = this.availableAccounts().find((candidate) => candidate.userId === userId)
+        if (!account) return
+        let room = account.client.getRoom(roomId)
+        if (!room) {
+          await this.hydrateNativeRooms(account.client)
+          room = account.client.getRoom(roomId)
+        }
+        if (!room) throw new Error(`Native timeline room ${roomId} is not hydrated for ${userId}`)
+        const mapper = account.client.getEventMapper()
+        const mappedEvents = events.flatMap(({ eventId, rawEvent }) => {
+          const existing = room.findEventById(eventId)
+          // A room snapshot can install the encrypted wire event before Rust emits
+          // the corresponding clear event. Replace that copy, but ignore repeats once
+          // a clear event is already present.
+          if (existing && existing.getWireType() !== EventType.RoomMessageEncrypted) return []
+          const raw = JSON.parse(rawEvent) as Record<string, unknown>
+          const unsigned =
+            raw.unsigned && typeof raw.unsigned === 'object'
+              ? (raw.unsigned as Record<string, unknown>)
+              : {}
+          return [
+            mapper({
+              ...raw,
+              room_id: roomId,
+              unsigned: { ...unsigned, [ANDROID_NATIVE_TIMELINE_EVENT_MARKER]: true },
+            } as Parameters<typeof mapper>[0]),
+          ]
+        })
+        if (mappedEvents.length) {
+          await room.addLiveEvents(mappedEvents, {
+            duplicateStrategy: DuplicateStrategy.Replace,
+            addToState: true,
+          })
+          this.cacheNativeRoomEvents(account.client, roomId, events)
+        }
+        if (initial) this.markNativeRoomTimelineReady(userId, roomId)
+      })
+    this.nativeRoomEventApplyQueues.set(key, apply)
+    const cleanup = () => {
+      if (this.nativeRoomEventApplyQueues.get(key) === apply)
+        this.nativeRoomEventApplyQueues.delete(key)
+    }
+    void apply.then(cleanup, cleanup)
+    return apply
   }
 
   async listenForNotificationDecryptRequests() {
@@ -5131,46 +5200,19 @@ export class MatrixClientService {
           events: Array<{ eventId: string; rawEvent: string }>
           initial?: boolean
         }>('remote-push', 'native-matrix-events', ({ userId, roomId, events, initial }) => {
-          void (async () => {
-            const account = this.availableAccounts().find(
-              (candidate) => candidate.userId === userId,
-            )
-            const room = account?.client.getRoom(roomId)
-            if (!account || !room) return
-            const mapper = account.client.getEventMapper()
-            const mappedEvents = events.flatMap(({ eventId, rawEvent }) => {
-              const existing = room.findEventById(eventId)
-              // A room snapshot can install the encrypted wire event before Rust emits
-              // the corresponding clear event. Replace that copy, but ignore repeats once
-              // a clear event is already present.
-              if (existing && existing.getWireType() !== EventType.RoomMessageEncrypted) return []
-              const raw = JSON.parse(rawEvent) as Record<string, unknown>
-              const unsigned =
-                raw.unsigned && typeof raw.unsigned === 'object'
-                  ? (raw.unsigned as Record<string, unknown>)
-                  : {}
-              return [
-                mapper({
-                  ...raw,
-                  room_id: roomId,
-                  unsigned: { ...unsigned, [ANDROID_NATIVE_TIMELINE_EVENT_MARKER]: true },
-                } as Parameters<typeof mapper>[0]),
-              ]
-            })
-            if (mappedEvents.length) {
-              await room.addLiveEvents(mappedEvents, {
-                duplicateStrategy: DuplicateStrategy.Replace,
-                addToState: true,
+          void this.applyNativeTimelineBatch({ userId, roomId, events, initial: !!initial }).catch(
+            (error) => {
+              reportClientError(
+                'native-matrix:timeline-batch',
+                `Could not apply ${events.length} native timeline events for ${roomId}`,
+                error,
+              )
+              console.warn('[native-matrix] Could not apply native timeline event batch', {
+                roomId,
+                eventCount: events.length,
+                error,
               })
-              this.cacheNativeRoomEvents(account.client, roomId, events)
-            }
-            if (initial) this.markNativeRoomTimelineReady(userId, roomId)
-          })().catch((error) =>
-            console.warn('[native-matrix] Could not apply native timeline event batch', {
-              roomId,
-              eventCount: events.length,
-              error,
-            }),
+            },
           )
         })
       } catch (error) {

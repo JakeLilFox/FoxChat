@@ -43,6 +43,13 @@ export type NativeDecryptedEvent = {
   rawEvent: string
 }
 
+export type NativeRoomTimelineBatch = {
+  ok: true
+  alreadyWatching?: boolean
+  initial: true
+  events: Array<{ eventId: string; rawEvent: string }>
+}
+
 export type NativeMatrixDeviceSession = {
   deviceId: string
   displayName: string
@@ -668,7 +675,7 @@ export function applyNativeVerificationSnapshot(snapshot: NativeVerificationSnap
 }
 
 export function nativeWatchRoom(userId: string, roomId: string) {
-  return command<{ ok: true; alreadyWatching?: boolean }>('watchRoom', { userId, roomId })
+  return command<NativeRoomTimelineBatch>('watchRoom', { userId, roomId })
 }
 
 export function installNativeMatrixTransport(client: MatrixClient, userId: string) {

@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
@@ -104,6 +105,7 @@ object NativeMatrixClientManager {
     private val accounts = ConcurrentHashMap<String, AccountRuntime>()
     private val locks = ConcurrentHashMap<String, Mutex>()
     private val roomListSubscriptions = ConcurrentHashMap<String, RoomListSubscription>()
+    private val watchedRoomIds = ConcurrentHashMap<String, MutableSet<String>>()
     private val healthChecks = ConcurrentHashMap.newKeySet<String>()
     private val terminalRestarts = ConcurrentHashMap.newKeySet<String>()
     private val verificationSessions = ConcurrentHashMap<String, VerificationSession>()
@@ -696,74 +698,98 @@ object NativeMatrixClientManager {
      */
     fun watchRoom(context: Context, userId: String, roomId: String): JSONObject =
         runBlocking(Dispatchers.IO) {
+            watchedRoomIds.computeIfAbsent(userId) { ConcurrentHashMap.newKeySet() }.add(roomId)
             val runtime = ensureRuntime(context, userId)
-            val existingSubscription = runtime.timelineSubscriptions[roomId]
-            if (existingSubscription != null) {
-                // The Android process can outlive its Activity/WebView. Replay one coherent latest
-                // block when the recreated WebView attaches to the already-running Rust timeline.
-                publishTimelineEvents(
-                    userId,
-                    roomId,
-                    existingSubscription.lastJsonByEventId.entries
-                        .map { it.key to it.value }
-                        .sortedBy { (_, raw) ->
-                            runCatching { JSONObject(raw).optLong("origin_server_ts") }
-                                .getOrDefault(0L)
-                        }
-                        .takeLast(INITIAL_TIMELINE_EVENT_LIMIT),
-                    initial = true,
-                )
-                return@runBlocking JSONObject().put("ok", true).put("alreadyWatching", true)
+            ensureTimelineSubscription(runtime, userId, roomId)
+        }
+
+    private suspend fun ensureTimelineSubscription(
+        runtime: AccountRuntime,
+        userId: String,
+        roomId: String,
+    ): JSONObject {
+        val existingSubscription = runtime.timelineSubscriptions[roomId]
+        if (existingSubscription != null) {
+            // Return the replay directly to the caller. Tauri events are intentionally
+            // best-effort and can be lost while Android replaces an Activity/WebView.
+            return timelineSnapshotJson(existingSubscription, alreadyWatching = true)
+        }
+        val room = withTimeout(30_000L) {
+            var available = runtime.client.getRoom(roomId)
+            while (available == null) {
+                delay(250L)
+                available = runtime.client.getRoom(roomId)
             }
-            val room = withTimeout(30_000L) {
-                var available = runtime.client.getRoom(roomId)
-                while (available == null) {
-                    delay(250L)
-                    available = runtime.client.getRoom(roomId)
+            available
+        }
+        val timeline = room.timeline()
+        val lastJsonByEventId = ConcurrentHashMap<String, String>()
+        val suppressedInitialEventIds = ConcurrentHashMap.newKeySet<String>()
+        val firstTimelineUpdate = CompletableDeferred<Unit>()
+        val batcher = TimelineEventBatcher(scope) { events, initial ->
+            publishTimelineEvents(userId, roomId, events, initial)
+        }
+        val handle = timeline.addListener(object : TimelineListener {
+            override fun onUpdate(update: List<TimelineDiff>) {
+                val candidates = timelineItems(update).mapNotNull { item ->
+                    val event = item.asEvent() ?: return@mapNotNull null
+                    val raw = runCatching { event.lazyProvider.latestJson() }.getOrNull()
+                        ?: return@mapNotNull null
+                    val eventId = runCatching { JSONObject(raw).optString("event_id") }
+                        .getOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    eventId to raw
                 }
-                available
-            }
-            val timeline = room.timeline()
-            val lastJsonByEventId = ConcurrentHashMap<String, String>()
-            val suppressedInitialEventIds = ConcurrentHashMap.newKeySet<String>()
-            val batcher = TimelineEventBatcher(scope) { events, initial ->
-                publishTimelineEvents(userId, roomId, events, initial)
-            }
-            val handle = timeline.addListener(object : TimelineListener {
-                override fun onUpdate(update: List<TimelineDiff>) {
-                    val candidates = timelineItems(update).mapNotNull { item ->
-                        val event = item.asEvent() ?: return@mapNotNull null
-                        val raw = runCatching { event.lazyProvider.latestJson() }.getOrNull()
-                            ?: return@mapNotNull null
-                        val eventId = runCatching { JSONObject(raw).optString("event_id") }
-                            .getOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                        eventId to raw
+                val events = if (update.any { it is TimelineDiff.Reset }) {
+                    // A Reset contains the complete cached Rust timeline. The WebView only
+                    // needs its newest render window initially; older events remain available
+                    // through normal backwards pagination. Remember discarded IDs as Rust
+                    // may subsequently emit one Set diff per event while decrypting its cache.
+                    val selected = candidates.takeLast(INITIAL_TIMELINE_EVENT_LIMIT)
+                    selected.forEach { (eventId) -> suppressedInitialEventIds.remove(eventId) }
+                    candidates.dropLast(selected.size).forEach { (eventId) ->
+                        suppressedInitialEventIds.add(eventId)
                     }
-                    val events = if (update.any { it is TimelineDiff.Reset }) {
-                        // A Reset contains the complete cached Rust timeline. The WebView only
-                        // needs its newest render window initially; older events remain available
-                        // through normal backwards pagination. Remember discarded IDs as Rust
-                        // may subsequently emit one Set diff per event while decrypting its cache.
-                        val selected = candidates.takeLast(INITIAL_TIMELINE_EVENT_LIMIT)
-                        selected.forEach { (eventId) -> suppressedInitialEventIds.remove(eventId) }
-                        candidates.dropLast(selected.size).forEach { (eventId) ->
-                            suppressedInitialEventIds.add(eventId)
-                        }
-                        selected
-                    } else {
-                        candidates.filterNot { (eventId) ->
-                            suppressedInitialEventIds.contains(eventId)
-                        }
-                    }.filter { (eventId, raw) ->
-                        lastJsonByEventId.put(eventId, raw) != raw
+                    selected
+                } else {
+                    candidates.filterNot { (eventId) ->
+                        suppressedInitialEventIds.contains(eventId)
                     }
-                    batcher.enqueue(events, force = update.any { it is TimelineDiff.Reset })
+                }.filter { (eventId, raw) ->
+                    lastJsonByEventId.put(eventId, raw) != raw
                 }
-            })
-            val subscription = TimelineSubscription(timeline, handle, batcher, lastJsonByEventId)
-            val previous = runtime.timelineSubscriptions.putIfAbsent(roomId, subscription)
-            if (previous != null) closeTimelineSubscription(subscription)
-            JSONObject().put("ok", true).put("alreadyWatching", previous != null)
+                batcher.enqueue(events, force = update.any { it is TimelineDiff.Reset })
+                firstTimelineUpdate.complete(Unit)
+            }
+        })
+        val subscription = TimelineSubscription(timeline, handle, batcher, lastJsonByEventId)
+        val previous = runtime.timelineSubscriptions.putIfAbsent(roomId, subscription)
+        if (previous != null) closeTimelineSubscription(subscription)
+        else withTimeoutOrNull(2_000L) { firstTimelineUpdate.await() }
+        return timelineSnapshotJson(previous ?: subscription, alreadyWatching = previous != null)
+    }
+
+    private fun timelineSnapshotJson(
+        subscription: TimelineSubscription,
+        alreadyWatching: Boolean,
+    ): JSONObject {
+        val events = subscription.lastJsonByEventId.entries
+            .map { it.key to it.value }
+            .sortedBy { (_, raw) ->
+                runCatching { JSONObject(raw).optLong("origin_server_ts") }.getOrDefault(0L)
+            }
+            .takeLast(INITIAL_TIMELINE_EVENT_LIMIT)
+        return JSONObject()
+            .put("ok", true)
+            .put("alreadyWatching", alreadyWatching)
+            .put("initial", true)
+            .put("events", timelineEventsJson(events))
+    }
+
+    private fun timelineEventsJson(events: List<Pair<String, String>>): JSONArray =
+        JSONArray().also { payload ->
+            events.forEach { (eventId, raw) ->
+                payload.put(JSONObject().put("eventId", eventId).put("rawEvent", raw))
+            }
         }
 
     private fun publishTimelineEvents(
@@ -773,19 +799,11 @@ object NativeMatrixClientManager {
         initial: Boolean = false,
     ) {
         if (events.isEmpty() && !initial) return
-        val payloadEvents = JSONArray()
-        events.forEach { (eventId, raw) ->
-            payloadEvents.put(
-                JSONObject()
-                    .put("eventId", eventId)
-                    .put("rawEvent", raw),
-            )
-        }
         PushNotificationPlugin.instance?.handleNativeMatrixEvents(
             JSONObject()
                 .put("userId", userId)
                 .put("roomId", roomId)
-                .put("events", payloadEvents)
+                .put("events", timelineEventsJson(events))
                 .put("initial", initial),
         )
     }
@@ -1100,6 +1118,7 @@ object NativeMatrixClientManager {
             runCatching { runtime.client.logout() }
             closeRuntime(runtime)
         }
+        watchedRoomIds.remove(userId)
         NativeMatrixMigrationStore.removeAccount(context, userId)
         val allowedRoot = File(context.noBackupFilesDir, "matrix-rust").canonicalFile
         val resolvedRoot = root.canonicalFile
@@ -1223,6 +1242,7 @@ object NativeMatrixClientManager {
                     "Native Matrix sync for $userId remained in $state"
                 }
                 ensureRoomListSubscription(runtime, userId)
+                reattachWatchedRooms(runtime, userId, reason)
                 return
             }
 
@@ -1239,6 +1259,25 @@ object NativeMatrixClientManager {
 
     private fun isTerminalSyncState(state: SyncServiceState): Boolean =
         state == SyncServiceState.ERROR || state == SyncServiceState.TERMINATED
+
+    private fun reattachWatchedRooms(runtime: AccountRuntime, userId: String, reason: String) {
+        watchedRoomIds[userId]?.toList()?.forEach { roomId ->
+            if (runtime.timelineSubscriptions.containsKey(roomId)) return@forEach
+            scope.launch {
+                runCatching { ensureTimelineSubscription(runtime, userId, roomId) }
+                    .onFailure { error ->
+                        Log.e(TAG, "Could not restore room watch $roomId for $userId ($reason)", error)
+                        applicationContext?.let { context ->
+                            NativeClientLogStore.recordNative(
+                                context,
+                                "native-matrix:room-watch:$userId:$roomId:$reason",
+                                error,
+                            )
+                        }
+                    }
+            }
+        }
+    }
 
     /**
      * UniFFI gives SyncServiceBuilder a Cleaner whose native destructor must run while its Client

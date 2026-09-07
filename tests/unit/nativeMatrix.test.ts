@@ -15,6 +15,7 @@ import {
   nativeRequestVerification,
   nativeSecurityStatus,
   nativeSetupRecovery,
+  nativeWatchRoom,
   type NativeDecryptedEvent,
 } from '../../src/platform/nativeMatrix'
 import { VerificationPhase } from 'matrix-js-sdk/lib/crypto-api'
@@ -150,6 +151,23 @@ describe('Android native Matrix bridge', () => {
     await expect(decryptEventWithNativeMatrix(event)).resolves.toBe(true)
     expect(event.getType()).toBe(EventType.RoomMessage)
     expect(event.getContent()).toMatchObject({ msgtype: 'm.text', body: 'hello' })
+  })
+
+  it('returns the latest native room replay with the watch acknowledgement', async () => {
+    const replay = {
+      ok: true as const,
+      alreadyWatching: true,
+      initial: true as const,
+      events: [{ eventId: '$latest', rawEvent: '{"type":"m.room.message"}' }],
+    }
+    const invoke = vi.fn().mockResolvedValue(replay)
+    enableAndroid(invoke)
+
+    await expect(nativeWatchRoom('@me:example.org', '!room:example.org')).resolves.toEqual(replay)
+    expect(invoke).toHaveBeenCalledWith('plugin:remote-push|native_matrix', {
+      action: 'watchRoom',
+      payload: JSON.stringify({ userId: '@me:example.org', roomId: '!room:example.org' }),
+    })
   })
 
   it('routes normal and threaded sends through Rust instead of JS encryption', async () => {

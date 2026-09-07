@@ -12,6 +12,7 @@ node_modules
 dist
 dist-ssr
 src-tauri/target
+src-tauri/vendor/tauri-plugin-remote-push/android/build/
 bridge/target
 bridge/dist
 desktop-updates/

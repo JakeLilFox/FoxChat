@@ -3,6 +3,14 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Tauri includes this vendored plugin as a Gradle subproject. Keep its generated
+// output in the app's build tree instead of rewriting files inside the vendor tree.
+if (rootProject != project) {
+    layout.buildDirectory.set(
+        rootProject.layout.buildDirectory.dir("plugin-builds/tauri-plugin-remote-push")
+    )
+}
+
 android {
     namespace = "app.tauri.remotepush"
     compileSdk = 36

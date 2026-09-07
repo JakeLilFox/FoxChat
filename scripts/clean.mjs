@@ -1,38 +1,30 @@
-import { existsSync, lstatSync, readdirSync, rmSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const dryRun = process.argv.includes('--dry-run')
+const androidOnly = process.argv.includes('--android-only')
 
-// Keep this list explicit. Cleanup must never infer targets from .gitignore because
-// ignored files also include credentials and local machine configuration.
-const generatedPaths = [
-  'dist',
-  'dist-ssr',
-  'coverage',
-  'blob-report',
-  'playwright-report',
-  'test-results',
-  '.playwright',
+const androidGeneratedPaths = [
   '.gradle-ci',
-  'desktop-updates',
   'android-artifacts',
   '.android-command-line-tools.zip',
   'ci_apk.apk',
   'foxchat-e2e-avd.tar.gz',
-  'node_modules/.cache',
-  'node_modules/.tmp',
-  'node_modules/.vite',
-  'foxchathomepage/coverage',
-  'foxchathomepage/dist',
-  'foxchathomepage/node_modules/.cache',
-  'foxchathomepage/node_modules/.tmp',
-  'foxchathomepage/node_modules/.vite',
-  'push-gateway/coverage',
-  'bridge/dist',
-  'bridge/target',
-  'src-tauri/target',
+  'src-tauri/target/aarch64-linux-android',
+  'src-tauri/target/armv7-linux-androideabi',
+  'src-tauri/target/i686-linux-android',
+  'src-tauri/target/x86_64-linux-android',
   'src-tauri/gen/android/.gradle',
   'src-tauri/gen/android/.tauri',
   'src-tauri/gen/android/build',
@@ -51,8 +43,63 @@ const generatedPaths = [
   'src-tauri/gen/android/tauri.properties',
   'src-tauri/gen/android/tauri.settings.gradle',
   'scripts/android-e2e/.out',
-  'tests/appimage/.ci-tools',
 ]
+
+// This directory was historically committed even though Gradle rewrites it.
+// Android cleanup reconstructs its tracked contents from HEAD and drops any
+// additional generated files, keeping the worktree clean without touching source.
+const trackedAndroidGeneratedPaths = ['src-tauri/vendor/tauri-plugin-remote-push/android/build']
+
+// Keep this list explicit. Cleanup must never infer targets from .gitignore because
+// ignored files also include credentials and local machine configuration.
+const generatedPaths = androidOnly
+  ? androidGeneratedPaths
+  : [
+      'dist',
+      'dist-ssr',
+      'coverage',
+      'blob-report',
+      'playwright-report',
+      'test-results',
+      '.playwright',
+      '.gradle-ci',
+      'desktop-updates',
+      'android-artifacts',
+      '.android-command-line-tools.zip',
+      'ci_apk.apk',
+      'foxchat-e2e-avd.tar.gz',
+      'node_modules/.cache',
+      'node_modules/.tmp',
+      'node_modules/.vite',
+      'foxchathomepage/coverage',
+      'foxchathomepage/dist',
+      'foxchathomepage/node_modules/.cache',
+      'foxchathomepage/node_modules/.tmp',
+      'foxchathomepage/node_modules/.vite',
+      'push-gateway/coverage',
+      'bridge/dist',
+      'bridge/target',
+      'src-tauri/target',
+      'src-tauri/gen/android/.gradle',
+      'src-tauri/gen/android/.tauri',
+      'src-tauri/gen/android/build',
+      'src-tauri/gen/android/buildSrc/build',
+      'src-tauri/gen/android/app/.cxx',
+      'src-tauri/gen/android/app/.externalNativeBuild',
+      'src-tauri/gen/android/app/build',
+      'src-tauri/gen/android/app/captures',
+      'src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a',
+      'src-tauri/gen/android/app/src/main/jniLibs/armeabi-v7a',
+      'src-tauri/gen/android/app/src/main/jniLibs/x86',
+      'src-tauri/gen/android/app/src/main/jniLibs/x86_64',
+      'src-tauri/gen/android/app/src/main/assets/tauri.conf.json',
+      'src-tauri/gen/android/proguard-tauri.pro',
+      'src-tauri/gen/android/tauri.build.gradle.kts',
+      'src-tauri/gen/android/tauri.properties',
+      'src-tauri/gen/android/tauri.settings.gradle',
+      'scripts/android-e2e/.out',
+      'tests/appimage/.ci-tools',
+    ]
 
 const protectedNamePatterns = [
   /^google-services\.json$/i,
@@ -72,6 +119,97 @@ function assertInsideWorkspace(path) {
   if (!pathFromRoot || pathFromRoot === '..' || pathFromRoot.startsWith(`..${sep}`)) {
     throw new Error(`Refusing to clean outside the project workspace: ${path}`)
   }
+}
+
+function runGit(args, options = {}) {
+  const result = spawnSync('git', args, {
+    cwd: root,
+    encoding: options.binary ? null : 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+    stdio: 'pipe',
+  })
+  if (result.error) throw new Error(`Could not run Git: ${result.error.message}`)
+  return result
+}
+
+function restoreTrackedGeneratedTree(pathFromRoot) {
+  const target = resolve(root, pathFromRoot)
+  assertInsideWorkspace(target)
+
+  if (existsSync(target)) {
+    const protectedFiles = findProtectedFiles(target)
+    if (protectedFiles.length) {
+      console.warn(
+        `Skipped ${pathFromRoot} because it contains protected file(s): ${protectedFiles
+          .map((path) => relative(root, path))
+          .join(', ')}`,
+      )
+      return 'skipped'
+    }
+  }
+
+  // A dry run must remain usable in restricted environments where Git is
+  // readable by the shell but child-process execution is intentionally blocked.
+  if (dryRun) {
+    console.log(`Would restore ${pathFromRoot} from HEAD and remove untracked files below it`)
+    return 'restored'
+  }
+
+  const stagedCheck = runGit(['diff', '--cached', '--quiet', '--', pathFromRoot])
+  if (stagedCheck.status === 1) {
+    console.warn(`Skipped ${pathFromRoot} because it contains staged changes.`)
+    return 'skipped'
+  }
+  if (stagedCheck.status !== 0) {
+    throw new Error(`Could not check staged changes below ${pathFromRoot}.`)
+  }
+
+  const treeResult = runGit(['ls-tree', '-r', '-z', 'HEAD', '--', pathFromRoot], {
+    binary: true,
+  })
+  if (treeResult.status !== 0) {
+    throw new Error(`Could not read tracked generated files below ${pathFromRoot}.`)
+  }
+
+  const entries = treeResult.stdout
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+) blob ([0-9a-f]+)\t(.+)$/s)
+      if (!match) throw new Error(`Unexpected Git tree entry below ${pathFromRoot}.`)
+      return { mode: match[1], object: match[2], path: match[3] }
+    })
+
+  if (!entries.length) {
+    throw new Error(`Refusing to clean ${pathFromRoot}: HEAD contains no tracked files there.`)
+  }
+
+  for (const entry of entries) {
+    const entryPath = resolve(root, entry.path)
+    const pathWithinTarget = relative(target, entryPath)
+    if (!pathWithinTarget || pathWithinTarget === '..' || pathWithinTarget.startsWith(`..${sep}`)) {
+      throw new Error(`Refusing unsafe tracked path: ${entry.path}`)
+    }
+  }
+
+  // Read every blob successfully before deleting anything, so a Git failure
+  // cannot leave a partially reconstructed generated tree.
+  const files = entries.map((entry) => {
+    const blob = runGit(['cat-file', 'blob', entry.object], { binary: true })
+    if (blob.status !== 0) throw new Error(`Could not read Git blob for ${entry.path}.`)
+    return { ...entry, contents: blob.stdout }
+  })
+
+  rmSync(target, { recursive: true, force: true })
+  for (const file of files) {
+    const outputPath = resolve(root, file.path)
+    mkdirSync(dirname(outputPath), { recursive: true })
+    writeFileSync(outputPath, file.contents)
+    if (file.mode === '100755' && process.platform !== 'win32') chmodSync(outputPath, 0o755)
+  }
+  console.log(`Restored ${pathFromRoot} (${entries.length} tracked files)`)
+  return 'restored'
 }
 
 function findProtectedFiles(path, matches = []) {
@@ -139,8 +277,15 @@ for (const target of [...new Set(targets)].sort()) {
   removed++
 }
 
+let restored = 0
+for (const target of trackedAndroidGeneratedPaths) {
+  const result = restoreTrackedGeneratedTree(target)
+  if (result === 'restored') restored++
+  else skipped++
+}
+
 console.log(
   `${dryRun ? 'Dry run complete' : 'Cleanup complete'}: ${removed} target(s) ${
     dryRun ? 'found' : 'removed'
-  }, ${skipped} skipped to protect secrets.`,
+  }, ${restored} tracked generated tree(s) ${dryRun ? 'found' : 'restored'}, ${skipped} skipped.`,
 )

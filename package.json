@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "clean": "node scripts/clean.mjs",
+    "android:clean": "node scripts/clean.mjs --android-only",
     "build": "npm run typecheck && vite build",
     "typecheck": "tsc -b",
     "old:build": "tsc -b && vite build",

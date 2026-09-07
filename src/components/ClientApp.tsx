@@ -412,12 +412,36 @@ export function ClientApp({
   }, [openedRoomId, spaceOverview])
   useEffect(() => {
     if (!openedRoomId) return
-    void matrixService.watchNativeRoom(openedRoomId).catch((error) =>
-      console.warn('[native-matrix] Could not watch opened room', {
-        roomId: openedRoomId,
-        error,
-      }),
-    )
+    let inFlight = false
+    const refresh = () => {
+      if (inFlight || document.visibilityState === 'hidden') return
+      inFlight = true
+      void matrixService
+        .watchNativeRoom(openedRoomId)
+        .catch((error) =>
+          console.warn('[native-matrix] Could not watch opened room', {
+            roomId: openedRoomId,
+            error,
+          }),
+        )
+        .finally(() => {
+          inFlight = false
+        })
+    }
+    refresh()
+    if (!isAndroidApp()) return
+    // Native timeline events remain the fast path. This small in-memory replay poll is a safety
+    // net for Activity/WebView replacement, where Android can drop a one-way plugin event even
+    // though the process-wide Rust timeline kept syncing successfully.
+    const interval = window.setInterval(refresh, 5_000)
+    const visibilityChanged = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    document.addEventListener('visibilitychange', visibilityChanged)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', visibilityChanged)
+    }
   }, [openedRoomId])
   useEffect(() => {
     if (!openedRoomId) return
