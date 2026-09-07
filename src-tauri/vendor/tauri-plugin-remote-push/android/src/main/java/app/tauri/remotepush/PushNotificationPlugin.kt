@@ -13,15 +13,24 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import com.google.firebase.messaging.FirebaseMessaging
+import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.RemoteMessage
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
+import java.util.concurrent.Executors
 
 private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+private val nativeMatrixScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+private val nativeMatrixDecryptScope = CoroutineScope(
+    Executors.newFixedThreadPool(2) { runnable ->
+        Thread(runnable, "foxchat-native-decrypt").apply { isDaemon = true }
+    }.asCoroutineDispatcher() + SupervisorJob(),
+)
 
 /**
  * Lets the app module (which owns notification rendering, and which the plugin module
@@ -146,9 +155,33 @@ class PushNotificationPlugin(private val activity: Activity) : Plugin(activity) 
 
     @Command
     fun getToken(invoke: Invoke) {
-        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+        val messaging = runCatching {
+            val context = activity.applicationContext
+            FirebaseApp.getApps(context)
+                .firstOrNull { it.name == FirebaseApp.DEFAULT_APP_NAME }
+                ?: FirebaseApp.initializeApp(context)
+                ?: error(
+                    "Firebase configuration is missing from this Android build " +
+                        "(google_app_id/gcm_defaultSenderId were not packaged)",
+                )
+            // Initialization above establishes DEFAULT; this Firebase Messaging artifact only
+            // exposes its FirebaseApp overload internally.
+            FirebaseMessaging.getInstance()
+        }.getOrElse { error ->
+            android.util.Log.e("FoxChatFirebase", "Could not initialize Firebase Messaging", error)
+            val exception = error as? Exception
+                ?: IllegalStateException(error.message ?: "Unknown Firebase initialization error", error)
+            invoke.reject("Firebase push initialization failed: ${error.message}", exception)
+            return
+        }
+        messaging.token.addOnCompleteListener { task ->
             if (!task.isSuccessful) {
-                invoke.reject("Failed to get FCM token", task.exception)
+                val error = task.exception
+                android.util.Log.e("FoxChatFirebase", "Failed to get FCM registration token", error)
+                invoke.reject(
+                    "Failed to get FCM registration token: ${error?.message ?: "unknown Firebase error"}",
+                    error,
+                )
                 return@addOnCompleteListener
             }
             val result = JSObject()
@@ -187,9 +220,9 @@ class PushNotificationPlugin(private val activity: Activity) : Plugin(activity) 
         trigger("native-matrix-session-changed", data)
     }
 
-    /** Publishes a decrypted Rust timeline event to a currently alive WebView. */
-    fun handleNativeMatrixEvent(event: JSONObject) {
-        trigger("native-matrix-event", JSObject(event.toString()))
+    /** Publishes a batch of decrypted Rust timeline events to a currently alive WebView. */
+    fun handleNativeMatrixEvents(event: JSONObject) {
+        trigger("native-matrix-events", JSObject(event.toString()))
     }
 
     fun handleNativeMatrixRoomsChanged(userId: String) {
@@ -280,7 +313,7 @@ class PushNotificationPlugin(private val activity: Activity) : Plugin(activity) 
                 .putString("timelineAppearance", notificationPreferences)
                 .commit()
         }
-        CoroutineScope(Dispatchers.IO).launch {
+        nativeMatrixScope.launch {
             try {
                 handler(
                     userId, deviceId, homeserver, accessToken, refreshToken, roomKeys, rooms,
@@ -330,7 +363,7 @@ class PushNotificationPlugin(private val activity: Activity) : Plugin(activity) 
             invoke.reject("roomId and eventId are required")
             return
         }
-        CoroutineScope(Dispatchers.IO).launch {
+        nativeMatrixScope.launch {
             try {
                 val raw = NativeCryptoBridge.test?.invoke(roomId, eventId)
                     ?: throw IllegalStateException("Native crypto is unavailable")
@@ -355,7 +388,8 @@ class PushNotificationPlugin(private val activity: Activity) : Plugin(activity) 
             invoke.reject("Native Matrix is unavailable")
             return
         }
-        CoroutineScope(Dispatchers.IO).launch {
+        val scope = if (action == "decryptEvent") nativeMatrixDecryptScope else nativeMatrixScope
+        scope.launch {
             val userId = runCatching { JSONObject(payload).optString("userId") }
                 .getOrNull()
                 ?.takeIf { it.isNotBlank() }

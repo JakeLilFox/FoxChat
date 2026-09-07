@@ -55,6 +55,7 @@ import {
   takeSharedFiles,
 } from '../../lib/media'
 import { logHistoryDiagnostics } from '../../lib/timelineHelpers'
+import { dmPresenceLabel, type DmPresenceSnapshot } from '../../lib/presence'
 import {
   isSameLocalDay,
   shouldShowTimelineDateHint,
@@ -68,6 +69,7 @@ import {
   nextFollowLatest,
   shouldHandleTimelineGrowth,
   shouldFollowAddedEvents,
+  timelineStartupGrowthStrategy,
   visibleReadBoundary,
 } from '../../lib/timelineWindow'
 import {
@@ -151,10 +153,12 @@ import {
   MatrixEvent,
   Room,
   RoomEvent,
+  UserEvent,
 } from 'matrix-js-sdk'
 import {
   AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT,
   matrixService,
+  NATIVE_ROOM_TIMELINE_READY_EVENT,
 } from '../../matrix/MatrixClientService'
 
 type CachedRoomTimeline = {
@@ -317,6 +321,10 @@ function TimelineView({
     >
   >(() => new Map())
   const [renderTick, render] = useState(0)
+  const directMember = room ? matrixService.directRoomMember(room) : undefined
+  const directMemberId = directMember?.userId
+  const [dmPresence, setDmPresence] = useState<DmPresenceSnapshot>()
+  const [presenceNow, setPresenceNow] = useState(Date.now)
   const [contextTimeline, setContextTimeline] = useState<EventTimeline>()
   const [windowEndOffset, setWindowEndOffset] = useState(0)
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
@@ -335,6 +343,7 @@ function TimelineView({
   }, [composerElement])
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [positioningTimeline, setPositioningTimeline] = useState(true)
+  const [nativeTimelineReadyRoom, setNativeTimelineReadyRoom] = useState<string>()
   const [historyPagingEnabled, setHistoryPagingEnabled] = useState(false)
   const [acceptingInvite, setAcceptingInvite] = useState(false)
   const [decliningInvite, setDecliningInvite] = useState(false)
@@ -344,6 +353,22 @@ function TimelineView({
   const [timelineAppearance, setTimelineAppearance] = useState<TimelineAppearanceSettings>(
     timelineAppearanceSettings,
   )
+  useEffect(() => {
+    if (!roomIdentity || !room || !isAndroidApp()) {
+      setNativeTimelineReadyRoom(roomIdentity)
+      return
+    }
+    setNativeTimelineReadyRoom(undefined)
+    const refresh = () => {
+      if (matrixService.nativeRoomTimelineReady(room.roomId))
+        setNativeTimelineReadyRoom(roomIdentity)
+    }
+    refresh()
+    window.addEventListener(NATIVE_ROOM_TIMELINE_READY_EVENT, refresh)
+    return () => window.removeEventListener(NATIVE_ROOM_TIMELINE_READY_EVENT, refresh)
+  }, [room, roomIdentity])
+  const nativeTimelineReady =
+    !isAndroidApp() || nativeTimelineReadyRoom === roomIdentity || !roomIdentity
   useEffect(() => {
     const update = (event: Event) =>
       setTimelineAppearance((event as CustomEvent<TimelineAppearanceSettings>).detail)
@@ -397,6 +422,7 @@ function TimelineView({
   }, [visibleAccountId])
   const loadingRef = useRef(false)
   const positionStabilizerCleanup = useRef<() => void>(() => {})
+  const positionStabilizerActive = useRef(false)
   const positionStabilizerUserCancelled = useRef(false)
   const positionStabilizerSuperseded = useRef(false)
   const mountPositionRetryCleanup = useRef<() => void>(() => {})
@@ -445,6 +471,90 @@ function TimelineView({
       client?.off(RoomEvent.MyMembership, membership)
     }
   }, [room])
+  useEffect(() => {
+    setDmPresence(undefined)
+    setPresenceNow(Date.now())
+    if (!room || !directMemberId) return
+    const client = matrixService.clientForRoomInstance(room)
+    if (!client) return
+    let cancelled = false
+    let hasPresence = false
+
+    const applyCachedPresence = (user = client.getUser(directMemberId)) => {
+      if (!user || cancelled) return
+      hasPresence = true
+      setPresenceNow(Date.now())
+      setDmPresence({
+        available: true,
+        presence: user.presence,
+        currentlyActive: user.currentlyActive,
+        lastActiveAt:
+          user.lastPresenceTs > 0
+            ? user.lastPresenceTs - Math.max(0, user.lastActiveAgo || 0)
+            : undefined,
+      })
+    }
+    const fetchPresence = async () => {
+      try {
+        const response = await client.getPresence(directMemberId).then((presence) => ({
+          ...presence,
+          available: true,
+          fetched_at: Date.now(),
+        }))
+        if (cancelled) return
+        if (!response.available) {
+          setDmPresence({ available: false })
+          return
+        }
+        hasPresence = true
+        const fetchedAt = response.fetched_at || Date.now()
+        setPresenceNow(fetchedAt)
+        setDmPresence({
+          available: true,
+          presence: response.presence,
+          currentlyActive: response.currently_active,
+          lastActiveAt:
+            typeof response.last_active_ago === 'number'
+              ? fetchedAt - Math.max(0, response.last_active_ago)
+              : undefined,
+        })
+      } catch (error) {
+        // Presence may be disabled or hidden by the homeserver. Preserve cached sync data when
+        // available, otherwise show an explicit privacy-safe fallback in the header.
+        if (!cancelled && !hasPresence) setDmPresence({ available: false })
+        console.warn('[presence] Could not refresh DM presence', {
+          userId: directMemberId,
+          error,
+        })
+      }
+    }
+    const onPresence = (_event: MatrixEvent | undefined, user: { userId: string }) => {
+      if (user.userId === directMemberId) applyCachedPresence(client.getUser(directMemberId))
+    }
+
+    applyCachedPresence()
+    client.on(UserEvent.Presence, onPresence)
+    client.on(UserEvent.CurrentlyActive, onPresence)
+    client.on(UserEvent.LastPresenceTs, onPresence)
+    const stopNativePresenceWatch = isAndroidApp()
+      ? matrixService.watchUserPresence(directMemberId)
+      : undefined
+    if (!isAndroidApp()) void fetchPresence()
+    let ticks = 0
+    const refreshTimer = window.setInterval(() => {
+      setPresenceNow(Date.now())
+      ticks++
+      if (!isAndroidApp() && ticks % 2 === 0) void fetchPresence()
+    }, 30_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(refreshTimer)
+      stopNativePresenceWatch?.()
+      client.off(UserEvent.Presence, onPresence)
+      client.off(UserEvent.CurrentlyActive, onPresence)
+      client.off(UserEvent.LastPresenceTs, onPresence)
+    }
+  }, [roomIdentity, room, directMemberId])
   const showRoomModal = (view?: RoomModalView) => {
     if (view) {
       setRoomModal(view)
@@ -559,10 +669,6 @@ function TimelineView({
         }
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
-            if (box.scrollTop >= 80) {
-              resolve()
-              return
-            }
             scrollRestoreActiveRef.current = true
             const restore = () => {
               const target = captured.eventId
@@ -598,12 +704,17 @@ function TimelineView({
               box.removeEventListener('wheel', stop)
               box.removeEventListener('touchstart', stop)
               box.removeEventListener('pointerdown', stop)
-              resolve()
             }
             box.addEventListener('wheel', stop, { passive: true })
             box.addEventListener('touchstart', stop, { passive: true })
             box.addEventListener('pointerdown', stop)
-            window.setTimeout(stop, 500)
+            // Android/Rust may replace a paginated encrypted block with decrypted events over
+            // several seconds. Keep correcting against the same visible event until that batch
+            // settles (or until the user deliberately interacts again).
+            window.setTimeout(stop, 15_000)
+            // Pagination is complete after the initial correction. The observers above continue
+            // stabilizing delayed media/decryption layout without holding the loading state open.
+            resolve()
           }),
         )
       }),
@@ -844,6 +955,7 @@ function TimelineView({
       positionStabilizerCleanup.current()
       let frame = 0
       let stopped = false
+      positionStabilizerActive.current = true
       const align = () => {
         if (
           stopped ||
@@ -884,10 +996,10 @@ function TimelineView({
         if (stopped) return
         if (event) positionStabilizerUserCancelled.current = true
         stopped = true
+        positionStabilizerActive.current = false
         cancelAnimationFrame(frame)
         resizeObserver.disconnect()
         mutationObserver.disconnect()
-        window.clearTimeout(timeout)
         box.removeEventListener('wheel', stop)
         box.removeEventListener('touchstart', stop)
         box.removeEventListener('pointerdown', stop)
@@ -895,7 +1007,6 @@ function TimelineView({
       box.addEventListener('wheel', stop, { passive: true })
       box.addEventListener('touchstart', stop, { passive: true })
       box.addEventListener('pointerdown', stop)
-      const timeout = window.setTimeout(stop, 12_000)
       positionStabilizerCleanup.current = stop
       schedule()
     },
@@ -1214,10 +1325,25 @@ function TimelineView({
     setWindowEndOffset(position.windowEndOffset)
 
     const elapsed = Date.now() - positioningStartedAt.current
+    if (!nativeTimelineReady) {
+      const timeout = window.setTimeout(
+        () => setPositioningTimeline(false),
+        Math.max(0, 8_000 - elapsed),
+      )
+      return () => window.clearTimeout(timeout)
+    }
     const delay = Math.max(0, Math.min(450, 1_800 - elapsed))
     const timer = window.setTimeout(() => setPositioningTimeline(false), delay)
     return () => window.clearTimeout(timer)
-  }, [room, roomIdentity, matrixRevision, positioningTimeline, timeline, contextTimeline])
+  }, [
+    room,
+    roomIdentity,
+    matrixRevision,
+    positioningTimeline,
+    timeline,
+    contextTimeline,
+    nativeTimelineReady,
+  ])
   useLayoutEffect(() => {
     if (!room) return
     const box = messagesRef.current
@@ -1228,12 +1354,29 @@ function TimelineView({
       lastVisibleEventCount.current = allEvents.length
       return
     }
+    // Native Android restores/decrypts the initial block asynchronously. While the loading
+    // skeleton is visible, only advance the comparison baseline: initialRoomPosition owns the
+    // window until it has selected the unread boundary (or the live edge).
+    const startupGrowthStrategy = timelineStartupGrowthStrategy(
+      positioningTimeline,
+      positionStabilizerActive.current,
+    )
+    if (startupGrowthStrategy === 'update-baseline') {
+      lastEventId.current = newestId
+      lastVisibleEventCount.current = allEvents.length
+      return
+    }
     const newestChanged = !!newestId && newestId !== lastEventId.current
     const addedEvents = addedVisibleEventCount(lastVisibleEventCount.current, allEvents.length)
     if (shouldHandleTimelineGrowth(newestChanged, addedEvents, loadingRef.current)) {
-      positionStabilizerCleanup.current()
-      mountPositionRetryCleanup.current()
-      positionStabilizerSuperseded.current = true
+      // Keep the startup anchor alive while Rust replaces encrypted placeholders and media lays
+      // out. Cancelling it here made each newly visible event move the viewport one step, which
+      // produced the restart "waterfall". Deliberate interaction still cancels the observer.
+      if (startupGrowthStrategy === 'normal') {
+        positionStabilizerCleanup.current()
+        mountPositionRetryCleanup.current()
+        positionStabilizerSuperseded.current = true
+      }
       const bottomDistance = box.scrollHeight - box.scrollTop - box.clientHeight
       const followBottom = shouldFollowAddedEvents(
         followLatest.current,
@@ -1288,9 +1431,11 @@ function TimelineView({
       historyPagingReady.current = true
       setHistoryPagingEnabled(true)
     }
+    // Reserve the anchor in this layout pass. Waiting two frames before installing the observer
+    // left a small window where the next native event could supersede startup positioning.
+    position()
     const frame = requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        position()
         requestAnimationFrame(() => {
           if (!skipMarkRead) markVisibleRead()
           requestAnimationFrame(enableHistoryPaging)
@@ -2164,9 +2309,10 @@ function TimelineView({
         : typingNames.length > 2
           ? `${typingNames.slice(0, 2).join(', ')} and ${typingNames.length - 2} other${typingNames.length === 3 ? '' : 's'} are typing`
           : ''
-  const roomSubtitle =
-    roomTopic(room) ||
-    `${room.getJoinedMemberCount()} members${room.hasEncryptionStateEvent() ? ' · end-to-end encrypted' : ''}`
+  const roomSubtitle = directMember
+    ? dmPresenceLabel(dmPresence, presenceNow)
+    : roomTopic(room) ||
+      `${room.getJoinedMemberCount()} members${room.hasEncryptionStateEvent() ? ' · end-to-end encrypted' : ''}`
   const tombstone = room.currentState
     .getStateEvents(EventType.RoomTombstone, '')
     ?.getContent<{ body?: string; replacement_room?: string }>()

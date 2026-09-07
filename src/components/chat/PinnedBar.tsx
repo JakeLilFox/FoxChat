@@ -42,10 +42,15 @@ export function PinnedBar({ room }: { room: Room }) {
   useEffect(() => {
     let cancelled = false
     for (const id of pinnedKey ? pinnedKey.split(',') : []) {
-      if (resolvedRef.current.has(id)) continue
       const local = room.findEventById(id)
       if (local) {
-        setResolved((current) => new Map(current).set(id, local))
+        if (resolvedRef.current.get(id) !== local)
+          setResolved((current) => new Map(current).set(id, local))
+        const stillEncrypted =
+          local.getWireType() === EventType.RoomMessageEncrypted &&
+          (local.getType() === EventType.RoomMessageEncrypted || local.isDecryptionFailure())
+        if (!stillEncrypted) continue
+      } else if (resolvedRef.current.has(id)) {
         continue
       }
       void matrixService.loadReplyEvent(room.roomId, id).then((value) => {
@@ -72,8 +77,14 @@ export function PinnedBar({ room }: { room: Room }) {
       message.error(error instanceof Error ? error.message : 'Could not unpin message')
     }
   }
-  const previewFor = (evt: MatrixEvent | null | undefined) =>
-    evt ? eventBody(evt) : evt === null ? 'Message unavailable' : 'Loading…'
+  const previewFor = (evt: MatrixEvent | null | undefined) => {
+    if (
+      evt?.getWireType() === EventType.RoomMessageEncrypted &&
+      evt.getType() === EventType.RoomMessageEncrypted
+    )
+      return 'Decrypting message…'
+    return evt ? eventBody(evt) : evt === null ? 'Message unavailable' : 'Loading…'
+  }
   const list = (
     <div>
       {pinnedIds.map((id) => {

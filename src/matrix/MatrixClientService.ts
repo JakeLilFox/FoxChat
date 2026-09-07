@@ -51,7 +51,11 @@ import {
   scheduleNativeCryptoSyncForEvent,
 } from '../platform/push'
 import { timelineAppearanceSettings, VOICE_CHANNEL_ROOM_TYPE } from '../lib/constants'
-import { isHiddenTimelineActivity, isVisibleMessageEvent } from '../lib/eventHelpers'
+import {
+  isHiddenTimelineActivity,
+  isVisibleMessageEvent,
+  MESSAGE_WINDOW_SIZE,
+} from '../lib/eventHelpers'
 import { isServerEventId } from '../lib/matrixIdentifiers'
 import type { MessageEncryptionTrust } from '../lib/messageEncryptionTrust'
 import { applyPermissionLevels } from '../lib/powerLevelPaths'
@@ -84,12 +88,14 @@ import {
   isAndroidNativeMatrix,
   installNativeMatrixTransport,
   nativeLogout,
+  nativeDeviceSessions,
   nativeMatrixLogin,
   nativeMatrixReady,
   nativeRecover,
   nativeRequestVerification,
   nativeSecurityStatus,
   nativeSetupRecovery,
+  nativeUserPresence,
   nativeUserIdentities,
   nativeVerificationStatus,
   nativeWatchRoom,
@@ -243,6 +249,7 @@ const ROOM_ACCOUNTS_KEY = 'foxchat.matrix.roomAccounts'
 const COMBINED_ACCOUNTS_KEY = 'foxchat.matrix.combinedAccounts'
 const AUTO_READ_ALL_ACCOUNTS_KEY = 'foxchat.matrix.autoReadAllAccounts'
 export const AUTO_READ_ALL_ACCOUNTS_CHANGED_EVENT = 'foxchat-auto-read-all-accounts-changed'
+export const NATIVE_ROOM_TIMELINE_READY_EVENT = 'foxchat-native-room-timeline-ready'
 const PRESENCE_MODES_KEY = 'foxchat.matrix.presenceModes'
 const LOCAL_ROOM_NAMES_KEY = 'foxchat.matrix.localRoomNames'
 const REACTION_PARENT_CACHE_KEY = 'foxchat.matrix.reactionParents'
@@ -250,7 +257,104 @@ const IMAGE_PACK_ORDER_EVENT = 'chat.foxchat.image_pack_order'
 export const IMAGE_PACK_LIST_TTL_MS = 60 * 60 * 1000
 const REACTION_PARENT_CACHE_LIMIT = 2_000
 const PRESENCE_IDLE_MS = 5 * 60 * 1000
+const ANDROID_NATIVE_TIMELINE_CACHE_MARKER = 'org.foxchat.native_timeline_cache'
+const ANDROID_NATIVE_TIMELINE_EVENT_MARKER = 'org.foxchat.native_timeline_event'
 export const ANDROID_ROOM_SNAPSHOT_TIMEOUT_MS = 20_000
+
+export type AndroidRoomSnapshot = {
+  next_batch?: string
+  rooms?: unknown
+  account_data?: { events?: unknown[] }
+}
+
+export function androidRoomSnapshotFromSavedSync(
+  saved: {
+    nextBatch: string
+    roomsData: unknown
+    accountData: unknown[]
+  } | null,
+): AndroidRoomSnapshot | undefined {
+  if (!saved?.nextBatch) return undefined
+  return {
+    next_batch: saved.nextBatch,
+    rooms: saved.roomsData,
+    account_data: { events: saved.accountData },
+  }
+}
+
+type AndroidCachedEvent = Record<string, unknown> & {
+  event_id?: string
+  origin_server_ts?: number
+}
+
+type AndroidJoinedRoom = Record<string, unknown> & {
+  timeline?: Record<string, unknown> & { events?: AndroidCachedEvent[] }
+}
+
+const androidJoinedRooms = (snapshot: AndroidRoomSnapshot) => {
+  if (!snapshot.rooms || typeof snapshot.rooms !== 'object') return undefined
+  const join = (snapshot.rooms as { join?: unknown }).join
+  return join && typeof join === 'object' ? (join as Record<string, AndroidJoinedRoom>) : undefined
+}
+
+const mergedAndroidTimelineEvents = (cached: AndroidCachedEvent[], fresh: AndroidCachedEvent[]) => {
+  const merged = new Map<string, AndroidCachedEvent>()
+  for (const event of [...cached, ...fresh]) {
+    const eventId = typeof event.event_id === 'string' ? event.event_id : undefined
+    if (eventId) merged.set(eventId, event)
+  }
+  return [...merged.values()]
+    .sort(
+      (first, second) => Number(first.origin_server_ts ?? 0) - Number(second.origin_server_ts ?? 0),
+    )
+    .slice(-MESSAGE_WINDOW_SIZE)
+}
+
+export function cacheAndroidRoomTimeline(
+  snapshot: AndroidRoomSnapshot,
+  roomId: string,
+  events: AndroidCachedEvent[],
+) {
+  const joined = androidJoinedRooms(snapshot)
+  const room = joined?.[roomId]
+  if (!joined || !room || !events.length) return snapshot
+  const timeline = room.timeline ?? {}
+  const cachedEvents = Array.isArray(timeline.events) ? timeline.events : []
+  return {
+    ...snapshot,
+    rooms: {
+      ...(snapshot.rooms as Record<string, unknown>),
+      join: {
+        ...joined,
+        [roomId]: {
+          ...room,
+          timeline: {
+            ...timeline,
+            limited: true,
+            [ANDROID_NATIVE_TIMELINE_CACHE_MARKER]: true,
+            events: mergedAndroidTimelineEvents(cachedEvents, events),
+          },
+        },
+      },
+    },
+  } satisfies AndroidRoomSnapshot
+}
+
+export function mergeAndroidRoomTimelineCache(
+  fresh: AndroidRoomSnapshot,
+  cached: AndroidRoomSnapshot | undefined,
+) {
+  if (!cached) return fresh
+  const cachedJoined = androidJoinedRooms(cached)
+  if (!cachedJoined) return fresh
+  let merged = fresh
+  for (const [roomId, room] of Object.entries(cachedJoined)) {
+    const events = room.timeline?.events
+    if (Array.isArray(events) && events.length)
+      merged = cacheAndroidRoomTimeline(merged, roomId, events)
+  }
+  return merged
+}
 
 export async function fetchAndroidRoomSnapshot(
   url: string,
@@ -266,7 +370,7 @@ export async function fetchAndroidRoomSnapshot(
       signal: controller.signal,
     })
     if (!response.ok) throw new Error(`Android room snapshot failed with HTTP ${response.status}`)
-    return (await response.json()) as { next_batch?: string }
+    return (await response.json()) as AndroidRoomSnapshot
   } catch (error) {
     if (controller.signal.aborted)
       throw new Error(`Android room snapshot timed out after ${timeoutMs} ms`, { cause: error })
@@ -382,6 +486,10 @@ export class MatrixClientService {
   private savedAccountsSource?: string
   private savedAccountsCache: MatrixSession[] = []
   private presenceQueues = new WeakMap<MatrixClient, Promise<void>>()
+  private nativePresenceWatches = new Map<
+    string,
+    { subscribers: number; timer: number; inFlight?: Promise<void> }
+  >()
   private verificationRequests = new Set<VerificationRequest>()
   private trackedVerificationRequests = new WeakSet<VerificationRequest>()
   private imagePackLists = new WeakMap<
@@ -1035,6 +1143,7 @@ export class MatrixClientService {
     for (const service of this.secondaryClients.values()) await service.stop()
     this.secondaryClients.clear()
     this.roomReadOwners.clear()
+    this.nativeRoomTimelinesReady.clear()
     if (this.cryptoRetryTimer !== undefined) window.clearTimeout(this.cryptoRetryTimer)
     this.cryptoRetryTimer = undefined
     // A pending decryption-retry batch may already be mid-flight against the crypto store
@@ -1196,6 +1305,15 @@ export class MatrixClientService {
     const requestNativeDecryption = (event: MatrixEvent, room?: Room) => {
       if (!nativeObserverMode || nativeDecryptionsInFlight.has(event)) return
       if (event.getWireType() !== EventType.RoomMessageEncrypted) return
+      // Rust's opened-room Timeline owns these placeholders and will publish their clear
+      // replacements in a batch. Starting Matrix-JS's per-event retry queue here reintroduces
+      // one-by-one startup rendering and duplicates work across the native bridge.
+      if (event.getUnsigned()[ANDROID_NATIVE_TIMELINE_EVENT_MARKER] === true) return
+      // A native room snapshot can contain thousands of encrypted timeline events. Rust's
+      // opened-room Timeline will publish clear events in bulk, so do not turn snapshot import
+      // into one bridge round-trip per event. A single newest event per room is queued after
+      // the snapshot for room-list previews instead.
+      if (this.nativeRoomSnapshotsProcessing.has(client)) return
       nativeDecryptionsInFlight.add(event)
       void (async () => {
         let lastError: unknown
@@ -1576,6 +1694,77 @@ export class MatrixClientService {
       .sort((first, second) => second.lastPresenceTs - first.lastPresenceTs)[0]?.presence
   }
 
+  async refreshUserPresence(userId: string) {
+    if (!isAndroidNativeMatrix()) return false
+    const accounts = this.availableAccounts()
+    const activeAccountId = this.activeAccountId()
+    const candidates = [...accounts].sort(
+      (first, second) =>
+        Number(second.id === activeAccountId) - Number(first.id === activeAccountId),
+    )
+    let lastError: unknown
+    for (const account of candidates) {
+      try {
+        const snapshot = await nativeUserPresence(account.userId, userId)
+        if (!snapshot.available || !snapshot.presence) continue
+        const event = new MatrixEvent({
+          type: EventType.Presence,
+          sender: userId,
+          origin_server_ts: snapshot.fetched_at || Date.now(),
+          content: {
+            presence: snapshot.presence,
+            currently_active: snapshot.currently_active,
+            last_active_ago: snapshot.last_active_ago,
+            status_msg: snapshot.status_msg,
+          },
+        })
+        for (const targetAccount of accounts) {
+          targetAccount.client.getUser(userId)?.setPresenceEvent(event)
+        }
+        return true
+      } catch (error) {
+        lastError = error
+      }
+    }
+    if (lastError) {
+      console.warn('[native-matrix] Could not refresh user presence', { userId, error: lastError })
+    }
+    return false
+  }
+
+  watchUserPresence(userId: string) {
+    if (!isAndroidNativeMatrix()) return () => undefined
+    const existing = this.nativePresenceWatches.get(userId)
+    if (existing) {
+      existing.subscribers++
+      return () => this.releaseUserPresenceWatch(userId, existing)
+    }
+    const watch = { subscribers: 1, timer: 0, inFlight: undefined as Promise<void> | undefined }
+    const refresh = () => {
+      if (watch.inFlight) return
+      watch.inFlight = this.refreshUserPresence(userId)
+        .then(() => undefined)
+        .finally(() => {
+          watch.inFlight = undefined
+        })
+    }
+    watch.timer = window.setInterval(refresh, 15_000)
+    this.nativePresenceWatches.set(userId, watch)
+    refresh()
+    return () => this.releaseUserPresenceWatch(userId, watch)
+  }
+
+  private releaseUserPresenceWatch(
+    userId: string,
+    watch: { subscribers: number; timer: number; inFlight?: Promise<void> },
+  ) {
+    if (this.nativePresenceWatches.get(userId) !== watch) return
+    watch.subscribers--
+    if (watch.subscribers > 0) return
+    window.clearInterval(watch.timer)
+    this.nativePresenceWatches.delete(userId)
+  }
+
   private queuePresenceUpdate(accountId: string, client: MatrixClient) {
     const previous = this.presenceQueues.get(client) ?? Promise.resolve()
     const next = previous
@@ -1682,6 +1871,8 @@ export class MatrixClientService {
     this.presenceIdleTimer = undefined
     this.appliedPresenceStates = new WeakMap()
     this.presenceQueues = new WeakMap()
+    for (const watch of this.nativePresenceWatches.values()) window.clearInterval(watch.timer)
+    this.nativePresenceWatches.clear()
   }
 
   activeAccountClient() {
@@ -2479,23 +2670,7 @@ export class MatrixClientService {
     if (!this.client) throw new Error('Client is not started')
     const userId = this.client.getSafeUserId()
     if (isAndroidNativeMatrix()) {
-      const [serverDevices, identities] = await Promise.all([
-        this.client.getDevices(),
-        nativeUserIdentities(userId, [userId]),
-      ])
-      const verified = !!identities[userId]?.verified
-      return serverDevices.devices.map((device) => ({
-        deviceId: device.device_id,
-        displayName: device.display_name || 'Unnamed device',
-        lastSeenIp: device.last_seen_ip,
-        lastSeenTs: device.last_seen_ts,
-        userAgent: device['org.matrix.msc3852.last_seen_user_agent'] ?? device.last_seen_user_agent,
-        current: device.device_id === this.client!.getDeviceId(),
-        verified,
-        crossSigned: verified,
-        signedByOwner: verified,
-        locallyVerified: verified,
-      }))
+      return nativeDeviceSessions(userId)
     }
     const crypto = this.client.getCrypto()
     const [serverDevices, cryptoDevices] = await Promise.all([
@@ -2894,26 +3069,51 @@ export class MatrixClientService {
     )
   }
 
+  private async decryptReferencedEventWithNative(event: MatrixEvent) {
+    let lastError: unknown
+    for (const wait of [0, 250, 750, 1_500, 3_000, 7_000]) {
+      if (wait) await new Promise((resolve) => window.setTimeout(resolve, wait))
+      try {
+        await decryptEventWithNativeMatrix(event, { priority: true })
+        if (event.getType() !== EventType.RoomMessageEncrypted && !event.isDecryptionFailure())
+          return
+      } catch (error) {
+        lastError = error
+      }
+    }
+    throw lastError ?? new Error(`Native Matrix could not decrypt ${event.getId() ?? 'the event'}`)
+  }
+
   loadReplyEvent(roomId: string, eventId: string) {
     const client = this.clientForRoom(roomId)
     const room = client?.getRoom(roomId)
     const existing = room?.findEventById(eventId)
-    if (existing) return Promise.resolve(existing)
     if (!client) return Promise.resolve(undefined)
     const key = `${client.getSafeUserId()}\u0000${roomId}\u0000${eventId}`
     const cached = this.replyEventCache.get(key)
     if (cached) return cached
-    const request = client
-      .fetchRoomEvent(roomId, eventId)
-      .then(async (raw) => {
+    const request = Promise.resolve(existing)
+      .then(async (local) => {
+        if (local) return local
+        const raw = await client.fetchRoomEvent(roomId, eventId)
         const mapper = client.getEventMapper()
-        const fetched = mapper({ ...raw, room_id: roomId } as Parameters<typeof mapper>[0])
-        await client.decryptEventIfNeeded(fetched).catch(() => undefined)
+        return mapper({ ...raw, room_id: roomId } as Parameters<typeof mapper>[0])
+      })
+      .then(async (fetched) => {
+        if (
+          isAndroidNativeMatrix() &&
+          fetched.getWireType() === EventType.RoomMessageEncrypted &&
+          (fetched.getType() === EventType.RoomMessageEncrypted || fetched.isDecryptionFailure())
+        ) {
+          await this.decryptReferencedEventWithNative(fetched)
+        } else {
+          await client.decryptEventIfNeeded(fetched).catch(() => undefined)
+        }
         return fetched
       })
       .catch((error) => {
         this.replyEventCache.delete(key)
-        console.warn('[replies] Could not preload replied-to event', { roomId, eventId, error })
+        console.warn('[replies] Could not preload referenced event', { roomId, eventId, error })
         return undefined
       })
     this.replyEventCache.set(key, request)
@@ -4729,25 +4929,41 @@ export class MatrixClientService {
   private nativeMatrixRoomListListenerRegistered = false
   private nativeMatrixVerificationListenerRegistered = false
   private nativeRoomHydrations = new WeakMap<MatrixClient, Promise<void>>()
+  private nativeRoomCacheRestored = new WeakSet<MatrixClient>()
+  private nativeRoomSnapshotsProcessing = new WeakSet<MatrixClient>()
+  private nativeRoomCacheSaveQueues = new WeakMap<MatrixClient, Promise<void>>()
+  private nativeRoomTimelinesReady = new Set<string>()
 
-  private hydrateNativeRooms(client: MatrixClient) {
-    const current = this.nativeRoomHydrations.get(client)
-    if (current) return current
-    const hydration = (async () => {
-      const accessToken = client.getAccessToken()
-      if (!accessToken) throw new Error('The Android observer session has no access token')
-      // Rust owns incremental sync on Android. This un-tokened, bounded snapshot is only used
-      // to hydrate Matrix-JS Room models after process recreation or a membership change; it
-      // does not establish another device or crypto client and it does not take over sync.
-      const filter = {
-        room: {
-          timeline: { limit: 30 },
-          state: { lazy_load_members: true },
-        },
-      }
-      const url = `${client.getHomeserverUrl().replace(/\/$/, '')}/_matrix/client/v3/sync?timeout=0&filter=${encodeURIComponent(JSON.stringify(filter))}&org.matrix.msc4222.use_state_after=true`
-      const data = await fetchAndroidRoomSnapshot(url, accessToken)
-      const syncApi = new SyncApi(client, undefined, { logger })
+  private nativeRoomTimelineKey(userId: string, roomId: string) {
+    return `${userId}\0${roomId}`
+  }
+
+  nativeRoomTimelineReady(roomId: string) {
+    const accountId = this.selectedRoomAccountId(roomId)
+    const account = this.availableAccounts().find((candidate) => candidate.id === accountId)
+    return (
+      !!account &&
+      this.nativeRoomTimelinesReady.has(this.nativeRoomTimelineKey(account.userId, roomId))
+    )
+  }
+
+  private markNativeRoomTimelineReady(userId: string, roomId: string) {
+    const key = this.nativeRoomTimelineKey(userId, roomId)
+    if (this.nativeRoomTimelinesReady.has(key)) return
+    this.nativeRoomTimelinesReady.add(key)
+    window.dispatchEvent(
+      new CustomEvent(NATIVE_ROOM_TIMELINE_READY_EVENT, { detail: { userId, roomId } }),
+    )
+  }
+
+  private async applyNativeRoomSnapshot(
+    client: MatrixClient,
+    data: AndroidRoomSnapshot,
+    fromCache: boolean,
+  ) {
+    const syncApi = new SyncApi(client, undefined, { logger })
+    this.nativeRoomSnapshotsProcessing.add(client)
+    try {
       await (
         syncApi as unknown as {
           processSyncResponse(
@@ -4764,13 +4980,113 @@ export class MatrixClientService {
         {
           nextSyncToken: data.next_batch,
           catchingUp: false,
-          fromCache: false,
+          fromCache,
         },
         data,
       )
+    } finally {
+      this.nativeRoomSnapshotsProcessing.delete(client)
+    }
+
+    // Room rows only need one clear preview. The selected room is hydrated in bulk by
+    // nativeWatchRoom, whose Rust Timeline remains authoritative for its complete message list.
+    for (const room of client.getRooms()) {
+      const preview = [...room.getLiveTimeline().getEvents()]
+        .reverse()
+        .find(
+          (event) =>
+            event.getWireType() === EventType.RoomMessageEncrypted &&
+            (event.getType() === EventType.RoomMessageEncrypted || event.isDecryptionFailure()),
+        )
+      if (preview) void decryptEventWithNativeMatrix(preview).catch(() => undefined)
+    }
+  }
+
+  private hydrateNativeRooms(client: MatrixClient) {
+    const current = this.nativeRoomHydrations.get(client)
+    if (current) return current
+    const hydration = (async () => {
+      let cached: AndroidRoomSnapshot | undefined
+      try {
+        cached = androidRoomSnapshotFromSavedSync(await client.store.getSavedSync())
+      } catch (error) {
+        console.warn('[native-matrix] Could not read cached Android rooms', error)
+      }
+      if (!this.nativeRoomCacheRestored.has(client)) {
+        this.nativeRoomCacheRestored.add(client)
+        try {
+          if (cached) {
+            await this.applyNativeRoomSnapshot(client, cached, true)
+            const userId = client.getUserId()
+            if (userId) {
+              for (const [roomId, room] of Object.entries(androidJoinedRooms(cached) ?? {})) {
+                if (room.timeline?.[ANDROID_NATIVE_TIMELINE_CACHE_MARKER] === true)
+                  this.markNativeRoomTimelineReady(userId, roomId)
+              }
+            }
+          }
+        } catch (error) {
+          console.warn('[native-matrix] Could not restore cached Android rooms', error)
+        }
+      }
+
+      const accessToken = client.getAccessToken()
+      if (!accessToken) throw new Error('The Android observer session has no access token')
+      // Rust owns incremental sync on Android. This un-tokened, bounded snapshot is only used
+      // to hydrate Matrix-JS Room models after process recreation or a membership change; it
+      // does not establish another device or crypto client and it does not take over sync.
+      const filter = {
+        room: {
+          // Rust supplies the opened room's cached/decrypted Timeline. The HTTP projection only
+          // needs enough timeline data for a room-list preview.
+          timeline: { limit: 1 },
+          state: { lazy_load_members: true },
+        },
+      }
+      const url = `${client.getHomeserverUrl().replace(/\/$/, '')}/_matrix/client/v3/sync?timeout=0&filter=${encodeURIComponent(JSON.stringify(filter))}&org.matrix.msc4222.use_state_after=true`
+      const data = await fetchAndroidRoomSnapshot(url, accessToken)
+      // Keep the persisted clear 40-message window while refreshing room state and previews.
+      // Otherwise this one-event projection overwrites the cache on every Android restart.
+      const hydrated = mergeAndroidRoomTimelineCache(data, cached)
+      await this.applyNativeRoomSnapshot(client, hydrated, false)
+      await client.store.setSyncData(hydrated as never)
+      await client.store.save(true)
     })().finally(() => this.nativeRoomHydrations.delete(client))
     this.nativeRoomHydrations.set(client, hydration)
     return hydration
+  }
+
+  private cacheNativeRoomEvents(
+    client: MatrixClient,
+    roomId: string,
+    events: Array<{ rawEvent: string }>,
+  ) {
+    const previous = this.nativeRoomCacheSaveQueues.get(client) ?? Promise.resolve()
+    const save = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const rawEvents = events
+          .map(({ rawEvent }) => JSON.parse(rawEvent) as AndroidCachedEvent)
+          .filter((event) => event.type !== EventType.RoomMessageEncrypted)
+        const snapshot = androidRoomSnapshotFromSavedSync(await client.store.getSavedSync())
+        if (!snapshot) return
+        const updated = cacheAndroidRoomTimeline(snapshot, roomId, rawEvents)
+        if (updated === snapshot) return
+        await client.store.setSyncData(updated as never)
+        await client.store.save(true)
+      })
+      .catch((error) =>
+        console.warn('[native-matrix] Could not persist native room timeline cache', {
+          roomId,
+          eventCount: events.length,
+          error,
+        }),
+      )
+    this.nativeRoomCacheSaveQueues.set(client, save)
+    void save.finally(() => {
+      if (this.nativeRoomCacheSaveQueues.get(client) === save)
+        this.nativeRoomCacheSaveQueues.delete(client)
+    })
   }
 
   async watchNativeRoom(roomId: string) {
@@ -4812,31 +5128,47 @@ export class MatrixClientService {
         await addPluginListener<{
           userId: string
           roomId: string
-          eventId: string
-          rawEvent: string
-        }>('remote-push', 'native-matrix-event', ({ userId, roomId, eventId, rawEvent }) => {
+          events: Array<{ eventId: string; rawEvent: string }>
+          initial?: boolean
+        }>('remote-push', 'native-matrix-events', ({ userId, roomId, events, initial }) => {
           void (async () => {
             const account = this.availableAccounts().find(
               (candidate) => candidate.userId === userId,
             )
             const room = account?.client.getRoom(roomId)
             if (!account || !room) return
-            const existing = room.findEventById(eventId)
-            // A room snapshot can install the encrypted wire event before Rust emits
-            // the corresponding clear event. Replace that copy, but ignore repeats once
-            // a clear event is already present.
-            if (existing && existing.getWireType() !== EventType.RoomMessageEncrypted) return
-            const raw = JSON.parse(rawEvent) as Record<string, unknown>
             const mapper = account.client.getEventMapper()
-            const event = mapper({ ...raw, room_id: roomId } as Parameters<typeof mapper>[0])
-            await room.addLiveEvents([event], {
-              duplicateStrategy: DuplicateStrategy.Replace,
-              addToState: true,
+            const mappedEvents = events.flatMap(({ eventId, rawEvent }) => {
+              const existing = room.findEventById(eventId)
+              // A room snapshot can install the encrypted wire event before Rust emits
+              // the corresponding clear event. Replace that copy, but ignore repeats once
+              // a clear event is already present.
+              if (existing && existing.getWireType() !== EventType.RoomMessageEncrypted) return []
+              const raw = JSON.parse(rawEvent) as Record<string, unknown>
+              const unsigned =
+                raw.unsigned && typeof raw.unsigned === 'object'
+                  ? (raw.unsigned as Record<string, unknown>)
+                  : {}
+              return [
+                mapper({
+                  ...raw,
+                  room_id: roomId,
+                  unsigned: { ...unsigned, [ANDROID_NATIVE_TIMELINE_EVENT_MARKER]: true },
+                } as Parameters<typeof mapper>[0]),
+              ]
             })
+            if (mappedEvents.length) {
+              await room.addLiveEvents(mappedEvents, {
+                duplicateStrategy: DuplicateStrategy.Replace,
+                addToState: true,
+              })
+              this.cacheNativeRoomEvents(account.client, roomId, events)
+            }
+            if (initial) this.markNativeRoomTimelineReady(userId, roomId)
           })().catch((error) =>
-            console.warn('[native-matrix] Could not apply native timeline event', {
+            console.warn('[native-matrix] Could not apply native timeline event batch', {
               roomId,
-              eventId,
+              eventCount: events.length,
               error,
             }),
           )

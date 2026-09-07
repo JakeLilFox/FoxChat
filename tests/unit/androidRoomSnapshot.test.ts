@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchAndroidRoomSnapshot } from '../../src/matrix/MatrixClientService'
+import {
+  androidRoomSnapshotFromSavedSync,
+  cacheAndroidRoomTimeline,
+  fetchAndroidRoomSnapshot,
+  mergeAndroidRoomTimelineCache,
+} from '../../src/matrix/MatrixClientService'
 
 describe('Android room snapshot', () => {
   afterEach(() => {
@@ -31,6 +36,24 @@ describe('Android room snapshot', () => {
         signal: expect.any(AbortSignal),
       }),
     )
+  })
+
+  it('reconstructs an immediately usable sync response from the IndexedDB projection', () => {
+    const roomsData = { join: { '!room:example.org': { timeline: { events: [] } } } }
+    const accountData = [{ type: 'm.direct', content: {} }]
+
+    expect(
+      androidRoomSnapshotFromSavedSync({
+        nextBatch: 'cached-next',
+        roomsData,
+        accountData,
+      }),
+    ).toEqual({
+      next_batch: 'cached-next',
+      rooms: roomsData,
+      account_data: { events: accountData },
+    })
+    expect(androidRoomSnapshotFromSavedSync(null)).toBeUndefined()
   })
 
   it('aborts instead of leaving Android startup pending forever', async () => {
@@ -68,5 +91,81 @@ describe('Android room snapshot', () => {
         fetcher,
       ),
     ).rejects.toThrow('Android room snapshot failed with HTTP 401')
+  })
+
+  it('persists only the newest 40 native timeline events', () => {
+    const snapshot = {
+      next_batch: 'next',
+      rooms: {
+        join: {
+          '!room:example.org': {
+            state: { events: [{ type: 'm.room.name' }] },
+            timeline: { events: [] },
+          },
+        },
+      },
+    }
+    const events = Array.from({ length: 50 }, (_, index) => ({
+      event_id: `$${index + 1}`,
+      origin_server_ts: index + 1,
+      type: 'm.room.message',
+      content: { body: `${index + 1}` },
+    }))
+
+    const cached = cacheAndroidRoomTimeline(snapshot, '!room:example.org', events)
+    const room = (cached.rooms as typeof snapshot.rooms).join['!room:example.org']
+    const timelineEvents = room.timeline.events as Array<{ event_id: string }>
+    expect(timelineEvents).toHaveLength(40)
+    expect(timelineEvents[0].event_id).toBe('$11')
+    expect(timelineEvents.at(-1)?.event_id).toBe('$50')
+    expect(room.state.events).toEqual([{ type: 'm.room.name' }])
+  })
+
+  it('keeps the clear cached block when the fresh room projection contains one event', () => {
+    const cached = {
+      next_batch: 'cached',
+      rooms: {
+        join: {
+          '!room:example.org': {
+            timeline: {
+              events: [
+                {
+                  event_id: '$same',
+                  origin_server_ts: 1,
+                  type: 'm.room.message',
+                  content: { body: 'decrypted' },
+                },
+              ],
+            },
+          },
+        },
+      },
+    }
+    const fresh = {
+      next_batch: 'fresh',
+      rooms: {
+        join: {
+          '!room:example.org': {
+            state: { events: [{ type: 'm.room.name' }] },
+            timeline: {
+              events: [
+                {
+                  event_id: '$same',
+                  origin_server_ts: 1,
+                  type: 'm.room.encrypted',
+                  content: {},
+                },
+              ],
+            },
+          },
+        },
+      },
+    }
+
+    const merged = mergeAndroidRoomTimelineCache(fresh, cached)
+    const room = (merged.rooms as typeof fresh.rooms).join['!room:example.org']
+    expect(room.timeline.events).toEqual(cached.rooms.join['!room:example.org'].timeline.events)
+    expect(room.state.events).toEqual([{ type: 'm.room.name' }])
+    expect(merged.next_batch).toBe('fresh')
   })
 })

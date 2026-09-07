@@ -8,6 +8,7 @@ import {
   nextFollowLatest,
   shouldHandleTimelineGrowth,
   shouldFollowAddedEvents,
+  timelineStartupGrowthStrategy,
   visibleReadBoundary,
 } from '../../src/lib/timelineWindow'
 import { fakeEvent } from './support/fakeMatrix'
@@ -64,6 +65,20 @@ describe('shouldHandleTimelineGrowth', () => {
 
   it('leaves backward pagination growth to the pagination anchor restore', () => {
     expect(shouldHandleTimelineGrowth(false, 30, true)).toBe(false)
+  })
+})
+
+describe('timelineStartupGrowthStrategy', () => {
+  it('only updates the baseline while the startup skeleton owns positioning', () => {
+    expect(timelineStartupGrowthStrategy(true, false)).toBe('update-baseline')
+  })
+
+  it('preserves the mount anchor while delayed native events settle', () => {
+    expect(timelineStartupGrowthStrategy(false, true)).toBe('preserve-anchor')
+  })
+
+  it('returns to normal live-event handling after the user releases the anchor', () => {
+    expect(timelineStartupGrowthStrategy(false, false)).toBe('normal')
   })
 })
 

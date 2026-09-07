@@ -209,6 +209,15 @@ class MainActivity : TauriActivity() {
           payload.getString("userId"),
           payload.getJSONArray("targetUserIds"),
         ).toString()
+        "deviceSessions" -> NativeMatrixClientManager.deviceSessions(
+          applicationContext,
+          payload.getString("userId"),
+        ).toString()
+        "userPresence" -> NativeMatrixClientManager.userPresence(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getString("targetUserId"),
+        ).toString()
         "verificationStatus" -> NativeMatrixClientManager.verificationStatus(
           applicationContext,
           payload.getString("userId"),

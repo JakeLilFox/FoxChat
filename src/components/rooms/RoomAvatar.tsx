@@ -7,12 +7,17 @@ import { Avatar, Badge, Tooltip } from 'antd'
 import { AudioOutlined } from '@ant-design/icons'
 import { Room, RoomType } from 'matrix-js-sdk'
 import { matrixService } from '../../matrix/MatrixClientService'
+import { useEffect } from 'react'
 
 export function RoomAvatar({ room, size = 43 }: { room: Room; size?: number }) {
   const client = matrixService.clientForRoomInstance(room)
   const accountRoom = client?.getRoom(room.roomId) ?? room
   const directMember = matrixService.directRoomMember(accountRoom)
   const directUser = directMember?.userId
+  useEffect(
+    () => (directUser ? matrixService.watchUserPresence(directUser) : undefined),
+    [directUser],
+  )
   const url = useMediaUrl(
     {
       url: accountRoom.getMxcAvatarUrl() ?? directMember?.getMxcAvatarUrl(),

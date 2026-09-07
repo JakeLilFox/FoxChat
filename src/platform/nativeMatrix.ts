@@ -43,6 +43,19 @@ export type NativeDecryptedEvent = {
   rawEvent: string
 }
 
+export type NativeMatrixDeviceSession = {
+  deviceId: string
+  displayName: string
+  lastSeenIp?: string
+  lastSeenTs?: number
+  userAgent?: string
+  current: boolean
+  verified: boolean
+  crossSigned: boolean
+  signedByOwner: boolean
+  locallyVerified: boolean
+}
+
 export type NativeVerificationSnapshot = {
   active: boolean
   requestId?: string
@@ -61,6 +74,54 @@ export type NativeVerificationSnapshot = {
 type NativeListener = (...args: unknown[]) => void
 
 const VERIFICATION_BRIDGE_TIMEOUT_MS = 50_000
+const MAX_NATIVE_DECRYPTIONS = 2
+let activeNativeDecryptions = 0
+const pendingNativeDecryptions: Array<{ key: string; start: () => void }> = []
+const nativeDecryptionResults = new Map<string, Promise<NativeDecryptedEvent>>()
+
+function drainNativeDecryptionQueue() {
+  while (activeNativeDecryptions < MAX_NATIVE_DECRYPTIONS) {
+    const pending = pendingNativeDecryptions.shift()
+    if (!pending) return
+    activeNativeDecryptions += 1
+    pending.start()
+  }
+}
+
+function scheduleNativeDecryption(key: string, priority = false) {
+  const existing = nativeDecryptionResults.get(key)
+  if (existing) {
+    if (priority) {
+      const queuedIndex = pendingNativeDecryptions.findIndex((pending) => pending.key === key)
+      if (queuedIndex > 0) {
+        const [queued] = pendingNativeDecryptions.splice(queuedIndex, 1)
+        if (queued) pendingNativeDecryptions.unshift(queued)
+      }
+    }
+    return existing
+  }
+  const scheduled = new Promise<NativeDecryptedEvent>((resolve, reject) => {
+    const pending = {
+      key,
+      start: () => {
+        void command<NativeDecryptedEvent>('decryptEvent', {
+          roomId: key.slice(0, key.indexOf('\u0000')),
+          eventId: key.slice(key.indexOf('\u0000') + 1),
+        })
+          .then(resolve, reject)
+          .finally(() => {
+            activeNativeDecryptions -= 1
+            drainNativeDecryptionQueue()
+          })
+      },
+    }
+    if (priority) pendingNativeDecryptions.unshift(pending)
+    else pendingNativeDecryptions.push(pending)
+    drainNativeDecryptionQueue()
+  }).finally(() => nativeDecryptionResults.delete(key))
+  nativeDecryptionResults.set(key, scheduled)
+  return scheduled
+}
 
 class NativeEmitter {
   private listeners = new Map<string, Set<NativeListener>>()
@@ -406,12 +467,19 @@ export function adoptFreshAndroidMatrixSession(session: {
   )
 }
 
-export async function decryptEventWithNativeMatrix(event: MatrixEvent) {
+export async function decryptEventWithNativeMatrix(
+  event: MatrixEvent,
+  options: { priority?: boolean } = {},
+) {
   if (event.getWireType() !== EventType.RoomMessageEncrypted) return false
   const roomId = event.getRoomId()
   const eventId = event.getId()
   if (!roomId || !eventId) return false
-  const result = await command<NativeDecryptedEvent>('decryptEvent', { roomId, eventId })
+  // A newly opened room can expose hundreds of encrypted events at once. Letting all of them
+  // enter the Rust FFI concurrently exhausts Dispatchers.IO and prevents interactive commands
+  // (notably verification) from even reaching the native client. Two decryptions keep the
+  // timeline moving without starving the rest of the native Matrix API.
+  const result = await scheduleNativeDecryption(`${roomId}\u0000${eventId}`, options.priority)
   const raw = JSON.parse(result.rawEvent) as {
     type?: string
     content?: Record<string, unknown>
@@ -486,6 +554,20 @@ export function nativeSetPresence(userId: string, presence: string) {
   return command<{ ok: true }>('setPresence', { userId, presence })
 }
 
+export type NativeUserPresence = {
+  available: boolean
+  presence?: string
+  currently_active?: boolean
+  last_active_ago?: number
+  status_msg?: string
+  fetched_at: number
+  http_status?: number
+}
+
+export function nativeUserPresence(userId: string, targetUserId: string) {
+  return command<NativeUserPresence>('userPresence', { userId, targetUserId })
+}
+
 export function nativeMarkRead(userId: string, roomId: string) {
   return command<{ ok: true }>('markRead', { userId, roomId })
 }
@@ -507,6 +589,25 @@ export function nativeSetupRecovery(userId: string, passphrase?: string) {
 
 export function nativeSecurityStatus<T>(userId: string) {
   return command<T>('securityStatus', { userId })
+}
+
+export function nativeDeviceSessions(userId: string) {
+  return command<{
+    devices: Array<
+      NativeMatrixDeviceSession & {
+        lastSeenIp?: string | null
+        lastSeenTs?: number | null
+        userAgent?: string | null
+      }
+    >
+  }>('deviceSessions', { userId }).then(({ devices }) =>
+    devices.map((device) => ({
+      ...device,
+      lastSeenIp: device.lastSeenIp ?? undefined,
+      lastSeenTs: device.lastSeenTs ?? undefined,
+      userAgent: device.userAgent ?? undefined,
+    })),
+  )
 }
 
 export function nativeUserIdentities<

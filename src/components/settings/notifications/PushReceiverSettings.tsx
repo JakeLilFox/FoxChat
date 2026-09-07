@@ -419,13 +419,6 @@ export function PushReceiverSettings() {
       {isAndroidNativeMatrix() && (
         <>
           <h3 style={{ marginTop: 20 }}>Android Matrix client and notifications</h3>
-          <p>
-            On Android, the Matrix Rust SDK owns the existing Matrix device, encrypted store, live
-            sync, sending, and notification decryption. It keeps running independently of the
-            WebView, so killing the WebView does not hand crypto ownership back to the browser
-            client. The health check below only reads status; it does not send, decrypt, or change
-            account data.
-          </p>
           <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
             <Button loading={healthChecking} onClick={() => void checkNativeHealth()}>
               Check Rust client health

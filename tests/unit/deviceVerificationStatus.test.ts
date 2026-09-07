@@ -1,10 +1,20 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MatrixClient } from 'matrix-js-sdk'
 import { MatrixClientService } from '../../src/matrix/MatrixClientService'
 
+const originalUserAgent = navigator.userAgent
+
 describe('device verification status', () => {
+  afterEach(() => {
+    delete window.__TAURI_INTERNALS__
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      value: originalUserAgent,
+    })
+    vi.restoreAllMocks()
+  })
   it('does not present local self-trust as cross-device verification', async () => {
     const status = {
       isVerified: () => true,
@@ -78,6 +88,44 @@ describe('device verification status', () => {
       crossSigned: true,
       signedByOwner: true,
       locallyVerified: true,
+    })
+  })
+
+  it('never asks the Android WebView observer for the device list', async () => {
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      value: 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36',
+    })
+    const invoke = vi.fn().mockResolvedValue({
+      devices: [
+        {
+          deviceId: 'ANDROID',
+          displayName: 'FoxChat Android',
+          current: true,
+          verified: false,
+          crossSigned: false,
+          signedByOwner: false,
+          locallyVerified: false,
+        },
+      ],
+    })
+    window.__TAURI_INTERNALS__ = { invoke: invoke as never }
+    const getDevices = vi.fn(() => {
+      throw new Error('The observer client must not own Android device management')
+    })
+    const service = new MatrixClientService()
+    ;(service as unknown as { client: MatrixClient }).client = {
+      getSafeUserId: () => '@me:example.org',
+      getDevices,
+    } as unknown as MatrixClient
+
+    await expect(service.getDeviceSessions()).resolves.toMatchObject([
+      { deviceId: 'ANDROID', current: true },
+    ])
+    expect(getDevices).not.toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledWith('plugin:remote-push|native_matrix', {
+      action: 'deviceSessions',
+      payload: JSON.stringify({ userId: '@me:example.org' }),
     })
   })
 })

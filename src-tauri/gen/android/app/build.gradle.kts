@@ -19,13 +19,52 @@ plugins {
 // Android resources required by Firebase Messaging for background delivery.
 val sideBySideE2e = System.getenv("ANDROID_E2E_SIDE_BY_SIDE")
     ?.equals("true", ignoreCase = true) == true
+val sideBySideDev = System.getenv("ANDROID_DEV_SIDE_BY_SIDE")
+    ?.equals("true", ignoreCase = true) == true
+val isolatedPackage = sideBySideE2e || sideBySideDev
+val firebaseConfigFile = file("google-services.json")
 
-if (file("google-services.json").exists() && !sideBySideE2e) {
+// The Google Services plugin requires an exact applicationId match and therefore cannot
+// process the production-only JSON entry for the side-by-side .dev/.e2e packages. Those
+// packages still need a default Firebase app, so project values are supplied directly from
+// the same local configuration file. FCM tokens remain isolated by Android package name.
+val isolatedFirebaseValues: Map<String, String> =
+    if (isolatedPackage && firebaseConfigFile.exists()) {
+        val configuration = JsonSlurper().parse(firebaseConfigFile) as Map<*, *>
+        val project = configuration["project_info"] as? Map<*, *> ?: emptyMap<Any, Any>()
+        val client = (configuration["client"] as? List<*>)
+            ?.filterIsInstance<Map<*, *>>()
+            ?.firstOrNull()
+            ?: emptyMap<Any, Any>()
+        val clientInfo = client["client_info"] as? Map<*, *> ?: emptyMap<Any, Any>()
+        val apiKey = (client["api_key"] as? List<*>)
+            ?.filterIsInstance<Map<*, *>>()
+            ?.firstOrNull()
+            ?.get("current_key") as? String
+        buildMap {
+            (clientInfo["mobilesdk_app_id"] as? String)?.let { put("google_app_id", it) }
+            (project["project_number"] as? String)?.let { put("gcm_defaultSenderId", it) }
+            (project["project_id"] as? String)?.let { put("project_id", it) }
+            (project["storage_bucket"] as? String)?.let { put("google_storage_bucket", it) }
+            apiKey?.let {
+                put("google_api_key", it)
+                put("google_crash_reporting_api_key", it)
+            }
+        }
+    } else {
+        emptyMap()
+    }
+
+if (firebaseConfigFile.exists() && !isolatedPackage) {
     apply(plugin = "com.google.gms.google-services")
 } else {
     logger.warn(
-        if (sideBySideE2e) {
-            "Side-by-side E2E build: Firebase is disabled because its package is intentionally isolated"
+        if (isolatedPackage) {
+            if (isolatedFirebaseValues.isEmpty()) {
+                "Side-by-side Android build: google-services.json is missing, so Firebase push is unavailable"
+            } else {
+                "Side-by-side Android build: Firebase project resources are configured explicitly"
+            }
         } else {
             "google-services.json is missing: closed-app FCM notifications will not work"
         }
@@ -102,11 +141,16 @@ android {
     namespace = "foxchat.jakefox.de"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = if (sideBySideE2e) "foxchat.jakefox.de.e2e" else "foxchat.jakefox.de"
+        applicationId = when {
+            sideBySideE2e -> "foxchat.jakefox.de.e2e"
+            sideBySideDev -> "foxchat.jakefox.de.dev"
+            else -> "foxchat.jakefox.de"
+        }
         minSdk = 24
         targetSdk = 36
         versionCode = System.getenv("VERSION_CODE")?.let { versionCodeOf(it) } ?: tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = if (System.getenv("VERSION_NAME") != null) System.getenv("VERSION_NAME") else tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        isolatedFirebaseValues.forEach { (name, value) -> resValue("string", name, value) }
     }
     buildTypes {
         getByName("debug") {
@@ -226,12 +270,6 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
-}
-
-// Keep normal desktop/web development buildable before the Firebase file is
-// provisioned. Android push is enabled as soon as google-services.json exists.
-if (file("google-services.json").exists() && !sideBySideE2e) {
-    apply(plugin = "com.google.gms.google-services")
 }
 
 val tauriBuild = project.file("tauri.build.gradle.kts")

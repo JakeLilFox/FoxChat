@@ -37,6 +37,15 @@ export function shouldHandleTimelineGrowth(
   return !historyPageInProgress && (newestChanged || addedVisibleEvents > 0)
 }
 
+export function timelineStartupGrowthStrategy(
+  positioningTimeline: boolean,
+  positionStabilizerActive: boolean,
+) {
+  if (positioningTimeline) return 'update-baseline' as const
+  if (positionStabilizerActive) return 'preserve-anchor' as const
+  return 'normal' as const
+}
+
 export function nextFollowLatest(
   followingLatest: boolean,
   atBottom: boolean,

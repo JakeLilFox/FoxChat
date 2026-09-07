@@ -10,10 +10,12 @@ import {
   isAndroidMigrationRetryAvailable,
   isRetryableAndroidVerifierError,
   nativeMatrixLogin,
+  nativeDeviceSessions,
   nativeMatrixReady,
   nativeRequestVerification,
   nativeSecurityStatus,
   nativeSetupRecovery,
+  type NativeDecryptedEvent,
 } from '../../src/platform/nativeMatrix'
 import { VerificationPhase } from 'matrix-js-sdk/lib/crypto-api'
 
@@ -297,5 +299,147 @@ describe('Android native Matrix bridge', () => {
       'setupRecovery',
       'securityStatus',
     ])
+  })
+
+  it('loads the Android device inventory from the native Matrix owner', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      devices: [
+        {
+          deviceId: 'ANDROID',
+          displayName: 'FoxChat Android',
+          current: true,
+          verified: false,
+          crossSigned: false,
+          signedByOwner: false,
+          locallyVerified: false,
+        },
+        {
+          deviceId: 'DESKTOP',
+          displayName: 'FoxChat Desktop',
+          current: false,
+          verified: false,
+          crossSigned: false,
+          signedByOwner: false,
+          locallyVerified: false,
+        },
+      ],
+    })
+    enableAndroid(invoke)
+
+    await expect(nativeDeviceSessions('@me:example.org')).resolves.toHaveLength(2)
+    expect(invoke).toHaveBeenCalledWith('plugin:remote-push|native_matrix', {
+      action: 'deviceSessions',
+      payload: JSON.stringify({ userId: '@me:example.org' }),
+    })
+  })
+
+  it('does not let a room-history decryption burst block verification', async () => {
+    const decryptResolvers: Array<(value: NativeDecryptedEvent) => void> = []
+    const invoke = vi.fn().mockImplementation(async (_command, args) => {
+      const action = args.action as string
+      if (action === 'verificationRequest') {
+        return {
+          active: true,
+          requestId: 'request',
+          userId: '@me:example.org',
+          initiatedByMe: true,
+          otherUserId: '@me:example.org',
+          phase: 'requested',
+        }
+      }
+      if (action !== 'decryptEvent') throw new Error(`Unexpected action ${action}`)
+      return new Promise<NativeDecryptedEvent>((resolve) => decryptResolvers.push(resolve))
+    })
+    enableAndroid(invoke)
+    const events = Array.from(
+      { length: 4 },
+      (_, index) =>
+        new MatrixEvent({
+          event_id: `$event-${index}`,
+          room_id: '!room:example.org',
+          sender: '@alice:example.org',
+          origin_server_ts: Date.now(),
+          type: EventType.RoomMessageEncrypted,
+          content: { algorithm: 'm.megolm.v1.aes-sha2', ciphertext: 'encrypted' },
+        }),
+    )
+
+    const decryptions = events.map((event) => decryptEventWithNativeMatrix(event))
+    await vi.waitFor(() => expect(decryptResolvers).toHaveLength(2))
+    await expect(nativeRequestVerification('@me:example.org')).resolves.toBeDefined()
+    expect(invoke.mock.calls.some(([, args]) => args.action === 'verificationRequest')).toBe(true)
+
+    for (let index = 0; index < events.length; index += 1) {
+      await vi.waitFor(() => expect(decryptResolvers.length).toBeGreaterThan(index))
+      decryptResolvers[index]({
+        ok: true,
+        userId: '@me:example.org',
+        roomId: '!room:example.org',
+        eventId: `$event-${index}`,
+        senderId: '@alice:example.org',
+        senderName: 'Alice',
+        roomName: 'Room',
+        body: 'hello',
+        rawEvent: JSON.stringify({
+          type: EventType.RoomMessage,
+          content: { msgtype: MsgType.Text, body: 'hello' },
+        }),
+      })
+      await Promise.resolve()
+    }
+    await expect(Promise.all(decryptions)).resolves.toEqual([true, true, true, true])
+  })
+
+  it('moves an interactively requested old event ahead of queued background decryptions', async () => {
+    const requested: string[] = []
+    const resolvers = new Map<string, (value: NativeDecryptedEvent) => void>()
+    const invoke = vi.fn().mockImplementation(async (_command, args) => {
+      if (args.action !== 'decryptEvent') throw new Error(`Unexpected action ${args.action}`)
+      const payload = JSON.parse(String(args.payload)) as { roomId: string; eventId: string }
+      requested.push(payload.eventId)
+      return new Promise<NativeDecryptedEvent>((resolve) => resolvers.set(payload.eventId, resolve))
+    })
+    enableAndroid(invoke)
+    const event = (eventId: string) =>
+      new MatrixEvent({
+        event_id: eventId,
+        room_id: '!room:example.org',
+        sender: '@alice:example.org',
+        origin_server_ts: Date.now(),
+        type: EventType.RoomMessageEncrypted,
+        content: { algorithm: 'm.megolm.v1.aes-sha2', ciphertext: 'encrypted' },
+      })
+    const complete = (eventId: string) =>
+      resolvers.get(eventId)?.({
+        ok: true,
+        userId: '@me:example.org',
+        roomId: '!room:example.org',
+        eventId,
+        senderId: '@alice:example.org',
+        senderName: 'Alice',
+        roomName: 'Room',
+        body: eventId,
+        rawEvent: JSON.stringify({
+          type: EventType.RoomMessage,
+          content: { msgtype: 'm.text', body: eventId },
+        }),
+      })
+
+    const decryptions = [
+      decryptEventWithNativeMatrix(event('$active-1')),
+      decryptEventWithNativeMatrix(event('$active-2')),
+      decryptEventWithNativeMatrix(event('$background')),
+      decryptEventWithNativeMatrix(event('$pinned'), { priority: true }),
+    ]
+    await vi.waitFor(() => expect(requested).toEqual(['$active-1', '$active-2']))
+
+    complete('$active-1')
+    await vi.waitFor(() => expect(requested[2]).toBe('$pinned'))
+    complete('$active-2')
+    await vi.waitFor(() => expect(requested[3]).toBe('$background'))
+    complete('$pinned')
+    complete('$background')
+
+    await expect(Promise.all(decryptions)).resolves.toEqual([true, true, true, true])
   })
 })

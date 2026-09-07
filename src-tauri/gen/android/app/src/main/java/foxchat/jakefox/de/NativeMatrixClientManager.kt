@@ -1,12 +1,14 @@
 package foxchat.jakefox.de
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import android.util.Base64
 import app.tauri.remotepush.PushNotificationPlugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
@@ -60,6 +62,8 @@ import org.matrix.rustcomponents.sdk.initPlatform
 import uniffi.matrix_sdk_ui.TimelineEventFocusThreadMode
 import uniffi.matrix_sdk_ui.TimelineReadReceiptTracking
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
@@ -92,6 +96,9 @@ data class NativeMatrixDecryptedEvent(
 object NativeMatrixClientManager {
     private const val TAG = "FoxChatNativeMatrix"
     private const val VERIFICATION_REQUEST_TIMEOUT_MS = 45_000L
+    private const val INITIAL_TIMELINE_EVENT_LIMIT = 40
+    private const val INITIAL_TIMELINE_BATCH_QUIET_MS = 750L
+    private const val LIVE_TIMELINE_BATCH_QUIET_MS = 40L
     private val platformInitLock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val accounts = ConcurrentHashMap<String, AccountRuntime>()
@@ -151,8 +158,66 @@ object NativeMatrixClientManager {
     private data class TimelineSubscription(
         val timeline: Timeline,
         val handle: TaskHandle,
+        val batcher: TimelineEventBatcher,
         val lastJsonByEventId: ConcurrentHashMap<String, String> = ConcurrentHashMap(),
     )
+
+    /** Coalesces Rust's Reset + per-item Set sequence before crossing into the WebView. */
+    private class TimelineEventBatcher(
+        private val scope: CoroutineScope,
+        private val publish: (List<Pair<String, String>>, Boolean) -> Unit,
+    ) {
+        private val lock = Any()
+        private val pending = LinkedHashMap<String, String>()
+        private var initialBatch = true
+        private var pendingFlush = false
+        private var generation = 0L
+        private var flushJob: Job? = null
+
+        fun enqueue(events: List<Pair<String, String>>, force: Boolean = false) {
+            if (events.isEmpty() && !force) return
+            synchronized(lock) {
+                events.forEach { (eventId, raw) -> pending[eventId] = raw }
+                pendingFlush = true
+                flushJob?.cancel()
+                val scheduledGeneration = ++generation
+                val quietMs = if (initialBatch) {
+                    INITIAL_TIMELINE_BATCH_QUIET_MS
+                } else {
+                    LIVE_TIMELINE_BATCH_QUIET_MS
+                }
+                flushJob = scope.launch {
+                    delay(quietMs)
+                    flush(scheduledGeneration)
+                }
+            }
+        }
+
+        private fun flush(scheduledGeneration: Long) {
+            val ready = synchronized(lock) {
+                if (scheduledGeneration != generation) return
+                if (!pendingFlush) return
+                val events = pending.toList()
+                val wasInitial = initialBatch
+                pending.clear()
+                pendingFlush = false
+                initialBatch = false
+                flushJob = null
+                events to wasInitial
+            }
+            publish(ready.first, ready.second)
+        }
+
+        fun close() {
+            synchronized(lock) {
+                generation++
+                flushJob?.cancel()
+                flushJob = null
+                pending.clear()
+                pendingFlush = false
+            }
+        }
+    }
 
     private data class RoomListSubscription(
         val service: RoomListService,
@@ -632,7 +697,22 @@ object NativeMatrixClientManager {
     fun watchRoom(context: Context, userId: String, roomId: String): JSONObject =
         runBlocking(Dispatchers.IO) {
             val runtime = ensureRuntime(context, userId)
-            if (runtime.timelineSubscriptions.containsKey(roomId)) {
+            val existingSubscription = runtime.timelineSubscriptions[roomId]
+            if (existingSubscription != null) {
+                // The Android process can outlive its Activity/WebView. Replay one coherent latest
+                // block when the recreated WebView attaches to the already-running Rust timeline.
+                publishTimelineEvents(
+                    userId,
+                    roomId,
+                    existingSubscription.lastJsonByEventId.entries
+                        .map { it.key to it.value }
+                        .sortedBy { (_, raw) ->
+                            runCatching { JSONObject(raw).optLong("origin_server_ts") }
+                                .getOrDefault(0L)
+                        }
+                        .takeLast(INITIAL_TIMELINE_EVENT_LIMIT),
+                    initial = true,
+                )
                 return@runBlocking JSONObject().put("ok", true).put("alreadyWatching", true)
             }
             val room = withTimeout(30_000L) {
@@ -645,30 +725,70 @@ object NativeMatrixClientManager {
             }
             val timeline = room.timeline()
             val lastJsonByEventId = ConcurrentHashMap<String, String>()
+            val suppressedInitialEventIds = ConcurrentHashMap.newKeySet<String>()
+            val batcher = TimelineEventBatcher(scope) { events, initial ->
+                publishTimelineEvents(userId, roomId, events, initial)
+            }
             val handle = timeline.addListener(object : TimelineListener {
                 override fun onUpdate(update: List<TimelineDiff>) {
-                    timelineItems(update).forEach { item ->
-                        val event = item.asEvent() ?: return@forEach
+                    val candidates = timelineItems(update).mapNotNull { item ->
+                        val event = item.asEvent() ?: return@mapNotNull null
                         val raw = runCatching { event.lazyProvider.latestJson() }.getOrNull()
-                            ?: return@forEach
+                            ?: return@mapNotNull null
                         val eventId = runCatching { JSONObject(raw).optString("event_id") }
-                            .getOrNull()?.takeIf { it.isNotBlank() } ?: return@forEach
-                        if (lastJsonByEventId.put(eventId, raw) == raw) return@forEach
-                        PushNotificationPlugin.instance?.handleNativeMatrixEvent(
-                            JSONObject()
-                                .put("userId", userId)
-                                .put("roomId", roomId)
-                                .put("eventId", eventId)
-                                .put("rawEvent", raw),
-                        )
+                            .getOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                        eventId to raw
                     }
+                    val events = if (update.any { it is TimelineDiff.Reset }) {
+                        // A Reset contains the complete cached Rust timeline. The WebView only
+                        // needs its newest render window initially; older events remain available
+                        // through normal backwards pagination. Remember discarded IDs as Rust
+                        // may subsequently emit one Set diff per event while decrypting its cache.
+                        val selected = candidates.takeLast(INITIAL_TIMELINE_EVENT_LIMIT)
+                        selected.forEach { (eventId) -> suppressedInitialEventIds.remove(eventId) }
+                        candidates.dropLast(selected.size).forEach { (eventId) ->
+                            suppressedInitialEventIds.add(eventId)
+                        }
+                        selected
+                    } else {
+                        candidates.filterNot { (eventId) ->
+                            suppressedInitialEventIds.contains(eventId)
+                        }
+                    }.filter { (eventId, raw) ->
+                        lastJsonByEventId.put(eventId, raw) != raw
+                    }
+                    batcher.enqueue(events, force = update.any { it is TimelineDiff.Reset })
                 }
             })
-            val subscription = TimelineSubscription(timeline, handle, lastJsonByEventId)
+            val subscription = TimelineSubscription(timeline, handle, batcher, lastJsonByEventId)
             val previous = runtime.timelineSubscriptions.putIfAbsent(roomId, subscription)
             if (previous != null) closeTimelineSubscription(subscription)
             JSONObject().put("ok", true).put("alreadyWatching", previous != null)
         }
+
+    private fun publishTimelineEvents(
+        userId: String,
+        roomId: String,
+        events: List<Pair<String, String>>,
+        initial: Boolean = false,
+    ) {
+        if (events.isEmpty() && !initial) return
+        val payloadEvents = JSONArray()
+        events.forEach { (eventId, raw) ->
+            payloadEvents.put(
+                JSONObject()
+                    .put("eventId", eventId)
+                    .put("rawEvent", raw),
+            )
+        }
+        PushNotificationPlugin.instance?.handleNativeMatrixEvents(
+            JSONObject()
+                .put("userId", userId)
+                .put("roomId", roomId)
+                .put("events", payloadEvents)
+                .put("initial", initial),
+        )
+    }
 
     fun markReadForRoom(context: Context, roomId: String) = runBlocking(Dispatchers.IO) {
         val room = runtimeForRoom(context, roomId).client.getRoom(roomId)
@@ -793,6 +913,55 @@ object NativeMatrixClientManager {
             identities
         }
 
+    fun deviceSessions(context: Context, userId: String): JSONObject =
+        runBlocking(Dispatchers.IO) {
+            val runtime = ensureReadyRuntimeForUi(context, userId)
+            JSONObject().put("devices", ownDeviceSessions(runtime))
+        }
+
+    fun userPresence(context: Context, userId: String, targetUserId: String): JSONObject =
+        runBlocking(Dispatchers.IO) {
+            val runtime = ensureReadyRuntimeForUi(context, userId)
+            val session = runtime.client.session()
+            val encodedUserId = Uri.encode(targetUserId)
+            val connection = (
+                URL(
+                    "${session.homeserverUrl.trimEnd('/')}/_matrix/client/v3/presence/" +
+                        "$encodedUserId/status",
+                ).openConnection() as HttpURLConnection
+            ).apply {
+                requestMethod = "GET"
+                connectTimeout = 15_000
+                readTimeout = 15_000
+                setRequestProperty("Authorization", "Bearer ${session.accessToken}")
+                setRequestProperty("Accept", "application/json")
+            }
+            try {
+                val status = connection.responseCode
+                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                if (status == 403 || status == 404) {
+                    return@runBlocking JSONObject()
+                        .put("available", false)
+                        .put("http_status", status)
+                        .put("fetched_at", System.currentTimeMillis())
+                }
+                check(status in 200..299) {
+                    val matrixError = runCatching { JSONObject(body) }.getOrNull()
+                    val code = matrixError?.optString("errcode")?.takeIf { it.isNotBlank() }
+                    val message = matrixError?.optString("error")?.takeIf { it.isNotBlank() }
+                    "Native Matrix presence failed with HTTP $status" +
+                        (code?.let { " ($it)" } ?: "") +
+                        (message?.let { ": $it" } ?: "")
+                }
+                JSONObject(body)
+                    .put("available", true)
+                    .put("fetched_at", System.currentTimeMillis())
+            } finally {
+                connection.disconnect()
+            }
+        }
+
     suspend fun verificationStatus(context: Context, userId: String): JSONObject {
         ensureReadyRuntimeForUi(context, userId)
         return verificationSessions[userId]?.json() ?: JSONObject().put("active", false)
@@ -825,6 +994,17 @@ object NativeMatrixClientManager {
                 Log.i(TAG, "Verification for $userId: $stage")
                 val encryption = runtime.client.encryption()
                 encryption.waitForE2eeInitializationTasks()
+
+                stage = "checking other Matrix devices"
+                Log.i(TAG, "Verification for $userId: $stage")
+                val devices = ownDeviceSessions(runtime)
+                val otherDeviceCount = (0 until devices.length()).count { index ->
+                    !devices.getJSONObject(index).optBoolean("current")
+                }
+                check(target != userId || otherDeviceCount > 0) {
+                    "No other Matrix device is available to receive this verification request"
+                }
+                Log.i(TAG, "Verification for $userId: $otherDeviceCount other device(s) available")
 
                 stage = "sending the Matrix verification request"
                 Log.i(TAG, "Verification for $userId: $stage")
@@ -1144,8 +1324,12 @@ object NativeMatrixClientManager {
 
     private fun checkedTimelineJson(rawEvent: String?, eventId: String, source: String): String {
         val json = rawEvent ?: error("Native $source timeline returned no JSON for $eventId")
-        check(JSONObject(json).optString("event_id") == eventId) {
+        val parsed = JSONObject(json)
+        check(parsed.optString("event_id") == eventId) {
             "Native $source timeline resolved $eventId to a different aggregated event"
+        }
+        check(parsed.optString("type") != "m.room.encrypted") {
+            "Native $source timeline has not decrypted $eventId yet"
         }
         return json
     }
@@ -1269,6 +1453,82 @@ object NativeMatrixClientManager {
         .put("refreshedAt", System.currentTimeMillis())
         .also { json -> if (storeRoot != null) json.put("storeRoot", storeRoot.absolutePath) }
 
+    /**
+     * The Android SDK's Rust FFI does not currently expose Client::devices(), so make the
+     * authenticated homeserver request beside the Rust client using the Rust-owned session.
+     * The WebView token and Matrix client are deliberately never consulted on Android.
+     */
+    private suspend fun ownDeviceSessions(runtime: AccountRuntime): JSONArray {
+        val session = runtime.client.session()
+        val baseUrl = session.homeserverUrl.trimEnd('/')
+        val connection = (URL("$baseUrl/_matrix/client/v3/devices").openConnection() as HttpURLConnection)
+            .apply {
+                requestMethod = "GET"
+                connectTimeout = 15_000
+                readTimeout = 15_000
+                setRequestProperty("Authorization", "Bearer ${session.accessToken}")
+                setRequestProperty("Accept", "application/json")
+            }
+        return try {
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            check(status in 200..299) {
+                val matrixError = runCatching { JSONObject(body) }.getOrNull()
+                val code = matrixError?.optString("errcode")?.takeIf { it.isNotBlank() }
+                val message = matrixError?.optString("error")?.takeIf { it.isNotBlank() }
+                "Native Matrix device list failed with HTTP $status" +
+                    (code?.let { " ($it)" } ?: "") +
+                    (message?.let { ": $it" } ?: "")
+            }
+            val response = JSONObject(body)
+            val devices = response.optJSONArray("devices") ?: JSONArray()
+            val verified = runtime.client.encryption().verificationState().name == "VERIFIED"
+            JSONArray().also { result ->
+                for (index in 0 until devices.length()) {
+                    val device = devices.getJSONObject(index)
+                    val deviceId = device.getString("device_id")
+                    result.put(
+                        JSONObject()
+                            .put("deviceId", deviceId)
+                            .put(
+                                "displayName",
+                                device.optString("display_name").takeIf { it.isNotBlank() }
+                                    ?: "Unnamed device",
+                            )
+                            .put(
+                                "lastSeenIp",
+                                device.optNullableString("last_seen_ip") ?: JSONObject.NULL,
+                            )
+                            .put(
+                                "lastSeenTs",
+                                device.optNullableLong("last_seen_ts") ?: JSONObject.NULL,
+                            )
+                            .put(
+                                "userAgent",
+                                device.optNullableString("org.matrix.msc3852.last_seen_user_agent")
+                                    ?: device.optNullableString("last_seen_user_agent")
+                                    ?: JSONObject.NULL,
+                            )
+                            .put("current", deviceId == session.deviceId)
+                            .put("verified", verified)
+                            .put("crossSigned", verified)
+                            .put("signedByOwner", verified)
+                            .put("locallyVerified", verified),
+                    )
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun JSONObject.optNullableString(name: String): String? =
+        optString(name).takeIf { it.isNotBlank() }
+
+    private fun JSONObject.optNullableLong(name: String): Long? =
+        if (has(name) && !isNull(name)) optLong(name) else null
+
     private fun lockFor(userId: String): Mutex = locks.getOrPut(userId) { Mutex() }
 
     private fun errorSummary(error: Throwable): String = generateSequence(error) { it.cause }
@@ -1385,6 +1645,7 @@ object NativeMatrixClientManager {
     }
 
     private fun closeTimelineSubscription(subscription: TimelineSubscription) {
+        subscription.batcher.close()
         runCatching { subscription.handle.cancel() }
         runCatching { subscription.handle.close() }
         runCatching { subscription.timeline.close() }
