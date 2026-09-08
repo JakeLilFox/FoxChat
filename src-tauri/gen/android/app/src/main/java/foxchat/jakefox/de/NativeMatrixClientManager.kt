@@ -725,6 +725,7 @@ object NativeMatrixClientManager {
         val timeline = room.timeline()
         val lastJsonByEventId = ConcurrentHashMap<String, String>()
         val suppressedInitialEventIds = ConcurrentHashMap.newKeySet<String>()
+        var initialResetHandled = false
         val firstTimelineUpdate = CompletableDeferred<Unit>()
         val batcher = TimelineEventBatcher(scope) { events, initial ->
             publishTimelineEvents(userId, roomId, events, initial)
@@ -739,7 +740,8 @@ object NativeMatrixClientManager {
                         .getOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                     eventId to raw
                 }
-                val events = if (update.any { it is TimelineDiff.Reset }) {
+                val events = if (update.any { it is TimelineDiff.Reset } && !initialResetHandled) {
+                    initialResetHandled = true
                     // A Reset contains the complete cached Rust timeline. The WebView only
                     // needs its newest render window initially; older events remain available
                     // through normal backwards pagination. Remember discarded IDs as Rust
@@ -750,6 +752,9 @@ object NativeMatrixClientManager {
                         suppressedInitialEventIds.add(eventId)
                     }
                     selected
+                } else if (update.any { it is TimelineDiff.Reset }) {
+                    candidates.forEach { (eventId) -> suppressedInitialEventIds.remove(eventId) }
+                    candidates
                 } else {
                     candidates.filterNot { (eventId) ->
                         suppressedInitialEventIds.contains(eventId)
