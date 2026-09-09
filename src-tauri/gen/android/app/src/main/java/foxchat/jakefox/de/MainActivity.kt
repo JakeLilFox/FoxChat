@@ -180,6 +180,12 @@ class MainActivity : TauriActivity() {
           )
           JSONObject().put("ok", true).toString()
         }
+        "setActiveRoom" -> {
+          NativeMatrixClientManager.setActiveRoom(
+            payload.optString("roomId").takeIf { it.isNotBlank() },
+          )
+          JSONObject().put("ok", true).toString()
+        }
         "logout" -> {
           NativeMatrixClientManager.logout(
             applicationContext,

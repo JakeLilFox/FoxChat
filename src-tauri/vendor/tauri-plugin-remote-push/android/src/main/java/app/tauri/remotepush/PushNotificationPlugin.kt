@@ -146,11 +146,25 @@ object RoomNotificationStore {
 class PushNotificationPlugin(private val activity: Activity) : Plugin(activity) {
     companion object {
         var instance: PushNotificationPlugin? = null
+        private const val MAX_PENDING_NATIVE_MATRIX_EVENTS = 200
     }
+
+    // A cold app start races the WebView's JS listener registration against the Rust
+    // timeline's first update; trigger() silently drops an event with no listener yet. Buffer
+    // here instead, and replay once the JS side actually registers, so that race cannot drop
+    // messages on the floor.
+    private val pendingNativeMatrixEvents = mutableListOf<JSObject>()
 
     override fun load(webView: WebView) {
         super.load(webView)
         instance = this
+    }
+
+    @Command
+    override fun registerListener(invoke: Invoke) {
+        val event = runCatching { invoke.getArgs().getString("event") }.getOrNull()
+        super.registerListener(invoke)
+        if (event == "native-matrix-events") flushPendingNativeMatrixEvents()
     }
 
     @Command
@@ -222,7 +236,26 @@ class PushNotificationPlugin(private val activity: Activity) : Plugin(activity) 
 
     /** Publishes a batch of decrypted Rust timeline events to a currently alive WebView. */
     fun handleNativeMatrixEvents(event: JSONObject) {
-        trigger("native-matrix-events", JSObject(event.toString()))
+        val payload = JSObject(event.toString())
+        if (hasListener("native-matrix-events")) {
+            trigger("native-matrix-events", payload)
+        } else {
+            synchronized(pendingNativeMatrixEvents) {
+                pendingNativeMatrixEvents.add(payload)
+                while (pendingNativeMatrixEvents.size > MAX_PENDING_NATIVE_MATRIX_EVENTS) {
+                    pendingNativeMatrixEvents.removeAt(0)
+                }
+            }
+        }
+    }
+
+    private fun flushPendingNativeMatrixEvents() {
+        val queued = synchronized(pendingNativeMatrixEvents) {
+            val copy = pendingNativeMatrixEvents.toList()
+            pendingNativeMatrixEvents.clear()
+            copy
+        }
+        for (payload in queued) trigger("native-matrix-events", payload)
     }
 
     fun handleNativeMatrixRoomsChanged(userId: String) {

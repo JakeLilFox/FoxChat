@@ -383,6 +383,7 @@ object NativeNotificationCrypto {
                     val roomId = room.optString("roomId")
                     if (roomId.isNotBlank()) {
                         editor.putString("room.$roomId.name", room.optString("name", "FoxChat"))
+                        editor.putBoolean("room.$roomId.isDirect", room.optBoolean("isDirect", false))
                     }
                 }
                 editor.commit()
@@ -666,6 +667,9 @@ object NativeNotificationCrypto {
 
     fun roomName(context: Context, roomId: String): String =
         preferences(context).getString("room.$roomId.name", "FoxChat") ?: "FoxChat"
+
+    fun isDirectRoom(context: Context, roomId: String): Boolean =
+        preferences(context).getBoolean("room.$roomId.isDirect", false)
 
     fun roomAvatarFile(context: Context, roomId: String): File? =
         File(context.noBackupFilesDir, "notification-room-avatars/${safeName(roomId)}.img")

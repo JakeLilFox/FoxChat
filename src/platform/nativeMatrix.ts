@@ -579,6 +579,12 @@ export function nativeMarkRead(userId: string, roomId: string) {
   return command<{ ok: true }>('markRead', { userId, roomId })
 }
 
+// Tells the Android app which room (if any) is currently open and visible, so
+// push notifications for that room can be suppressed while it is on screen.
+export function nativeSetActiveRoom(roomId: string | undefined) {
+  return command<{ ok: true }>('setActiveRoom', { roomId: roomId ?? '' })
+}
+
 export function nativeLogout(userId: string) {
   return command<{ ok: true }>('logout', { userId })
 }

@@ -66,6 +66,7 @@ import {
 } from '../platform/notifications'
 import { updateDesktopUnreadBadge } from '../platform/desktopBadge'
 import { isAndroidApp } from '../platform/nativeBackground'
+import { nativeSetActiveRoom } from '../platform/nativeMatrix'
 
 const MessageSearchOverlay = lazy(() =>
   import('./MessageSearchOverlay').then((module) => ({ default: module.MessageSearchOverlay })),
@@ -441,6 +442,22 @@ export function ClientApp({
     return () => {
       window.clearInterval(interval)
       document.removeEventListener('visibilitychange', visibilityChanged)
+    }
+  }, [openedRoomId])
+  useEffect(() => {
+    if (!isAndroidApp()) return
+    // Lets Android suppress push notifications for the room currently on screen,
+    // and resume notifying for it as soon as it is backgrounded or closed.
+    const sync = () => {
+      void nativeSetActiveRoom(
+        document.visibilityState === 'visible' ? openedRoomId : undefined,
+      ).catch(() => undefined)
+    }
+    sync()
+    document.addEventListener('visibilitychange', sync)
+    return () => {
+      document.removeEventListener('visibilitychange', sync)
+      void nativeSetActiveRoom(undefined).catch(() => undefined)
     }
   }, [openedRoomId])
   useEffect(() => {

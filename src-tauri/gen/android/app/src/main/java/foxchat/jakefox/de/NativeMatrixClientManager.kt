@@ -2,6 +2,7 @@ package foxchat.jakefox.de
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import android.util.Base64
 import app.tauri.remotepush.PushNotificationPlugin
@@ -100,6 +101,21 @@ object NativeMatrixClientManager {
     private const val INITIAL_TIMELINE_EVENT_LIMIT = 40
     private const val INITIAL_TIMELINE_BATCH_QUIET_MS = 750L
     private const val LIVE_TIMELINE_BATCH_QUIET_MS = 40L
+    // Rust keeps trickling in one Set diff per event while it finishes decrypting the initial
+    // cache (see the Reset comment below). Only treating the very first flush as "initial"
+    // let those trickle in as a stream of tiny live-speed batches, which the WebView rendered
+    // as messages popping in one at a time with the timeline re-snapping to the bottom on each
+    // one - a visible "waterfall" when opening a chat. Keeping the slow, self-resetting quiet
+    // window active for this whole settle period coalesces that trickle into one or two batches.
+    private const val INITIAL_TIMELINE_SETTLE_WINDOW_MS = 3_000L
+    // How long watchRoom() will wait inline for the Rust timeline's first update before
+    // returning whatever it has. Too short (this used to be 2s) and a cold start under CPU/
+    // network contention returns an empty/partial snapshot, leaving the room to depend entirely
+    // on a later best-effort event delivery (see PushNotificationPlugin's native-matrix-events
+    // buffering) to fill in - a plausible source of messages that look "missing" after reopening
+    // the app. Bounded generously instead of removed outright, so a genuinely stuck timeline
+    // cannot hang the caller forever.
+    private const val INITIAL_TIMELINE_WAIT_MS = 8_000L
     private val platformInitLock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val accounts = ConcurrentHashMap<String, AccountRuntime>()
@@ -111,6 +127,15 @@ object NativeMatrixClientManager {
     private val verificationSessions = ConcurrentHashMap<String, VerificationSession>()
     @Volatile private var applicationContext: Context? = null
     @Volatile private var platformInitialized = false
+    // The room currently open and visible in the WebView, if any. Used to suppress
+    // push notifications for a room the user is already looking at.
+    @Volatile private var activeRoomId: String? = null
+
+    fun setActiveRoom(roomId: String?) {
+        activeRoomId = roomId
+    }
+
+    fun isActiveRoom(roomId: String): Boolean = activeRoomId == roomId
 
     private data class AccountRuntime(
         val userId: String,
@@ -172,6 +197,7 @@ object NativeMatrixClientManager {
         private val lock = Any()
         private val pending = LinkedHashMap<String, String>()
         private var initialBatch = true
+        private var settleDeadline = 0L
         private var pendingFlush = false
         private var generation = 0L
         private var flushJob: Job? = null
@@ -179,11 +205,15 @@ object NativeMatrixClientManager {
         fun enqueue(events: List<Pair<String, String>>, force: Boolean = false) {
             if (events.isEmpty() && !force) return
             synchronized(lock) {
+                val now = SystemClock.elapsedRealtime()
+                if (initialBatch && settleDeadline == 0L) {
+                    settleDeadline = now + INITIAL_TIMELINE_SETTLE_WINDOW_MS
+                }
                 events.forEach { (eventId, raw) -> pending[eventId] = raw }
                 pendingFlush = true
                 flushJob?.cancel()
                 val scheduledGeneration = ++generation
-                val quietMs = if (initialBatch) {
+                val quietMs = if (initialBatch && now < settleDeadline) {
                     INITIAL_TIMELINE_BATCH_QUIET_MS
                 } else {
                     LIVE_TIMELINE_BATCH_QUIET_MS
@@ -203,7 +233,7 @@ object NativeMatrixClientManager {
                 val wasInitial = initialBatch
                 pending.clear()
                 pendingFlush = false
-                initialBatch = false
+                if (SystemClock.elapsedRealtime() >= settleDeadline) initialBatch = false
                 flushJob = null
                 events to wasInitial
             }
@@ -769,7 +799,7 @@ object NativeMatrixClientManager {
         val subscription = TimelineSubscription(timeline, handle, batcher, lastJsonByEventId)
         val previous = runtime.timelineSubscriptions.putIfAbsent(roomId, subscription)
         if (previous != null) closeTimelineSubscription(subscription)
-        else withTimeoutOrNull(2_000L) { firstTimelineUpdate.await() }
+        else withTimeoutOrNull(INITIAL_TIMELINE_WAIT_MS) { firstTimelineUpdate.await() }
         return timelineSnapshotJson(previous ?: subscription, alreadyWatching = previous != null)
     }
 

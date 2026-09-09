@@ -156,6 +156,11 @@ export async function syncNativeCryptoNow(client: MatrixClient) {
   } catch {}
   const allRooms = client.getRooms()
   const joinedRooms = allRooms.filter((room) => room.getMyMembership() === 'join')
+  const directRoomIds = new Set(
+    Object.values(
+      client.getAccountData(EventType.Direct)?.getContent<Record<string, string[]>>() ?? {},
+    ).flat(),
+  )
   const rooms = JSON.stringify(
     joinedRooms.map((room) => {
       const avatarMxc = room.currentState
@@ -179,6 +184,7 @@ export async function syncNativeCryptoNow(client: MatrixClient) {
         avatarUrl: notificationAvatarMxc
           ? client.mxcUrlToHttp(notificationAvatarMxc, 96, 96, 'crop', false, true, true)
           : undefined,
+        isDirect: directRoomIds.has(room.roomId),
       }
     }),
   )

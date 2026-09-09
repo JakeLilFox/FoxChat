@@ -111,6 +111,14 @@ object NotificationRenderer {
         timestamp: Long,
     ) {
         if (NativeNotificationCrypto.isOwnUser(context, senderId)) return
+        // The user is already looking at this room; a system notification for it would be
+        // redundant, so skip it entirely instead of showing (or buzzing) for it.
+        if (NativeMatrixClientManager.isActiveRoom(roomId)) return
+        // Private chats should always alert, even if this room already has an unread
+        // notification showing - unlike group rooms, which only buzz once until read.
+        val forceAudible = NativeNotificationCrypto.isDirectRoom(context, roomId)
+        val effectiveSilent = silent && !forceAudible
+        val effectiveChannelId = if (forceAudible) MESSAGE_NOTIFICATION_CHANNEL_ID else channelId
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         ensureChannels(context)
         val cachedRoomName = NativeNotificationCrypto.roomName(context, roomId)
@@ -194,7 +202,7 @@ object NotificationRenderer {
             style.addMessage(stored.getString("body"), stored.getLong("timestamp"), sender)
         }
 
-        val notification = NotificationCompat.Builder(context, channelId)
+        val notification = NotificationCompat.Builder(context, effectiveChannelId)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(displayRoomName)
             .setContentText(body)
@@ -205,11 +213,11 @@ object NotificationRenderer {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setGroup("foxchat.room.$roomId")
             .setOnlyAlertOnce(true)
-            .setSilent(silent)
+            .setSilent(effectiveSilent)
             .addAction(replyAction)
             .addAction(readAction)
             .addInvisibleAction(readAction)
-        if (!silent) notification.setSound(notificationSound(context))
+        if (!effectiveSilent) notification.setSound(notificationSound(context))
         if (roomAvatar != null) notification.setLargeIcon(roomAvatar)
 
         // Stable IDs keep one Android conversation per room.
