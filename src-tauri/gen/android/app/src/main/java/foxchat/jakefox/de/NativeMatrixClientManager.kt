@@ -116,6 +116,17 @@ object NativeMatrixClientManager {
     // the app. Bounded generously instead of removed outright, so a genuinely stuck timeline
     // cannot hang the caller forever.
     private const val INITIAL_TIMELINE_WAIT_MS = 8_000L
+    // Backoff for repeated sync-service ERROR/TERMINATED recovery. Observed on a real device:
+    // two FoxChat processes (e.g. the production app and a side-by-side dev build) sharing the
+    // same Matrix device fight over its sliding-sync connection, kicking each other's sync into
+    // ERROR every 1-3 seconds indefinitely. Retrying instantly on every terminal state turns that
+    // into a tight crash loop - each cycle also tears down and rebuilds every watched room's
+    // timeline, which is what shows up as messages missing and the timeline "waterfalling" back
+    // in. Backing off, and capping how fast repairs can repeat, keeps a real collision quiet
+    // instead of amplifying it, without slowing down recovery from a genuine one-off failure.
+    private const val TERMINAL_RESTART_BACKOFF_BASE_MS = 1_000L
+    private const val TERMINAL_RESTART_BACKOFF_MAX_MS = 30_000L
+    private const val TERMINAL_RESTART_STREAK_RESET_MS = 60_000L
     private val platformInitLock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val accounts = ConcurrentHashMap<String, AccountRuntime>()
@@ -124,6 +135,8 @@ object NativeMatrixClientManager {
     private val watchedRoomIds = ConcurrentHashMap<String, MutableSet<String>>()
     private val healthChecks = ConcurrentHashMap.newKeySet<String>()
     private val terminalRestarts = ConcurrentHashMap.newKeySet<String>()
+    private val terminalRestartStreaks = ConcurrentHashMap<String, Int>()
+    private val lastTerminalRestartAt = ConcurrentHashMap<String, Long>()
     private val verificationSessions = ConcurrentHashMap<String, VerificationSession>()
     @Volatile private var applicationContext: Context? = null
     @Volatile private var platformInitialized = false
@@ -323,8 +336,26 @@ object NativeMatrixClientManager {
      */
     private fun restartTerminalRuntime(context: Context, userId: String, reason: String) {
         if (!terminalRestarts.add(userId)) return
+        val now = SystemClock.elapsedRealtime()
+        val previousAttemptAt = lastTerminalRestartAt.put(userId, now)
+        val streak = if (previousAttemptAt != null && now - previousAttemptAt < TERMINAL_RESTART_STREAK_RESET_MS) {
+            (terminalRestartStreaks[userId] ?: 0) + 1
+        } else {
+            1
+        }
+        terminalRestartStreaks[userId] = streak
+        val backoffMs = (TERMINAL_RESTART_BACKOFF_BASE_MS * (1L shl (streak - 1).coerceAtMost(6)))
+            .coerceAtMost(TERMINAL_RESTART_BACKOFF_MAX_MS)
         scope.launch {
             try {
+                if (backoffMs > 0) {
+                    Log.w(
+                        TAG,
+                        "Backing off ${backoffMs}ms before repairing terminal Matrix runtime " +
+                            "for $userId ($reason), attempt $streak",
+                    )
+                    delay(backoffMs)
+                }
                 Log.w(TAG, "Repairing terminal Matrix runtime for $userId ($reason)")
                 ensureReadyAccountRunning(context, userId, reason)
                 Log.i(TAG, "Terminal Matrix runtime recovered for $userId ($reason)")
