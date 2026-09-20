@@ -1,3 +1,4 @@
+import { NativeTimelinePager } from '../lib/nativeTimelinePager'
 import {
   ClientEvent,
   ContentHelpers,
@@ -99,6 +100,7 @@ import {
   nativeUserIdentities,
   nativeVerificationStatus,
   nativeWatchRoom,
+  nativeTimelinePage,
 } from '../platform/nativeMatrix'
 
 declare global {
@@ -1144,6 +1146,10 @@ export class MatrixClientService {
     this.secondaryClients.clear()
     this.roomReadOwners.clear()
     this.nativeRoomTimelinesReady.clear()
+    for (const pager of this.nativeTimelinePagers.values()) pager.follow(false)
+    this.nativeTimelinePagers.clear()
+    this.nativeTimelineOldest.clear()
+    this.nativeFollowingRoom = undefined
     if (this.cryptoRetryTimer !== undefined) window.clearTimeout(this.cryptoRetryTimer)
     this.cryptoRetryTimer = undefined
     // A pending decryption-retry batch may already be mid-flight against the crypto store
@@ -4629,7 +4635,7 @@ export class MatrixClientService {
   async loadOlderMessages(room: Room, limit = 30) {
     const client = this.clientForRoomInstance(room)
     if (!client) return false
-    return client.paginateEventTimeline(room.getLiveTimeline(), { backwards: true, limit })
+    return this.paginateTimeline(room, room.getLiveTimeline(), true, limit)
   }
 
   async loadEventContext(room: Room, eventId: string) {
@@ -4646,6 +4652,24 @@ export class MatrixClientService {
   ) {
     const client = this.clientForRoomInstance(room)
     if (!client) return false
+    if (isAndroidNativeMatrix() && backwards && timeline === room.getLiveTimeline()) {
+      const userId = client.getUserId()!
+      const key = this.nativeRoomTimelineKey(userId, room.roomId)
+      const page = await nativeTimelinePage(userId, room.roomId, {
+        before: this.nativeTimelineOldest.get(key),
+        limit,
+      })
+      await this.applyNativeTimelineBatch({
+        userId,
+        roomId: room.roomId,
+        events: page.events,
+        backwards: true,
+      })
+      const oldest = page.events[0]?.eventId
+      if (oldest) this.nativeTimelineOldest.set(key, oldest)
+      timeline.setPaginationToken(page.hasOlder ? 'native-history' : null, Direction.Backward)
+      return !!page.hasOlder
+    }
     return client.paginateEventTimeline(timeline, { backwards, limit })
   }
 
@@ -4665,7 +4689,7 @@ export class MatrixClientService {
         const room = client.getRoom(roomId)
         const timeline = room?.getLiveTimeline()
         if (!room || !timeline || !timeline.getPaginationToken(Direction.Backward)) return false
-        return client.paginateEventTimeline(timeline, { backwards: true, limit })
+        return this.paginateTimeline(room, timeline, true, limit)
       }),
     )
     return results.some((result) => result.status === 'fulfilled' && result.value)
@@ -4934,6 +4958,40 @@ export class MatrixClientService {
   private nativeRoomCacheSaveQueues = new WeakMap<MatrixClient, Promise<void>>()
   private nativeRoomEventApplyQueues = new Map<string, Promise<void>>()
   private nativeRoomTimelinesReady = new Set<string>()
+  private nativeTimelinePagers = new Map<string, NativeTimelinePager>()
+  private nativeTimelineOldest = new Map<string, string>()
+  private nativeTimelineRawEvents = new WeakMap<MatrixEvent, string>()
+  private nativeFollowingRoom?: string
+
+  setNativeTimelineFollowing(roomId: string, following: boolean) {
+    if (!isAndroidNativeMatrix()) return
+    const account = this.roomAccounts(roomId).find(
+      (entry) => entry.id === this.selectedRoomAccountId(roomId),
+    )
+    if (!account) return
+    const key = this.nativeRoomTimelineKey(account.userId, roomId)
+    if (following) {
+      this.nativeFollowingRoom = key
+      for (const [other, pager] of this.nativeTimelinePagers) pager.follow(other === key)
+      this.refreshNativeTimeline(key)
+    } else {
+      if (this.nativeFollowingRoom === key) this.nativeFollowingRoom = undefined
+      this.nativeTimelinePagers.get(key)?.follow(false)
+    }
+  }
+
+  private refreshNativeTimeline(key: string) {
+    void this.nativeTimelinePagers
+      .get(key)
+      ?.refresh()
+      .catch((error) => {
+        reportClientError(
+          'native-matrix:timeline-page',
+          'Could not fetch native timeline page',
+          error,
+        )
+      })
+  }
 
   private nativeRoomTimelineKey(userId: string, roomId: string) {
     return `${userId}\0${roomId}`
@@ -4962,6 +5020,23 @@ export class MatrixClientService {
     data: AndroidRoomSnapshot,
     fromCache: boolean,
   ) {
+    const joined = androidJoinedRooms(data)
+    if (joined) {
+      data = {
+        ...data,
+        rooms: {
+          ...(data.rooms as Record<string, unknown>),
+          join: Object.fromEntries(
+            Object.entries(joined).map(([roomId, snapshot]) => [
+              roomId,
+              this.nativeTimelinePagers.has(this.nativeRoomTimelineKey(client.getUserId()!, roomId))
+                ? { ...snapshot, timeline: { events: [], limited: false } }
+                : snapshot,
+            ]),
+          ),
+        },
+      }
+    }
     const syncApi = new SyncApi(client, undefined, { logger })
     this.nativeRoomSnapshotsProcessing.add(client)
     try {
@@ -5018,13 +5093,7 @@ export class MatrixClientService {
         try {
           if (cached) {
             await this.applyNativeRoomSnapshot(client, cached, true)
-            const userId = client.getUserId()
-            if (userId) {
-              for (const [roomId, room] of Object.entries(androidJoinedRooms(cached) ?? {})) {
-                if (room.timeline?.[ANDROID_NATIVE_TIMELINE_CACHE_MARKER] === true)
-                  this.markNativeRoomTimelineReady(userId, roomId)
-              }
-            }
+            // Cached previews remain usable, but positioning waits for the native page.
           }
         } catch (error) {
           console.warn('[native-matrix] Could not restore cached Android rooms', error)
@@ -5094,13 +5163,34 @@ export class MatrixClientService {
     const accountId = this.selectedRoomAccountId(roomId)
     const account = this.availableAccounts().find((candidate) => candidate.id === accountId)
     if (!account || !(await nativeMatrixReady(account.userId))) return
-    const replay = await nativeWatchRoom(account.userId, roomId)
+    const key = this.nativeRoomTimelineKey(account.userId, roomId)
+    if (this.nativeTimelinePagers.has(key)) {
+      this.refreshNativeTimeline(key)
+      return
+    }
+    await nativeWatchRoom(account.userId, roomId)
+    const replay = await nativeTimelinePage(account.userId, roomId)
     await this.applyNativeTimelineBatch({
       userId: account.userId,
       roomId,
-      events: replay.events ?? [],
-      initial: replay.initial,
+      events: replay.events,
+      initial: true,
     })
+    const oldest = replay.events[0]?.eventId
+    if (oldest) this.nativeTimelineOldest.set(key, oldest)
+    account.client
+      .getRoom(roomId)
+      ?.getLiveTimeline()
+      .setPaginationToken(replay.hasOlder ? 'native-history' : null, Direction.Backward)
+    const pager = new NativeTimelinePager(
+      (after) => nativeTimelinePage(account.userId, roomId, { after }),
+      (page) =>
+        this.applyNativeTimelineBatch({ userId: account.userId, roomId, events: page.events }),
+    )
+    pager.seed(replay)
+    this.nativeTimelinePagers.set(key, pager)
+    pager.follow(this.nativeFollowingRoom === key)
+    this.refreshNativeTimeline(key)
   }
 
   private applyNativeTimelineBatch({
@@ -5108,11 +5198,13 @@ export class MatrixClientService {
     roomId,
     events,
     initial,
+    backwards = false,
   }: {
     userId: string
     roomId: string
     events: Array<{ eventId: string; rawEvent: string }>
     initial?: boolean
+    backwards?: boolean
   }) {
     const key = this.nativeRoomTimelineKey(userId, roomId)
     const previous = this.nativeRoomEventApplyQueues.get(key) ?? Promise.resolve()
@@ -5127,31 +5219,51 @@ export class MatrixClientService {
           room = account.client.getRoom(roomId)
         }
         if (!room) throw new Error(`Native timeline room ${roomId} is not hydrated for ${userId}`)
-        const mapper = account.client.getEventMapper()
+        if (initial) room.resetLiveTimeline(null, null)
         const mappedEvents = events.flatMap(({ eventId, rawEvent }) => {
           const existing = room.findEventById(eventId)
-          // A room snapshot can install the encrypted wire event before Rust emits
-          // the corresponding clear event. Replace that copy, but ignore repeats once
-          // a clear event is already present.
-          if (existing && existing.getWireType() !== EventType.RoomMessageEncrypted) return []
+          // Do not use the SDK mapper here: it reuses existing encrypted models and
+          // only merges unsigned data, silently discarding Rust's clear content.
+          if (existing && this.nativeTimelineRawEvents.get(existing) === rawEvent) return []
           const raw = JSON.parse(rawEvent) as Record<string, unknown>
           const unsigned =
             raw.unsigned && typeof raw.unsigned === 'object'
               ? (raw.unsigned as Record<string, unknown>)
               : {}
-          return [
-            mapper({
-              ...raw,
-              room_id: roomId,
-              unsigned: { ...unsigned, [ANDROID_NATIVE_TIMELINE_EVENT_MARKER]: true },
-            } as Parameters<typeof mapper>[0]),
-          ]
+          const mapped = new MatrixEvent({
+            ...raw,
+            room_id: roomId,
+            unsigned: { ...unsigned, [ANDROID_NATIVE_TIMELINE_EVENT_MARKER]: true },
+          } as ConstructorParameters<typeof MatrixEvent>[0])
+          this.nativeTimelineRawEvents.set(mapped, rawEvent)
+          return [mapped]
         })
         if (mappedEvents.length) {
-          await room.addLiveEvents(mappedEvents, {
-            duplicateStrategy: DuplicateStrategy.Replace,
-            addToState: true,
-          })
+          mappedEvents.forEach((event) => this.trackEventOwner(account.client, event, room))
+          if (backwards) {
+            const replacements = mappedEvents.filter((event) => room.findEventById(event.getId()!))
+            await room.addLiveEvents(replacements, {
+              duplicateStrategy: DuplicateStrategy.Replace,
+              addToState: false,
+            })
+            room
+              .getUnfilteredTimelineSet()
+              .addEventsToTimeline(
+                mappedEvents.filter((event) => !room.findEventById(event.getId()!)).reverse(),
+                true,
+                false,
+                room.getLiveTimeline(),
+              )
+          } else {
+            await room.addLiveEvents(mappedEvents, {
+              duplicateStrategy: DuplicateStrategy.Replace,
+              addToState: true,
+            })
+          }
+          // The SDK's DuplicateStrategy.Replace does not emit Room.timeline.
+          for (const event of mappedEvents) {
+            this.observers.forEach((observer) => observer.onEvent?.(event, room))
+          }
           this.cacheNativeRoomEvents(account.client, roomId, events)
         }
         if (initial) this.markNativeRoomTimelineReady(userId, roomId)
@@ -5199,21 +5311,8 @@ export class MatrixClientService {
           roomId: string
           events: Array<{ eventId: string; rawEvent: string }>
           initial?: boolean
-        }>('remote-push', 'native-matrix-events', ({ userId, roomId, events, initial }) => {
-          void this.applyNativeTimelineBatch({ userId, roomId, events, initial: !!initial }).catch(
-            (error) => {
-              reportClientError(
-                'native-matrix:timeline-batch',
-                `Could not apply ${events.length} native timeline events for ${roomId}`,
-                error,
-              )
-              console.warn('[native-matrix] Could not apply native timeline event batch', {
-                roomId,
-                eventCount: events.length,
-                error,
-              })
-            },
-          )
+        }>('remote-push', 'native-matrix-events', ({ userId, roomId }) => {
+          this.refreshNativeTimeline(this.nativeRoomTimelineKey(userId, roomId))
         })
       } catch (error) {
         this.nativeMatrixTimelineListenerRegistered = false

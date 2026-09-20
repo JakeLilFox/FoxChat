@@ -199,7 +199,9 @@ object NativeMatrixClientManager {
         val timeline: Timeline,
         val handle: TaskHandle,
         val batcher: TimelineEventBatcher,
-        val lastJsonByEventId: ConcurrentHashMap<String, String> = ConcurrentHashMap(),
+        val items: MutableList<TimelineItem>,
+        val pageMutex: Mutex = Mutex(),
+        var reachedStart: Boolean = false,
     )
 
     /** Coalesces Rust's Reset + per-item Set sequence before crossing into the WebView. */
@@ -784,50 +786,36 @@ object NativeMatrixClientManager {
             available
         }
         val timeline = room.timeline()
-        val lastJsonByEventId = ConcurrentHashMap<String, String>()
-        val suppressedInitialEventIds = ConcurrentHashMap.newKeySet<String>()
-        var initialResetHandled = false
+        val items = mutableListOf<TimelineItem>()
         val firstTimelineUpdate = CompletableDeferred<Unit>()
-        val batcher = TimelineEventBatcher(scope) { events, initial ->
-            publishTimelineEvents(userId, roomId, events, initial)
+        // Notifications invalidate pages; the bridge never pushes partial message lists.
+        val batcher = TimelineEventBatcher(scope) { _, _ ->
+            publishTimelineEvents(userId, roomId, emptyList(), initial = true)
         }
         val handle = timeline.addListener(object : TimelineListener {
             override fun onUpdate(update: List<TimelineDiff>) {
-                val candidates = timelineItems(update).mapNotNull { item ->
-                    val event = item.asEvent() ?: return@mapNotNull null
-                    val raw = runCatching { event.lazyProvider.latestJson() }.getOrNull()
-                        ?: return@mapNotNull null
-                    val eventId = runCatching { JSONObject(raw).optString("event_id") }
-                        .getOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                    eventId to raw
-                }
-                val events = if (update.any { it is TimelineDiff.Reset } && !initialResetHandled) {
-                    initialResetHandled = true
-                    // A Reset contains the complete cached Rust timeline. The WebView only
-                    // needs its newest render window initially; older events remain available
-                    // through normal backwards pagination. Remember discarded IDs as Rust
-                    // may subsequently emit one Set diff per event while decrypting its cache.
-                    val selected = candidates.takeLast(INITIAL_TIMELINE_EVENT_LIMIT)
-                    selected.forEach { (eventId) -> suppressedInitialEventIds.remove(eventId) }
-                    candidates.dropLast(selected.size).forEach { (eventId) ->
-                        suppressedInitialEventIds.add(eventId)
+                synchronized(items) {
+                    update.forEach { diff ->
+                        when (diff) {
+                            is TimelineDiff.Append -> items.addAll(diff.values)
+                            is TimelineDiff.Insert -> items.add(diff.index.toInt(), diff.value)
+                            is TimelineDiff.PushBack -> items.add(diff.value)
+                            is TimelineDiff.PushFront -> items.add(0, diff.value)
+                            is TimelineDiff.Reset -> { items.clear(); items.addAll(diff.values) }
+                            is TimelineDiff.Set -> items[diff.index.toInt()] = diff.value
+                            is TimelineDiff.Remove -> items.removeAt(diff.index.toInt())
+                            is TimelineDiff.PopBack -> if (items.isNotEmpty()) items.removeAt(items.lastIndex) else Unit
+                            is TimelineDiff.PopFront -> if (items.isNotEmpty()) items.removeAt(0) else Unit
+                            is TimelineDiff.Clear -> items.clear()
+                            is TimelineDiff.Truncate -> while (items.size > diff.length.toInt()) items.removeAt(items.lastIndex)
+                        }
                     }
-                    selected
-                } else if (update.any { it is TimelineDiff.Reset }) {
-                    candidates.forEach { (eventId) -> suppressedInitialEventIds.remove(eventId) }
-                    candidates
-                } else {
-                    candidates.filterNot { (eventId) ->
-                        suppressedInitialEventIds.contains(eventId)
-                    }
-                }.filter { (eventId, raw) ->
-                    lastJsonByEventId.put(eventId, raw) != raw
                 }
-                batcher.enqueue(events, force = update.any { it is TimelineDiff.Reset })
+                batcher.enqueue(emptyList(), force = true)
                 firstTimelineUpdate.complete(Unit)
             }
         })
-        val subscription = TimelineSubscription(timeline, handle, batcher, lastJsonByEventId)
+        val subscription = TimelineSubscription(timeline, handle, batcher, items)
         val previous = runtime.timelineSubscriptions.putIfAbsent(roomId, subscription)
         if (previous != null) closeTimelineSubscription(subscription)
         else withTimeoutOrNull(INITIAL_TIMELINE_WAIT_MS) { firstTimelineUpdate.await() }
@@ -838,18 +826,72 @@ object NativeMatrixClientManager {
         subscription: TimelineSubscription,
         alreadyWatching: Boolean,
     ): JSONObject {
-        val events = subscription.lastJsonByEventId.entries
-            .map { it.key to it.value }
-            .sortedBy { (_, raw) ->
-                runCatching { JSONObject(raw).optLong("origin_server_ts") }.getOrDefault(0L)
-            }
-            .takeLast(INITIAL_TIMELINE_EVENT_LIMIT)
-        return JSONObject()
-            .put("ok", true)
+        return timelinePageJson(subscription, null, null, INITIAL_TIMELINE_EVENT_LIMIT)
             .put("alreadyWatching", alreadyWatching)
             .put("initial", true)
-            .put("events", timelineEventsJson(events))
     }
+
+    private fun timelinePageEvents(subscription: TimelineSubscription): List<Pair<String, String>> =
+        synchronized(subscription.items) {
+            subscription.items.mapNotNull { item ->
+                val event = item.asEvent() ?: return@mapNotNull null
+                val raw = runCatching { event.lazyProvider.latestJson() }.getOrNull()
+                    ?: return@mapNotNull null
+                val id = runCatching { JSONObject(raw).optString("event_id") }.getOrNull()
+                    ?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                id to raw
+            }.distinctBy { it.first }
+        }
+
+    private fun timelinePageJson(
+        subscription: TimelineSubscription,
+        before: String?,
+        after: String?,
+        limit: Int,
+    ): JSONObject {
+        val events = timelinePageEvents(subscription)
+        val cursor = before ?: after
+        val index = if (cursor == null) -1 else events.indexOfFirst { it.first == cursor }
+        check(cursor == null || index >= 0) { "Timeline page cursor is no longer available; reopen the room" }
+        val end = if (before != null) index else if (after != null) minOf(events.size, index + 1 + limit) else events.size
+        val start = if (after != null) index + 1 else maxOf(0, end - limit)
+        val page = events.subList(start, end)
+        return JSONObject().put("ok", true)
+            .put("events", timelineEventsJson(page))
+            .put("hasOlder", start > 0 || !subscription.reachedStart)
+            .put("hasNewer", end < events.size)
+    }
+
+    fun timelinePage(context: Context, userId: String, roomId: String, before: String?, after: String?, limit: Int): JSONObject =
+        runBlocking(Dispatchers.IO) {
+            val runtime = ensureRuntime(context, userId)
+            if (!runtime.timelineSubscriptions.containsKey(roomId)) {
+                ensureTimelineSubscription(runtime, userId, roomId)
+            }
+            val subscription = runtime.timelineSubscriptions[roomId] ?: error("Timeline unavailable")
+            subscription.pageMutex.withLock {
+                val size = limit.coerceIn(1, 100)
+                val cursor = before ?: after
+                // A restarted Rust runtime may have a smaller cache than the WebView.
+                // Recover its cursor through real history pages instead of skipping to latest.
+                if (cursor != null) {
+                    var attempts = 0
+                    while (timelinePageEvents(subscription).none { it.first == cursor } && attempts++ < 10) {
+                        subscription.reachedStart = subscription.timeline.paginateBackwards(100u.toUShort())
+                        if (subscription.reachedStart) break
+                    }
+                }
+                // Page cached items first, asking Rust to backfill at its cache edge.
+                if (after == null && !subscription.reachedStart) {
+                    val events = timelinePageEvents(subscription)
+                    val available = if (before == null) events.size else events.indexOfFirst { it.first == before }
+                    if (available in 0 until size) {
+                        subscription.reachedStart = subscription.timeline.paginateBackwards(size.toUShort())
+                    }
+                }
+                timelinePageJson(subscription, before, after, size)
+            }
+        }
 
     private fun timelineEventsJson(events: List<Pair<String, String>>): JSONArray =
         JSONArray().also { payload ->
@@ -1437,20 +1479,6 @@ object NativeMatrixClientManager {
             "Native $source timeline has not decrypted $eventId yet"
         }
         return json
-    }
-
-    private fun timelineItems(diffs: List<TimelineDiff>): List<TimelineItem> = buildList {
-        diffs.forEach { diff ->
-            when (diff) {
-                is TimelineDiff.Append -> addAll(diff.values)
-                is TimelineDiff.Insert -> add(diff.value)
-                is TimelineDiff.PushBack -> add(diff.value)
-                is TimelineDiff.PushFront -> add(diff.value)
-                is TimelineDiff.Reset -> addAll(diff.values)
-                is TimelineDiff.Set -> add(diff.value)
-                else -> Unit
-            }
-        }
     }
 
     private suspend fun ensureRoomListSubscription(runtime: AccountRuntime, userId: String) {

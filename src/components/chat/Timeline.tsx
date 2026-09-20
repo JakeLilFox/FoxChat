@@ -207,7 +207,9 @@ const linkedRoomTimelineEvents = (room: Room) =>
 
 const cachedEventWindow = (room: Room) => {
   const freshEvents = linkedRoomTimelineEvents(room)
-  const previous = roomTimelineCache.get(timelineRoomIdentity(room))?.events ?? []
+  const previous = isAndroidApp()
+    ? []
+    : (roomTimelineCache.get(timelineRoomIdentity(room))?.events ?? [])
   const source = mergeTimelineEventSegments(previous, freshEvents)
   const visible = source.filter((event) => isAvailableTimelineMessage(event, room))
   const first = visible.at(-MESSAGE_WINDOW_SIZE)
@@ -602,6 +604,21 @@ function TimelineView({
     }
   }, [])
   const timeline = contextTimeline ?? room?.getLiveTimeline()
+  useEffect(() => {
+    if (!room || !isAndroidApp()) return
+    const update = () =>
+      matrixService.setNativeTimelineFollowing(
+        room.roomId,
+        !positioningTimeline && !contextTimeline && windowEndOffset === 0 && followLatest.current,
+      )
+    update()
+    // Android can lose a bridge notification during Activity recreation or suspension.
+    const timer = window.setInterval(update, 5_000)
+    return () => {
+      window.clearInterval(timer)
+      matrixService.setNativeTimelineFollowing(room.roomId, false)
+    }
+  }, [room, roomIdentity, positioningTimeline, contextTimeline, windowEndOffset])
   const timelineEvents = useMemo(() => {
     void matrixRevision
     void renderTick
@@ -612,7 +629,7 @@ function TimelineView({
         : []
     const cachedTimelineEvents = roomTimelineCache.get(roomIdentity ?? '')?.events ?? []
     const baseTimelineEvents =
-      room && !contextTimeline
+      room && !contextTimeline && !isAndroidApp()
         ? mergeTimelineEventSegments(cachedTimelineEvents, liveTimelineEvents)
         : liveTimelineEvents
     return room
@@ -1816,6 +1833,11 @@ function TimelineView({
       atBottom.current,
       hasUserScrollIntent,
     )
+    if (room)
+      matrixService.setNativeTimelineFollowing(
+        room.roomId,
+        !contextTimeline && windowEndOffset === 0 && followLatest.current,
+      )
     if (!atBottom.current && !followLatest.current) {
       if (scrollAnchor.current?.type === 'bottom') scrollAnchor.current = undefined
     }
@@ -1864,6 +1886,7 @@ function TimelineView({
     positionStabilizerSuperseded.current = false
     userScrollIntentUntil.current = 0
     followLatest.current = true
+    if (room) matrixService.setNativeTimelineFollowing(room.roomId, true)
     scrollAnchor.current = { type: 'bottom' }
     setContextTimeline(undefined)
     setWindowEndOffset(0)

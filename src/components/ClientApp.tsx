@@ -431,9 +431,8 @@ export function ClientApp({
     }
     refresh()
     if (!isAndroidApp()) return
-    // Native timeline events remain the fast path. This small in-memory replay poll is a safety
-    // net for Activity/WebView replacement, where Android can drop a one-way plugin event even
-    // though the process-wide Rust timeline kept syncing successfully.
+    // Retry page invalidation after Activity/WebView replacement, which can lose bridge
+    // notifications. The pager defers requests while the user reads history.
     const interval = window.setInterval(refresh, 5_000)
     const visibilityChanged = () => {
       if (document.visibilityState === 'visible') refresh()

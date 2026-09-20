@@ -127,6 +127,14 @@ class MainActivity : TauriActivity() {
           )
           JSONObject().put("ok", true).toString()
         }
+        "timelinePage" -> NativeMatrixClientManager.timelinePage(
+          applicationContext,
+          payload.getString("userId"),
+          payload.getString("roomId"),
+          payload.optString("before").takeIf { it.isNotBlank() },
+          payload.optString("after").takeIf { it.isNotBlank() },
+          payload.optInt("limit", 40),
+        ).toString()
         "watchRoom" -> NativeMatrixClientManager.watchRoom(
           applicationContext,
           payload.getString("userId"),
