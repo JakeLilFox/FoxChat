@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync 
 import { basename, extname, relative, resolve, sep } from 'node:path'
 import { config as loadEnv } from 'dotenv'
 import ffmpegPath from 'ffmpeg-static'
+import { marketingMatrixFetch, settleMatrixRequests } from './marketing-matrix-fetch.mjs'
 
 const root = process.cwd()
 const envFile = resolve(root, 'test.env')
@@ -139,10 +140,7 @@ function validate(accounts) {
 }
 
 const matrixFetch = (url, options = {}) =>
-  fetch(url, {
-    ...options,
-    signal: AbortSignal.timeout(matrixRequestTimeout),
-  })
+  marketingMatrixFetch(url, options, { timeout: matrixRequestTimeout })
 
 async function resolveHomeserver(homeserver) {
   const normalize = (value) =>
@@ -338,7 +336,7 @@ async function sendRawImage(session, roomId, file, contentUri, caption) {
 }
 
 async function createMarketingScene(sessions, launchRoomId) {
-  const [bannerMxc, workspaceMxc, cityMxc, moodboardMxc] = await Promise.all([
+  const [bannerMxc, workspaceMxc, cityMxc, moodboardMxc] = await settleMatrixRequests([
     uploadMedia(sessions[0], spaceBanner),
     uploadMedia(sessions[0], workspacePhoto),
     uploadMedia(sessions[0], cityPhoto),
@@ -370,7 +368,7 @@ async function createMarketingScene(sessions, launchRoomId) {
     [designRoomId, 'a'],
     [photosRoomId, 'b'],
   ])
-    await Promise.all([
+    await settleMatrixRequests([
       sendState(sessions[0], spaceId, 'm.space.child', childId, {
         via: [via],
         suggested: true,
@@ -386,7 +384,7 @@ async function createMarketingScene(sessions, launchRoomId) {
     name: basename(spaceBanner),
     info: { mimetype: 'image/jpeg', size: readFileSync(spaceBanner).byteLength },
   })
-  await Promise.all([
+  await settleMatrixRequests([
     sendState(sessions[0], launchRoomId, 'm.room.avatar', '', {
       url: moodboardMxc,
       info: { mimetype: 'image/svg+xml', size: readFileSync(sharedImage).byteLength },
