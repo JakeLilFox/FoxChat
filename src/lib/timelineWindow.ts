@@ -115,6 +115,7 @@ export function initialTimelinePosition(
   const desiredEnd = Math.min(current.length, unreadIndex + MESSAGE_WINDOW_SIZE)
   return {
     unreadStart,
-    windowEndOffset: Math.max(0, current.length - desiredEnd),
+    // The boundary freezes unread selection, but offsets are measured from the live end.
+    windowEndOffset: Math.max(0, events.filter(isVisibleMessageEvent).length - desiredEnd),
   }
 }

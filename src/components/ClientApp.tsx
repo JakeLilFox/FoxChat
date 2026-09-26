@@ -510,6 +510,11 @@ export function ClientApp({
   ])
   const open = useCallback(
     (id: string) => {
+      const closeRoomPicker = () => {
+        mobileRef.current = false
+        setMobile(false)
+        setDrawerOpenUrl(false, true)
+      }
       setUnreadInbox(false)
       const next = rooms.find((r) => r.roomId === id)
       if (next?.getType() === RoomType.Space) {
@@ -523,6 +528,7 @@ export function ClientApp({
             )
           : undefined
         if (rememberedRoom && containingSpacePath(rememberedRoom.roomId).includes(id)) {
+          closeRoomPicker()
           const rememberedSpace = containingSpacePath(rememberedRoom.roomId).at(-1)
           setSpaceOverview(false)
           setSpace(rememberedSpace)
@@ -531,16 +537,17 @@ export function ClientApp({
           return
         }
         setSpaceOverview(true)
-        if (window.innerWidth <= 760)
-          requestAnimationFrame(() => {
-            setMobile(true)
-            setDrawerOpenUrl(true)
-          })
+        if (mobileLayout) {
+          mobileRef.current = true
+          setMobile(true)
+          setDrawerOpenUrl(true)
+        }
         if (id === space && browseFromUrl()) return
         setSpace(id)
         writeRoomUrl('browse', false, id)
         return
       }
+      closeRoomPicker()
       setSpaceOverview(false)
       const path = containingSpacePath(id)
       const nextSpace = path.at(-1)
@@ -552,7 +559,7 @@ export function ClientApp({
       setSelected(id)
       writeRoomUrl(id, false, nextSpace)
     },
-    [rooms, selected, space],
+    [rooms, selected, space, mobileLayout],
   )
   useEffect(() => {
     const openMention = (event: Event) => open((event as CustomEvent<string>).detail)
@@ -824,13 +831,7 @@ export function ClientApp({
             onSpaceOverview={(target) => {
               showSpaceOverview(target)
             }}
-            onSelect={(id) => {
-              open(id)
-              if (matrixService.room(id)?.getType() !== RoomType.Space) {
-                setMobile(false)
-                setDrawerOpenUrl(false)
-              }
-            }}
+            onSelect={open}
             mode={mode}
             onMode={onMode}
             onUnreadInbox={showUnreadInbox}

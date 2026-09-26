@@ -136,6 +136,20 @@ describe('visibleReadBoundary', () => {
 })
 
 describe('initialTimelinePosition', () => {
+  it('keeps the unread page in view as newer messages load beyond the mount boundary', () => {
+    const events = Array.from({ length: 150 }, (_, index) =>
+      fakeEvent({ id: `$${index + 1}`, sender: '@remote:example.org' }),
+    )
+    const ownUserIds = new Set(['@selected:example.org'])
+
+    const initial = initialTimelinePosition(events.slice(0, 100), '$1', 99, ownUserIds, '$100')
+    const refreshed = initialTimelinePosition(events, '$1', 99, ownUserIds, '$100')
+    expect(initial.unreadStart).toBe('$2')
+    expect(refreshed.unreadStart).toBe(initial.unreadStart)
+    expect(refreshed.windowEndOffset).toBe(initial.windowEndOffset + 50)
+    expect(events.length - refreshed.windowEndOffset).toBe(100 - initial.windowEndOffset)
+  })
+
   it('lands at the bottom when the unread counter is clear but the receipt echo is stale', () => {
     const events = Array.from({ length: 50 }, (_, index) =>
       fakeEvent({

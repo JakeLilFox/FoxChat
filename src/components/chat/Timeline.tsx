@@ -606,11 +606,9 @@ function TimelineView({
   const timeline = contextTimeline ?? room?.getLiveTimeline()
   useEffect(() => {
     if (!room || !isAndroidApp()) return
-    const update = () =>
-      matrixService.setNativeTimelineFollowing(
-        room.roomId,
-        !positioningTimeline && !contextTimeline && windowEndOffset === 0 && followLatest.current,
-      )
+    // Fetch new pages even while reading unread messages. Viewport following is managed
+    // separately so arrivals remain reachable by scrolling without moving the reader.
+    const update = () => matrixService.setNativeTimelineFollowing(room.roomId, !contextTimeline)
     update()
     // Android can lose a bridge notification during Activity recreation or suspension.
     const timer = window.setInterval(update, 5_000)
@@ -618,7 +616,7 @@ function TimelineView({
       window.clearInterval(timer)
       matrixService.setNativeTimelineFollowing(room.roomId, false)
     }
-  }, [room, roomIdentity, positioningTimeline, contextTimeline, windowEndOffset])
+  }, [room, roomIdentity, contextTimeline])
   const timelineEvents = useMemo(() => {
     void matrixRevision
     void renderTick
@@ -1833,11 +1831,6 @@ function TimelineView({
       atBottom.current,
       hasUserScrollIntent,
     )
-    if (room)
-      matrixService.setNativeTimelineFollowing(
-        room.roomId,
-        !contextTimeline && windowEndOffset === 0 && followLatest.current,
-      )
     if (!atBottom.current && !followLatest.current) {
       if (scrollAnchor.current?.type === 'bottom') scrollAnchor.current = undefined
     }
